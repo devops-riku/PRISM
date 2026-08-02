@@ -78,16 +78,29 @@ def _build_locked() -> None:
     # be a cycle.
     from app import intakes
 
-    previous = workspaces.borrow(workspaces.current())
     try:
-        for workspace in workspaces.listing():
-            workspaces.borrow(workspace.id)
-            for entry in intakes.listing():
-                if entry.token:
-                    _index[entry.token] = (workspace.id, entry.id)
+        previous = workspaces.borrow(workspaces.current())
+        try:
+            for workspace in workspaces.listing():
+                workspaces.borrow(workspace.id)
+                for entry in intakes.listing():
+                    if entry.token:
+                        _index[entry.token] = (workspace.id, entry.id)
+        finally:
+            workspaces.give_back(previous)
+    except Exception:
+        # A walk that dies partway through - `workspaces.root()`'s `mkdir`
+        # reaching a permissions error, say - must not become a walk retried
+        # on every later miss too: that is a full scan per call again,
+        # exactly what this index exists to avoid, and it would surface on
+        # Task 3's unauthenticated route as a 500 with a stack trace where an
+        # unknown token has to answer 404. `_built` still flips below,
+        # accepting whatever partial index this run produced as final for
+        # the process; anything the walk never reached is still recoverable
+        # the moment its own `create` or `relink` calls `remember` for real.
+        logger.exception("Building the token index failed partway through")
     finally:
-        workspaces.give_back(previous)
-    _built = True
+        _built = True
 
 
 def remember(token: str, workspace_id: str, intake_id: str) -> None:
@@ -150,16 +163,42 @@ def resolve(token: str) -> tuple[str, str] | None:
     previous = workspaces.borrow(workspace_id)
     try:
         entry = intakes.get(intake_id)
+        # Resolved inside the same `borrow` as `get`, not after `give_back` -
+        # `intakes.exists` reaches `workspaces.root()` exactly as `get` does,
+        # so asking it once the caller's own workspace has been restored
+        # would check for the file in the wrong workspace entirely and
+        # report "gone" for an intake that is sitting right there in
+        # `workspace_id`.
+        confirmed_absent = entry is None and not intakes.exists(intake_id)
     finally:
         workspaces.give_back(previous)
+
+    if entry is None:
+        # `intakes.get()` answers `None` for two different things: the
+        # intake is genuinely gone, or its file exists but could not be read
+        # just now (a transient `OSError`, caught and logged inside
+        # `intakes.get` itself - this repo lives on a OneDrive-synced path,
+        # where a momentary sharing violation on one read is not
+        # hypothetical). Evicting is only correct for the first: `_built`
+        # never triggers a second walk once it has run, so evicting on a
+        # transient failure would kill a live link for the rest of the
+        # process's life.
+        if confirmed_absent:
+            with _lock:
+                _index.pop(wanted, None)
+        return None
 
     # The index is a fast path to a candidate, not the authority on whether
     # this token is still good - that authority is the intake's own current
     # token and its own expiry, re-read here rather than trusted from the
-    # dict above, so a relink or a deleted intake cannot leave a stale entry
-    # standing in for the real thing. Compared with `secrets.compare_digest`
-    # rather than `==`, matching `members.find_invite` and `members.accept`.
-    if entry is None or not entry.token or not secrets.compare_digest(entry.token, wanted):
+    # dict above, so a relink or a deleted-then-recreated workspace cannot
+    # leave a stale entry standing in for the real thing. Compared with
+    # `secrets.compare_digest(entry.token, wanted)` rather than `==`,
+    # matching `members.find_invite` and `members.accept`. Unlike a missing
+    # file, a mismatch is unambiguous - the token that once pointed here has
+    # been replaced or the record is corrupt either way - so it is evicted
+    # outright.
+    if not entry.token or not secrets.compare_digest(entry.token, wanted):
         with _lock:
             _index.pop(wanted, None)
         return None

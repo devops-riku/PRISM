@@ -203,6 +203,13 @@ refuses(
     "proposal_sent is reachable only from finalized, not straight from quoted",
     lambda: intakes.advance(from_quoted.id, intakes.PROPOSAL_SENT),
 )
+# `finalized` only follows `sent` - a quotation the client has not been sent
+# yet cannot be finalized just because it exists. `from_quoted` is still
+# sitting at `quoted` (the refusal above is a no-op), so it doubles for this.
+refuses(
+    "quoted -> finalized is refused - finalized only follows sent",
+    lambda: intakes.advance(from_quoted.id, intakes.FINALIZED),
+)
 
 from_sent = intakes.create(
     client_email="from-sent@client.com",
@@ -221,6 +228,41 @@ intakes.advance(from_sent.id, intakes.SENT, sent_bundle_id="dddddddddddd")
 refuses(
     "proposal_sent is reachable only from finalized, not straight from sent",
     lambda: intakes.advance(from_sent.id, intakes.PROPOSAL_SENT),
+)
+
+# `sent` only follows `quoted` - a request cannot be sent to a client before
+# it has ever been priced, whether it is still waiting to be submitted or is
+# already being prepared. Two more fixtures, each stopped one state short of
+# `quoted`, for the same reason the pair above got their own: a refusal is a
+# no-op, and reusing one fixture across two checks would let the first
+# silently succeeding hide behind the second.
+from_submitted = intakes.create(
+    client_email="from-submitted@client.com",
+    client_phone="",
+    scope="Reaches submitted and stops.",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+intakes.advance(from_submitted.id, intakes.SUBMITTED)
+refuses(
+    "submitted -> sent is refused - sent only follows quoted",
+    lambda: intakes.advance(from_submitted.id, intakes.SENT),
+)
+
+from_preparing = intakes.create(
+    client_email="from-preparing@client.com",
+    client_phone="",
+    scope="Reaches preparing and stops.",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+intakes.advance(from_preparing.id, intakes.SUBMITTED)
+intakes.advance(from_preparing.id, intakes.PREPARING, job_id="jp")
+refuses(
+    "preparing -> sent is refused - sent only follows quoted",
+    lambda: intakes.advance(from_preparing.id, intakes.SENT),
 )
 
 # A failure has somewhere to go.

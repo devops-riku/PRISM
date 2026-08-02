@@ -18,6 +18,7 @@ name is simply not one of those ids, not because of the leading underscore.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -129,12 +130,25 @@ class Intake(BaseModel):
     created_at: str = ""
     created_by: str = ""
 
-    #: The client's own link, as a bare token - `intakes.get` resolves it to
-    #: this record, so nothing else needs to know an intake id exists.
+    #: The client's own link, as a bare token - `tokens.resolve` maps it back
+    #: to this record, so nothing else needs to know an intake id exists.
     #: Minted at `create`, replaced wholesale by `relink`, never edited in
     #: place: a copy of an old link a client bookmarked has to stop meaning
     #: anything the moment a new one is issued.
-    token: str = ""
+    #:
+    #: `exclude=True`: this is a bearer credential, not a field. `GET
+    #: /api/intakes` and `GET /api/intakes/{id}` carry no admin check by
+    #: their own design (any member may read the queue), and both serialize
+    #: an `Intake` straight onto the wire via `response_model` - without this,
+    #: the very token about to gate an unauthenticated route would be
+    #: readable by any signed-in member. `model_dump`/`model_dump_json`
+    #: honour this unconditionally, including a call-time `include={...}`
+    #: that names it explicitly - there is no override - so `_write` and
+    #: `advance` (the two places inside this module that round-trip an
+    #: `Intake` through a dump) both restore it by hand afterwards. A studio
+    #: still needs to read the link somehow; that is a later task's job, not
+    #: this field's.
+    token: str = Field(default="", exclude=True)
     token_expires_at: str = ""
 
     # What the client said. Kept verbatim, never rewritten.
@@ -195,9 +209,15 @@ def _write(entry: Intake) -> Intake:
     path = _path(entry.id)
     if path is None:
         raise IntakeError(f"{entry.id!r} is not a usable intake id.")
+    # `token`'s `exclude=True` keeps it off the wire, and `model_dump_json`
+    # would honour that here too and quietly drop it from the file - the one
+    # place that setting must not reach, since disk is the only copy there
+    # is. Written back in by hand, past the exclusion, after the normal dump.
+    payload = entry.model_dump(mode="json")
+    payload["token"] = entry.token
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(entry.model_dump_json(indent=2), encoding="utf-8")
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
         raise IntakeError(f"That intake could not be saved: {exc}") from exc
     return entry
@@ -296,6 +316,16 @@ def get(intake_id: str) -> Intake | None:
         return None
 
 
+def exists(intake_id: str) -> bool:
+    """Whether an intake's file is actually there - distinct from `get()`
+    returning `None`, which also covers a bad id and a file that could not be
+    read just now (the `OSError` above). `tokens.resolve` needs the
+    difference: it is only safe to forget a token forever once the intake is
+    confirmed gone, not merely unreadable this time."""
+    path = _path(intake_id)
+    return path is not None and path.is_file()
+
+
 def listing() -> List[Intake]:
     """Every intake in this workspace, newest first."""
     directory = _directory()
@@ -335,6 +365,11 @@ def advance(intake_id: str, to: str, **fields) -> Intake:
         # fails here, before anything is written, and the stored copy is
         # untouched.
         updated = entry.model_dump()
+        # `token`'s `exclude=True` drops it from the dump just taken - `fields`
+        # can never reintroduce it (it is not in `ADVANCE_FIELDS`), so without
+        # this line every single `advance()` call would silently reset a live
+        # client link to `""` the moment the record round-tripped.
+        updated["token"] = entry.token
         updated.update(fields)
         updated["state"] = to
         try:
@@ -355,7 +390,13 @@ def close(intake_id: str, by: str) -> Intake:
         entry.state = CLOSED
         entry.closed_at = storage.utc_now_iso()
         entry.closed_by = by
-        return _write(entry)
+        written = _write(entry)
+    # A closed request is withdrawn - its link has to stop meaning anything
+    # to the anonymous route Task 3 hangs off `tokens.resolve`, the same way
+    # an expired one already does. Outside the lock, for the same reason
+    # `create` and `relink` call into `tokens` outside theirs.
+    tokens.forget_token(written.token)
+    return written
 
 
 def forget(workspace_id: str) -> None:

@@ -63,7 +63,13 @@ body = created.json()
 # client's words directly (that does not change until a later task rewires
 # it), but the record it produces is issued from the moment it exists.
 ok("it comes back issued, not submitted", body["state"] == "issued")
-ok("and carries a client link already", bool(body.get("token")))
+# The token is a bearer credential, not a field: this route has no admin
+# check by its own design (any member may read the queue), so the link that
+# is about to gate an unauthenticated route (Task 3) must never reach a
+# response that carries an `Intake` straight onto the wire. `intakes.py`
+# marks the field `exclude=True` for exactly this; asserted here at the API
+# boundary rather than only on the model, since that is where it matters.
+ok("but the client link itself never reaches the wire", "token" not in body)
 ok("with the client's words", body["scope"] == "A booking site for two clinics.")
 
 # A client's words are unbounded text reaching a prompt PRISM has always
@@ -87,9 +93,11 @@ ok("an over-length budget_text is refused the same way", over_budget.status_code
 
 listed = client.get("/api/intakes", headers=headers)
 ok("the queue lists it", listed.status_code == 200 and len(listed.json()) == 1)
+ok("and the queue never carries a token either", "token" not in listed.json()[0])
 
 read = client.get(f"/api/intakes/{body['id']}", headers=headers)
 ok("it reads back by id", read.status_code == 200 and read.json()["id"] == body["id"])
+ok("nor does reading it back by id", "token" not in read.json())
 
 ok(
     "an unknown id is 404, not 500",

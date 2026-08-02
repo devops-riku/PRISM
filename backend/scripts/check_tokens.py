@@ -120,11 +120,40 @@ ok(
 )
 ok("the old token stops resolving", tokens.resolve(before_relink) is None)
 
+# --- close() forgets its own token - "withdrawn" has to mean something ----
+#
+# `resolve` only ever checks expiry against the intake's own record, never
+# its state - a closed request's token would otherwise go on resolving
+# forever, which is not what "withdrawn" is supposed to mean to a route with
+# no other gate in front of it.
+
+closable = make(elsewhere.id, "closable")
+closable_token = closable.token
+intakes.close(closable.id, "riku@neptune.ph")
+ok(
+    "closing an intake removes its token from the index directly",
+    closable_token not in tokens._index,  # noqa: SLF001 - asserting the index directly
+)
+ok("and it stops resolving", tokens.resolve(closable_token) is None)
+
 # --- deleting a workspace makes its tokens stop resolving ------------------
 
 doomed = make(home.id, "doomed")
 doomed_token = doomed.token
 workspaces.delete(home.id)
+
+# Checked before any `resolve()` call touches the index, and deliberately in
+# this order: `resolve` itself now evicts a token once it can confirm the
+# intake behind it is gone (rather than merely unreadable), and
+# `workspaces.delete` has already `rmtree`d the folder - so a `resolve()`
+# call made first would evict it through that fallback and this assertion
+# would pass even with `forget_workspace` stubbed to a no-op. Reading the
+# index directly, before `resolve` gets a chance to touch it, is what
+# actually proves `forget_workspace` did the work.
+ok(
+    "deleting a workspace removes its tokens from the index directly",
+    doomed_token not in tokens._index,  # noqa: SLF001 - asserting the index directly
+)
 
 workspaces.use(elsewhere.id)
 ok(
@@ -140,19 +169,29 @@ ok(
 # so the timed loop below measures the steady-state cost of a lookup, not
 # the walk. A per-call directory scan would not survive 200 of these under
 # half a second; a dict lookup plus one file read does it easily.
+#
+# The fixture resolved is the *last* one created, not the first: `intakes
+# .listing()` returns newest first, so if resolution were secretly a linear
+# scan over it rather than a dict lookup, the first-created intake would be
+# the *last* one such a scan reaches - worst case, and therefore the one a
+# scan would be caught by - while the last-created intake would be found
+# almost immediately, making a real scan masquerade as a fast lookup by
+# accident of which fixture happened to be chosen. Picking the last-created
+# one removes that luck: whichever way a scan might iterate, this fixture is
+# not a favourable position to be found at.
 
 perf_a = workspaces.create("Perf Bucket A")
 perf_b = workspaces.create("Perf Bucket B")
 
 target = None
 for index in range(50):
-    fixture = make(perf_a.id if index % 2 == 0 else perf_b.id, f"perf-{index}")
-    if index == 0:
-        target = fixture
+    target = make(perf_a.id if index % 2 == 0 else perf_b.id, f"perf-{index}")
 
-workspaces.use(perf_b.id)
+# index 49 (the last) is odd, so `target` was created in perf_b - resolved
+# here from perf_a, keeping the cross-workspace shape every check above uses.
+workspaces.use(perf_a.id)
 primed = tokens.resolve(target.token)
-ok("the fixture used for timing actually resolves", primed == (perf_a.id, target.id))
+ok("the fixture used for timing actually resolves", primed == (perf_b.id, target.id))
 
 started = time.perf_counter()
 for _ in range(200):
@@ -163,14 +202,97 @@ ok(f"200 resolves of a known token take under 0.5s (took {elapsed:.3f}s)", elaps
 # --- comparison is constant-time -------------------------------------------
 #
 # Crude, and honest: this asserts the property is implemented, not timed -
-# reading the module source for the symbol `members.find_invite` and
-# `members.accept` are also checked against.
+# the symbol `members.find_invite` and `members.accept` are also checked
+# against. Comments are stripped first: `tokens.py` explains the choice in a
+# comment that itself contains the string `secrets.compare_digest`, which
+# would let this pass even if the real call were deleted. Matching the exact
+# call shape - `compare_digest(entry.token` - rather than the bare module
+# name closes the same gap from the other side: `import secrets` alone would
+# otherwise satisfy a looser check too.
 
-source = inspect.getsource(tokens)
+source_without_comments = re.sub(r"#.*", "", inspect.getsource(tokens))
 ok(
     "resolve() compares tokens with secrets.compare_digest, not ==",
-    "secrets.compare_digest" in source,
+    "compare_digest(entry.token" in source_without_comments,
 )
+
+# --- a transient read failure must not permanently kill a live link -------
+#
+# `intakes.get()` answers `None` both when an intake is genuinely gone and
+# when its file exists but could not be read just now - this repo lives on a
+# OneDrive-synced path, where a momentary sharing violation on one JSON read
+# is not hypothetical. `resolve` must only evict the first case: evicting on
+# a transient failure would be permanent, since `_built` never triggers a
+# second walk once it has run. Simulated by stubbing `intakes.get` itself
+# rather than deleting anything, so the file backing the fixture is never
+# touched - exactly a "could not read it this time" failure, not a "gone".
+
+flaky_home = workspaces.create("Flaky Reads")
+flaky = make(flaky_home.id, "flaky")
+flaky_token = flaky.token
+
+workspaces.use(elsewhere.id)
+real_get = intakes.get
+intakes.get = lambda intake_id: None
+try:
+    ok(
+        "a transient read failure resolves to nothing, just this once",
+        tokens.resolve(flaky_token) is None,
+    )
+finally:
+    intakes.get = real_get
+
+ok(
+    "but does not evict the token - the failure was not confirmed absence",
+    flaky_token in tokens._index,  # noqa: SLF001 - asserting the index directly
+)
+ok(
+    "so the same token resolves again once the read succeeds",
+    tokens.resolve(flaky_token) == (flaky_home.id, flaky.id),
+)
+
+# --- a lazy walk that fails must not raise, and must not retry itself -----
+#
+# The walk can die partway through - `workspaces.root()`'s own `mkdir`
+# hitting a permissions error, reached via `intakes.listing()`, say. Task 3
+# hangs an unauthenticated route off `resolve`, which has to answer "not
+# found" for an unknown token either way, never a 500 with a stack trace -
+# and a walk that failed once must not become a walk retried on every later
+# miss too, which would be a full scan per call again, the exact cost this
+# module exists to avoid. Forced by breaking `workspaces.listing` itself,
+# the function the walk actually calls, after resetting the index to make
+# the walk run again as if this were a fresh process.
+
+tokens._built = False  # noqa: SLF001 - forcing the lazy walk to run again
+tokens._index.clear()  # noqa: SLF001
+
+real_listing = workspaces.listing
+walk_attempts = {"n": 0}
+
+
+def _boom_listing():
+    walk_attempts["n"] += 1
+    raise RuntimeError("synthetic failure, mid-walk")
+
+
+workspaces.listing = _boom_listing
+try:
+    ok(
+        "a lazy walk that fails does not raise out of resolve()",
+        tokens.resolve("anything") is None,
+    )
+    ok(
+        "a second miss right after does not raise either",
+        tokens.resolve("anything-else") is None,
+    )
+finally:
+    workspaces.listing = real_listing
+
+ok(
+    "the failed walk was attempted at most once, not on every later miss",
+    walk_attempts["n"] == 1,
+)
+ok("and _built is set regardless, so a working walk is not retried either", tokens._built)
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")
