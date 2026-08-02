@@ -10,19 +10,19 @@ asked for, where that request has got to, and which bundles came out of it. It
 is storage-side and never reaches the model, so it lives here rather than in
 `schemas.py`, exactly as `members.Invite` does.
 
-One file per intake under `_intakes/`. The leading underscore matters:
-`storage.all_bundles()` walks the workspace directory looking for quotations and
-steps over anything starting with one.
+One file per intake under `_intakes/`. `storage.all_bundles()` walks the
+workspace directory looking for 12-character hex quotation ids; `_intakes` is
+stepped over for the same reason `_documents`, `_inbox` and `_jobs` are - its
+name is simply not one of those ids, not because of the leading underscore.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from typing import List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app import storage, workspaces
 
@@ -57,6 +57,12 @@ ALLOWED: dict = {
 
 #: Defined, and deliberately unreachable until Stage 2.
 STAGE_TWO = {ISSUED, SENT, REVISION_REQUESTED, FINALIZED, PROPOSAL_SENT}
+
+#: The only fields a transition may write. `id`, `state`, `created_at` and every
+#: other bookkeeping field are deliberately absent, so a caller can never fork a
+#: record onto a new id or overwrite a pydantic method by passing its name as a
+#: keyword - both were reachable through the `hasattr` check this replaces.
+ADVANCE_FIELDS = {"job_id", "bundle_ids", "document_id", "priced_scope", "priced_budget", "error"}
 
 
 class IntakeError(Exception):
@@ -103,11 +109,21 @@ def _directory():
 
 
 def _path(intake_id: str):
-    return _directory() / f"{intake_id}.json"
+    """The file this intake lives at, or `None` for anything that is not a bare
+    12-character hex id - the same guard `storage.bundle_dir()` and
+    `documents._path()` apply before a caller-supplied id ever touches the
+    filesystem. Without it, `..\\..\\secret` or a drive-absolute segment would
+    resolve outside this workspace entirely."""
+    key = (intake_id or "").strip().lower()
+    if not storage.is_valid_id(key):
+        return None
+    return _directory() / f"{key}.json"
 
 
 def _write(entry: Intake) -> Intake:
     path = _path(entry.id)
+    if path is None:
+        raise IntakeError(f"{entry.id!r} is not a usable intake id.")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(entry.model_dump_json(indent=2), encoding="utf-8")
@@ -144,8 +160,8 @@ def create(
 
 
 def get(intake_id: str) -> Intake | None:
-    path = _path((intake_id or "").strip().lower())
-    if not path.is_file():
+    path = _path(intake_id)
+    if path is None or not path.is_file():
         return None
     try:
         return Intake.model_validate_json(path.read_text(encoding="utf-8"))
@@ -182,12 +198,26 @@ def advance(intake_id: str, to: str, **fields) -> Intake:
         if to not in ALLOWED.get(entry.state, set()):
             raise IntakeError(f"A request that is {entry.state} cannot become {to}.")
 
-        for key, value in fields.items():
-            if not hasattr(entry, key):
-                raise IntakeError(f"An intake has no {key}.")
-            setattr(entry, key, value)
-        entry.state = to
-        return _write(entry)
+        unknown = set(fields) - ADVANCE_FIELDS
+        if unknown:
+            raise IntakeError(f"advance() cannot set {sorted(unknown)}.")
+
+        # Revalidated as a whole rather than `setattr` on the live object: a
+        # plain `setattr` skips type checking entirely (`Intake` does not turn
+        # on `validate_assignment`), so a wrong-shaped value - `bundle_ids` as
+        # a string, say - would sit on the object un-checked, get written to
+        # disk as something `Intake` cannot read back, and take the record
+        # down with it. Building a new instance from a dict means a bad field
+        # fails here, before anything is written, and the stored copy is
+        # untouched.
+        updated = entry.model_dump()
+        updated.update(fields)
+        updated["state"] = to
+        try:
+            moved = Intake.model_validate(updated)
+        except ValidationError as exc:
+            raise IntakeError(f"That move would leave the intake invalid: {exc}") from exc
+        return _write(moved)
 
 
 def close(intake_id: str, by: str) -> Intake:
