@@ -211,6 +211,17 @@ async def _prepare_workspaces_and_bury_dead_jobs() -> None:
     jobs.restore()
 
 
+@app.on_event("startup")
+async def _build_the_client_token_index() -> None:
+    # After workspaces exist (the walk below reads `workspaces.listing()`),
+    # and before this server answers its first request: see
+    # `tokens.build_index()`'s own docstring for what this is paying for up
+    # front, deliberately, rather than letting `/api/client/<token>`'s first
+    # caller - who could be a stranger's first guess, since that route needs
+    # no token of the studio's own to reach - pay for it instead.
+    tokens.build_index()
+
+
 @app.exception_handler(workspaces.NoWorkspace)
 async def _nowhere_to_file_it(request, exc: workspaces.NoWorkspace) -> JSONResponse:
     """Answer plainly when there is no workspace yet.
@@ -256,24 +267,35 @@ async def _gate(request, call_next):
     # `/api/client/` is open on every method, not just GET - the only prefix in
     # this expression for which that is true, and so the only one able to admit
     # a POST without a token at all. Stage 2 Task 3 adds the GET beneath it;
-    # Task 4 adds POSTs beside it (`/submit`, `/revise`, `/finalize`). None of
-    # them carry a studio sign-in, by design: the person on the other end of
-    # this link was never asked to make an account. What makes that safe rather
-    # than merely convenient is three things, not one: the token itself is the
+    # Task 4 adds POSTs beside it (`/submit`, `/revise`, `/finalize`) - and that
+    # route grows a new load-bearing assumption the moment it exists: today, a
+    # `POST` under this prefix with no matching route is a 405, not a 401,
+    # because the gate never gets a chance to check anything. What makes this
+    # prefix safe to leave open, today, is two things: the token itself is the
     # credential - unguessable, minted one per intake, living nowhere but the
     # link the studio sent - and `tokens.resolve` treats an unknown, expired,
     # relinked-away or closed one identically, so a stranger probing this
-    # prefix cannot even learn which guesses ever meant anything; the handler
-    # behind each route re-checks the intake's own state before acting, so a
-    # token that is real but wrong for the write attempted is refused, not
-    # merely authenticated; and Task 4 adds a per-IP rate limit on the write
-    # routes on top of both - a courtesy control against a script trying every
-    # token it can generate, not a defence against a determined attacker, and
-    # said as plainly there as it is said here.
+    # prefix cannot even learn which guesses ever meant anything; and the
+    # handler behind each route re-checks the intake's own state before
+    # acting, so a token that is real but wrong for the write attempted is
+    # refused, not merely authenticated. Task 4 is expected to add a third - a
+    # per-IP rate limit on the write routes, a courtesy control against a
+    # script trying every token it can generate, not a defence against a
+    # determined attacker - but it does not exist yet, and this comment says
+    # so rather than claiming a protection this commit does not add.
+    #
+    # `path == "/api/client"` (no trailing token at all, with or without a
+    # trailing slash - `path` above is already `rstrip("/")`-normalised) is
+    # listed on its own rather than folded into the prefix test: nothing is
+    # ever registered at exactly that path, so opening it changes nothing
+    # about what is servable, and *not* opening it was the one place this
+    # door answered 401 instead of the 404 every other malformed attempt at
+    # it gets - the one inconsistent answer on an otherwise uniform surface.
     open_path = (
         path in auth.OPEN_PATHS
         or not path.startswith("/api/")
         or (request.method == "GET" and path.startswith("/api/invites/"))
+        or path == "/api/client"
         or path.startswith("/api/client/")
     )
 
@@ -2509,17 +2531,23 @@ async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
 _CLIENT_LINK_GONE = "That link is not valid, or has expired."
 
 
-@app.get("/api/client/{token}", tags=["client"])
+@app.get("/api/client/{token}", response_model=None, tags=["client"])
 async def read_client_view(token: str) -> dict:
     """What a client sees of their own request - answered to whoever holds the
     link, which is the point, exactly as `read_invite` answers to whoever
     holds an invitation.
 
-    No `response_model`: what `clientview.of` returns depends on the intake's
-    state - `issued` carries two fields, a sent quotation carries a dozen -
-    and `app/schemas.py` is deliberately not extended to describe a client's
-    view (see `clientview.py`'s own docstring). The dict it builds is
-    returned exactly as built, nothing added or stripped going out the door.
+    `response_model=None`, set explicitly rather than left to the bare `-> dict`
+    annotation: since FastAPI 0.89, a return annotation *is* the response
+    model unless told otherwise, and a bare `dict` response model round-trips
+    through FastAPI's own validation/serialisation pass rather than being
+    returned exactly as `clientview.of` built it - the one boundary this
+    route exists to keep a raw, hand-filtered dict on the safe side of. What
+    `clientview.of` returns depends on the intake's state - `issued` carries
+    two fields, a sent quotation carries a dozen - and `app/schemas.py` is
+    deliberately not extended to describe a client's view (see
+    `clientview.py`'s own docstring), so there is no single shape to declare
+    here even if this route wanted one.
 
     `X-Workspace` is never read here. `tokens.resolve` is the only thing
     that says which workspace a link belongs to; trusting a header instead
@@ -2540,6 +2568,28 @@ async def read_client_view(token: str) -> dict:
             # race its own docstring describes, not a case it failed to rule
             # out - and it answers exactly as an unknown token would either
             # way.
+            raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+        if entry.state == intakes.CLOSED:
+            # Cannot be delegated to the token having gone blank on disk -
+            # `tokens.resolve` validated against *its own* read of this same
+            # record, moments earlier and inside its own `borrow`/`give_back`,
+            # not this one. The two reads can straddle a `close()` landing in
+            # between: `resolve()` sees a live, unexpired token and hands back
+            # a match; by the time this handler's own `intakes.get()` runs,
+            # `close()` has already flipped the state and blanked the token
+            # via `intakes._write`. Nothing upstream of this line has checked
+            # `entry.state` at all. A second, independent reason this cannot
+            # be delegated: `tokens._build_locked` re-indexes any intake with
+            # a non-empty token with no state check, by its own docstring's
+            # admission - so a restored backup, a hand-edit, or any future
+            # writer that bypasses `intakes._write` would resolve a live
+            # token on a closed intake forever, not just across one race
+            # window. Refused here, explicitly, with the same body every
+            # other kind of "gone" gets - `clientview.of` itself would answer
+            # `{"state": "closed"}` for this, correctly, for the *studio's*
+            # reading of a closed intake; a client holding the link is not
+            # the studio, and Task 3's promise is that this and "never
+            # existed" are the same answer.
             raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
         bundle = storage.get(entry.sent_bundle_id) if entry.sent_bundle_id else None
         # `clientview.of` runs inside this `try`, still borrowed - not after

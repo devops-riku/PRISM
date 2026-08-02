@@ -103,6 +103,32 @@ def _build_locked() -> None:
         _built = True
 
 
+def build_index() -> None:
+    """Force the walk now, synchronously, rather than leaving it for whichever
+    request's `resolve()` happens to miss first.
+
+    Called once from `main.py`'s startup event, before the ASGI server begins
+    accepting connections - see `_build_locked`'s own comment for the cost
+    this is paying up front: a full walk of every workspace's intakes, held
+    under `_lock`, measured at ~1.85s for 200 intakes on this repo's
+    OneDrive-synced storage. Paid there, it is invisible; paid inside a
+    request (the lazy path in `resolve()`, still intact below as a fallback),
+    it is a synchronous, lock-held stall on the event loop that every other
+    concurrent request queues behind, and on a cold process it takes exactly
+    one unauthenticated guess at `/api/client/<token>` to trigger it. Entry
+    points that never run `main.py`'s startup event - `check_tokens.py` and
+    every other check script that imports this module directly, a future
+    admin CLI - still build lazily, correctly, on their own first miss.
+
+    Safe to call more than once, and safe to call from a place that never
+    checks whether it already ran: `_build_locked` is itself idempotent once
+    `_built` flips, so a second call is a lock acquisition and a flag check,
+    nothing more.
+    """
+    with _lock:
+        _build_locked()
+
+
 def remember(token: str, workspace_id: str, intake_id: str) -> None:
     """File a freshly minted token, so the next resolve finds it without a walk."""
     key = (token or "").strip()
@@ -137,9 +163,15 @@ def forget_workspace(workspace_id: str) -> None:
 def resolve(token: str) -> tuple[str, str] | None:
     """Which workspace and intake a client link belongs to, or `None`.
 
-    The index answers fast for the case that matters most: a token nobody
-    has ever minted, which is every guess an attacker makes, costs one dict
-    miss and nothing else - no file is read. A token the index does
+    The index answers fast for the case that matters most - a token nobody
+    has ever minted, which is every guess an attacker makes - costing one
+    dict miss and nothing else, *once the index is built*. That is only true
+    of every miss but the first: on a process where nothing has called
+    `build_index()` yet, the very first miss still pays for the full walk
+    below, synchronously, under `_lock`. `main.py`'s startup event calls
+    `build_index()` before the server accepts any request specifically so
+    that a live server never serves that first miss - see its own docstring
+    for the measured cost of not doing that. A token the index does
     recognise is still checked against the intake it names before being
     trusted - expired, relinked away, or the intake itself gone are all read
     from that one file, never assumed from what is cached here.
@@ -203,5 +235,14 @@ def resolve(token: str) -> tuple[str, str] | None:
             _index.pop(wanted, None)
         return None
     if _expired(entry.token_expires_at):
+        # Evicted for the same reason a mismatch is, just above: a token's
+        # expiry only ever moves forward in time, and the one way an intake
+        # gets a *different* expiry is `relink()`, which mints a brand new
+        # token string - so this exact token value will never resolve again.
+        # Left in the index instead, every later probe of the same expired
+        # token would keep costing a `borrow` and a file read forever, which
+        # is exactly the per-guess cost this index exists to avoid.
+        with _lock:
+            _index.pop(wanted, None)
         return None
     return workspace_id, intake_id

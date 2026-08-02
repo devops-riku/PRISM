@@ -16,6 +16,7 @@ either way.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -42,6 +43,7 @@ from app import intakes  # noqa: E402
 from app import main as main_module  # noqa: E402
 from app import members  # noqa: E402
 from app import settings  # noqa: E402
+from app import tokens  # noqa: E402
 from app import workspaces  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -138,6 +140,24 @@ ok(
     crossed.json() == {"state": "issued", "studio_name": "Alpha Studio Name"},
 )
 
+# --- The bare path (no token at all) is 404, not the one 401 on this door ---
+#
+# `/api/client/{token}` requires a segment after the slash - Starlette's
+# default converter does not match an empty one - so nothing is ever routed
+# at exactly `/api/client` or `/api/client/`. Before `_gate` names that path
+# open too, it falls through to the ordinary `/api/` branch, which demands a
+# token this caller never sent: the one place this door answered 401 instead
+# of the 404 every other malformed attempt at it gets.
+for bare in ("/api/client", "/api/client/"):
+    resp = client.get(bare)
+    ok(f"{bare} is 404, the same as every other bad shape on this door", resp.status_code == 404)
+
+# And the fix must not become a prefix over-match: a path that merely starts
+# with the same letters is not this door and must still demand a token.
+for near_miss in ("/api/clients", "/api/clientele/x", "/api/client-something"):
+    resp = client.get(near_miss)
+    ok(f"{near_miss} is not mistaken for the client door: still 401", resp.status_code == 401)
+
 # --- Every existing studio route still refuses an anonymous caller ----------
 
 STUDIO_PATHS = [
@@ -213,6 +233,100 @@ ok(
     unknown.json() == closed.json() == expired.json() == {"detail": main_module._CLIENT_LINK_GONE},
 )
 ok("that body carries no clue beyond 'gone'", set(unknown.json()) == {"detail"})
+
+# --- A close() that lands mid-request must not leak "closed" as 200 --------
+#
+# `tokens.resolve` validates a token against its own read of the intake,
+# inside its own `borrow`/`give_back`. The handler then reads the same
+# intake again, independently, to build the response. Those two reads are
+# not atomic with each other - a `close()` can land in the gap between them.
+# Reproduced directly rather than argued: patch `tokens.resolve` to do
+# exactly what it always does, and then run `intakes.close()` on the intake
+# it just resolved, before returning - the same interleaving a real
+# concurrent request could produce, made deterministic.
+race_intake = intakes.create(
+    client_email="race@client.com",
+    client_phone="",
+    scope="Closed while a client's own request for it was in flight.",
+    budget_text="",
+    preset={},
+    created_by="admin@neptune.ph",
+)
+race_token = race_intake.token
+_real_resolve = tokens.resolve
+
+
+def _resolve_then_close_underneath_it(token: str):
+    found = _real_resolve(token)
+    if found is not None:
+        # A real concurrent close would run in its own request, borrowed into
+        # the right workspace on its own terms - mirrored here rather than
+        # assumed, since the ambient workspace at this point in the handler
+        # is whatever `_gate` set from this request's own (absent)
+        # `X-Workspace` header, not necessarily `race_intake`'s.
+        workspace_id, intake_id = found
+        borrowed = workspaces.borrow(workspace_id)
+        try:
+            intakes.close(intake_id, "admin@neptune.ph")
+        finally:
+            workspaces.give_back(borrowed)
+    return found
+
+
+try:
+    main_module.tokens.resolve = _resolve_then_close_underneath_it
+    interleaved = client.get(f"/api/client/{race_token}")
+finally:
+    main_module.tokens.resolve = _real_resolve
+
+ok(
+    "a close() landing between resolve's read and the handler's own is still "
+    "404, not 200 {'state': 'closed'}",
+    interleaved.status_code == 404
+    and interleaved.json() == {"detail": main_module._CLIENT_LINK_GONE},
+)
+
+# --- A closed intake with a live token on disk must still be refused -------
+#
+# The second, independent path the interleaving test above does not cover:
+# `tokens._build_locked` re-indexes any intake with a non-empty token, with
+# no state check, by its own docstring's admission - so a restored backup, a
+# hand-edit, or any future writer that bypasses `intakes._write` (the one
+# place that blanks a closed intake's token) leaves exactly this shape of
+# record: `state == "closed"`, `token` still populated and unexpired. Built
+# by writing the file directly, past `intakes._write`, which would
+# immediately re-blank the token the moment it saw `state == CLOSED` - that
+# guard is precisely what this fixture has to bypass to prove the *handler*
+# still refuses it independently, not merely trust that guard held.
+zombie = intakes.create(
+    client_email="zombie@client.com",
+    client_phone="",
+    scope="Closed, but a live token still sits on disk from before that guard.",
+    budget_text="",
+    preset={},
+    created_by="admin@neptune.ph",
+)
+zombie_token = zombie.token
+intakes.close(zombie.id, "admin@neptune.ph")
+
+zombie_path = intakes._path(zombie.id)  # noqa: SLF001 - reaching past the public API on purpose
+zombie_payload = json.loads(zombie_path.read_text(encoding="utf-8"))
+ok("close() did blank the token on disk, before this fixture undoes it", zombie_payload["token"] == "")
+zombie_payload["token"] = zombie_token
+zombie_payload["token_expires_at"] = intakes._later(60)  # noqa: SLF001 - fresh, unexpired
+zombie_path.write_text(json.dumps(zombie_payload), encoding="utf-8")
+# What `tokens._build_locked`'s walk would do on finding this record - no
+# state check, by design - reproduced directly rather than waiting for a
+# process restart to trigger the real walk.
+tokens.remember(zombie_token, other.id, zombie.id)
+
+zombie_resp = client.get(f"/api/client/{zombie_token}")
+ok(
+    "a closed intake with a live token restored on disk is still 404, not "
+    "200 {'state': 'closed'}",
+    zombie_resp.status_code == 404
+    and zombie_resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+)
 
 # --- A state clientview.of cannot show must not become a traceback ----------
 #

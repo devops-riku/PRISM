@@ -187,9 +187,17 @@ def of(intake: Intake, bundle: Optional[ProposalBundle] = None) -> dict:
         }
 
     if intake.state == CLOSED:
-        # Nothing further to show - a withdrawn request. Task 3 makes this
-        # indistinguishable from a token that never resolved at all; until
-        # then, this is simply the truth.
+        # Nothing further to show - a withdrawn request. This branch is the
+        # truth as far as this function goes, and it stays reachable for a
+        # caller with a legitimate reason to see it - a studio's own view of
+        # its queue, say, which nothing in this codebase builds through
+        # `of()` today but could. It is *not* what a client's own token
+        # resolves to: `main.py`'s anonymous route refuses a closed intake
+        # before `of()` is ever called for it, precisely so that "closed" and
+        # "never existed" are the same answer to whoever is holding the link.
+        # That refusal has to live in the caller, not here - `of()` is handed
+        # an `Intake` already fetched by id, with no token and no notion of
+        # "who is asking" to decide the question itself.
         return {"state": intake.state}
 
     # Reachable today only by `proposal_sent`, which is in `intakes.ALLOWED`
