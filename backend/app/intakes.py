@@ -111,6 +111,21 @@ ALLOWED: dict = {
 #: has nowhere else to read it from: `bundle.created_at` is when the
 #: quotation was *prepared*, not when the studio actually let the client see
 #: it, and those two moments can be days apart.
+#:
+#: `client_email`, `client_phone`, `scope` and `budget_text` are Task 4's
+#: addition, for the same reason every other name here exists: `main.py`'s
+#: `/api/client/{token}/submit` has to write the client's own four fields the
+#: moment `issued` becomes `submitted`, and nothing before Task 4 ever wrote
+#: them anywhere but `create()`. This set is **not** scoped per transition -
+#: `advance()` has no notion of "this field, only on that move" - so adding
+#: these four here technically lets *any* call to `advance()` overwrite a
+#: client's own words, not only the `issued -> submitted` one `/submit` makes.
+#: What actually keeps that from happening is that `/submit` is the only
+#: caller in this codebase that ever passes them; `check_client_api.py` has a
+#: regression test asserting `/revise` and `/finalize` leave them untouched.
+#: Narrowing `ADVANCE_FIELDS` itself to be transition-aware would close this
+#: gap structurally rather than by convention, and is worth doing the day a
+#: second write path needs a field the first should not be able to touch.
 ADVANCE_FIELDS = {
     "job_id",
     "bundle_ids",
@@ -121,6 +136,10 @@ ADVANCE_FIELDS = {
     "revisions",
     "sent_bundle_id",
     "sent_at",
+    "client_email",
+    "client_phone",
+    "scope",
+    "budget_text",
 }
 
 

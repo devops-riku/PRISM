@@ -25,6 +25,9 @@ import json
 import logging
 import math
 import re
+import threading
+import time
+from collections import defaultdict, deque
 from typing import List, Union
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -267,22 +270,23 @@ async def _gate(request, call_next):
     # `/api/client/` is open on every method, not just GET - the only prefix in
     # this expression for which that is true, and so the only one able to admit
     # a POST without a token at all. Stage 2 Task 3 adds the GET beneath it;
-    # Task 4 adds POSTs beside it (`/submit`, `/revise`, `/finalize`) - and that
-    # route grows a new load-bearing assumption the moment it exists: today, a
-    # `POST` under this prefix with no matching route is a 405, not a 401,
-    # because the gate never gets a chance to check anything. What makes this
-    # prefix safe to leave open, today, is two things: the token itself is the
-    # credential - unguessable, minted one per intake, living nowhere but the
-    # link the studio sent - and `tokens.resolve` treats an unknown, expired,
-    # relinked-away or closed one identically, so a stranger probing this
-    # prefix cannot even learn which guesses ever meant anything; and the
-    # handler behind each route re-checks the intake's own state before
-    # acting, so a token that is real but wrong for the write attempted is
-    # refused, not merely authenticated. Task 4 is expected to add a third - a
-    # per-IP rate limit on the write routes, a courtesy control against a
-    # script trying every token it can generate, not a defence against a
-    # determined attacker - but it does not exist yet, and this comment says
-    # so rather than claiming a protection this commit does not add.
+    # Task 4 adds POSTs beside it (`/submit`, `/revise`, `/finalize`). What
+    # makes this prefix safe to leave open is three things, all load-bearing:
+    # the token itself is the credential - unguessable, minted one per intake,
+    # living nowhere but the link the studio sent - and `tokens.resolve` treats
+    # an unknown, expired, relinked-away or closed one identically, so a
+    # stranger probing this prefix cannot even learn which guesses ever meant
+    # anything; the handler behind each write route re-checks the intake's own
+    # state before acting (via `intakes.advance`'s own transition table), so a
+    # token that is real but wrong for the write attempted is refused, not
+    # merely authenticated; and, since Task 4, a per-IP-and-route rate limit
+    # (`_enforce_rate_limit`, beside the three write routes below) on the
+    # write routes - a courtesy control against a script trying every token it
+    # can generate or double-submitting by accident, not a defence against a
+    # determined or distributed attacker. Say that last part plainly, because
+    # it is the one of the three that is not actually load-bearing security:
+    # anyone who can send from more than one address, or who simply waits out
+    # the window, is unaffected by it.
     #
     # `path == "/api/client"` (no trailing token at all, with or without a
     # trailing slash - `path` above is already `rstrip("/")`-normalised) is
@@ -2514,7 +2518,7 @@ async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-# --- The client's own door (Stage 2 Task 3) -----------------------------------
+# --- The client's own door (Stage 2 Tasks 3-4) --------------------------------
 #
 # Everything below this line, until the next section, is reachable with no
 # `Authorization` header at all - see the `open_path` comment in `_gate` for
@@ -2609,6 +2613,275 @@ async def read_client_view(token: str) -> dict:
             # named something real.
             logger.exception("clientview.of could not show intake %s", intake_id)
             raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE) from None
+    finally:
+        workspaces.give_back(borrowed)
+
+
+# --- The client writes (Stage 2 Task 4) ---------------------------------------
+#
+# Three routes, and every one of them is a stranger's POST answered with no
+# `Authorization` header - see the `open_path` comment in `_gate` for the three
+# things that make that safe. This section is the second of them: each
+# handler below enforces its own state check rather than trusting the gate,
+# which admits every method under this prefix and could not tell a legal
+# write from an illegal one if it tried.
+
+
+#: Per-IP, per-route courtesy limiter for the three routes below. What this is
+#: **not**: a defence against a determined or distributed attacker. It is a
+#: bare dict living in this one worker process's memory - gone the moment the
+#: process restarts, blind to any request handled by a different worker or
+#: machine, and trivially sidestepped by anyone who can send from more than
+#: one address or is simply willing to wait out the window. What it *is*: a
+#: courtesy control against a double-clicked form and a casual script trying
+#: tokens in a loop from one machine. Keyed on `(ip, route)` rather than `ip`
+#: alone so a client who burns their `/submit` budget retrying a typo cannot
+#: also find `/finalize` refusing them for the same reason on the same visit.
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_MAX_REQUESTS = 20
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits: dict[tuple[str, str], deque] = defaultdict(deque)
+
+
+def _client_ip(request: Request) -> str:
+    """The address Starlette itself resolved from the socket - `request.client`,
+    never a header. `X-Forwarded-For` and its relatives are exactly what a
+    caller trying to defeat this limit would set to whatever suits them;
+    Starlette only ever populates `request.client` from the actual transport
+    connection. It is `None` only for an ASGI transport with no notion of a
+    peer address at all, which is treated as one shared, unrateable caller
+    rather than raised on.
+    """
+    peer = request.client
+    return peer.host if peer is not None else "unknown"
+
+
+def _enforce_rate_limit(request: Request, route: str) -> None:
+    """Refuse a caller's 21st write to `route` from one address inside a
+    minute. See `_rate_limit_hits`'s own comment for what this is not."""
+    now = time.monotonic()
+    key = (_client_ip(request), route)
+    with _rate_limit_lock:
+        hits = _rate_limit_hits[key]
+        while hits and now - hits[0] > _RATE_LIMIT_WINDOW_SECONDS:
+            hits.popleft()
+        if len(hits) >= _RATE_LIMIT_MAX_REQUESTS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many attempts from this address. Wait a minute and try again.",
+            )
+        hits.append(now)
+
+
+def _client_write_refused() -> HTTPException:
+    """The one answer every refusal on these three routes gives - see
+    `_CLIENT_LINK_GONE`'s own docstring. A token that never resolved, an
+    intake that has since vanished, a move `intakes.advance` will not make
+    from the state the record is actually in: all of them come back exactly
+    like this, because a stranger holding a wrong-state link must learn
+    nothing more than "no"."""
+    return HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+
+
+def _client_advance(intake_id: str, to: str, **fields) -> intakes.Intake:
+    """Move a client-writable intake, or answer this door's one refusal.
+
+    Deliberately not preceded by this handler's own `entry.state != ...`
+    check: `intakes.advance` already makes that check, atomically, under its
+    own lock - a second copy here would be exactly the kind of duplicated
+    invariant that let `close()` and `advance(..., CLOSED)` drift apart in
+    Task 1 (see `_write`'s own docstring). Relying on it here means a
+    double-submit racing itself is refused by the same mechanism that refuses
+    a submit from the wrong state, not a second one that could disagree with
+    it.
+
+    `intakes.advance` raises `IntakeError` for two entirely different
+    reasons, distinguished only by the message: "that move is not legal"
+    (unknown id, wrong state, an unknown field) and "the write itself
+    failed" (`_write`'s own wrapped `OSError` - a full disk, a sync client
+    holding a lock). Those are not the same answer. The first is a refusal,
+    and every refusal on this door is the identical opaque 404. The second is
+    not a refusal at all - it is this server failing to save a client's
+    words - and folding it into "that link is gone" would tell somebody
+    their submission was rejected when it was actually lost. `_write`'s
+    wrapped message is the only raise site in `advance()` that names the
+    save rather than the move, so it is what is matched on below, rather
+    than adding a pre-read of `entry.state` here purely to classify an
+    exception after the fact - which would reintroduce the duplicated-check
+    problem this function exists to avoid, for a distinction that does not
+    need it.
+    """
+    try:
+        return intakes.advance(intake_id, to, **fields)
+    except intakes.IntakeError as exc:
+        if "could not be saved" in str(exc):
+            logger.exception("Could not save a client write to intake %s (-> %s)", intake_id, to)
+            raise HTTPException(
+                status_code=500,
+                detail="That could not be saved. Wait a moment and try again.",
+            ) from exc
+        raise _client_write_refused() from None
+
+
+class ClientSubmitRequest(BaseModel):
+    """The client's own four fields, filled in once from `issued`."""
+
+    client_email: str = ""
+    client_phone: str = ""
+    scope: str = ""
+    budget_text: str = ""
+
+
+class ClientReviseRequest(BaseModel):
+    """What the client asked to change, in their own words."""
+
+    asked: str = ""
+
+
+@app.post("/api/client/{token}/submit", response_model=None, tags=["client"])
+async def submit_client_intake(
+    token: str, request: Request, body: ClientSubmitRequest
+) -> dict:
+    """The client's own words, written once, from `issued` alone.
+
+    There is no studio identity behind this call - just whoever is holding
+    the link - so `intakes.advance`'s transition table is the entire abuse
+    control: a second call, from `submitted` or anywhere past it, is refused
+    exactly as a call against a token that never resolved is. Length is
+    bounded with the same `_normalise_scope`/`_normalise_budget_text` the
+    studio's own `/api/intakes` route uses, rather than a second convention
+    for the same two fields.
+    """
+    _enforce_rate_limit(request, "submit")
+
+    found = tokens.resolve(token)
+    if found is None:
+        raise _client_write_refused()
+
+    scope = _normalise_scope(body.scope)
+    budget_text = _normalise_budget_text(body.budget_text)
+
+    workspace_id, intake_id = found
+    borrowed = workspaces.borrow(workspace_id)
+    try:
+        moved = _client_advance(
+            intake_id,
+            intakes.SUBMITTED,
+            client_email=(body.client_email or "").strip(),
+            client_phone=(body.client_phone or "").strip(),
+            scope=scope,
+            budget_text=budget_text,
+        )
+        # `submitted` is one of `clientview.of`'s waiting states, which needs
+        # no bundle - passing none is correct, exactly as it is for `issued`.
+        return clientview.of(moved)
+    finally:
+        workspaces.give_back(borrowed)
+
+
+@app.post("/api/client/{token}/revise", response_model=None, tags=["client"])
+async def revise_client_intake(
+    token: str, request: Request, body: ClientReviseRequest
+) -> dict:
+    """Ask for a change. Accepted only from `sent`, and only once at a time -
+    a second ask before the studio has re-quoted moves the record to
+    `revision_requested`, which is not `sent`, so `intakes.advance` refuses
+    it the same as any other wrong-state call.
+
+    `revisions` is a log `advance()` overwrites wholesale rather than appends
+    to (see `ADVANCE_FIELDS`'s own docstring), so the full, updated list is
+    built here from the record's current one and handed in whole.
+    """
+    _enforce_rate_limit(request, "revise")
+
+    found = tokens.resolve(token)
+    if found is None:
+        raise _client_write_refused()
+
+    asked = _normalise_instruction(body.asked)
+    if not asked:
+        raise HTTPException(
+            status_code=400,
+            detail="Say what you would like changed before asking for a revision.",
+        )
+
+    workspace_id, intake_id = found
+    borrowed = workspaces.borrow(workspace_id)
+    try:
+        # A best-effort read, not a check: if the intake has vanished or
+        # moved on since this line, `existing` may be stale, but
+        # `_client_advance` below re-reads the record fresh, inside
+        # `advance`'s own lock, and refuses correctly off that read
+        # regardless of what this one saw.
+        current = intakes.get(intake_id)
+        existing = list(current.revisions) if current is not None else []
+        moved = _client_advance(
+            intake_id,
+            intakes.REVISION_REQUESTED,
+            revisions=existing + [{"asked": asked, "at": storage.utc_now_iso()}],
+        )
+        bundle = storage.get(moved.sent_bundle_id) if moved.sent_bundle_id else None
+        return clientview.of(moved, bundle)
+    finally:
+        workspaces.give_back(borrowed)
+
+
+@app.post("/api/client/{token}/finalize", response_model=None, tags=["client"])
+async def finalize_client_intake(token: str, request: Request) -> dict:
+    """The client accepts what was sent. Not a signature and nothing is
+    charged - that framing lives on the client's own screen (Task 8), not
+    here. Accepted only from `sent`. Tells the intake's own author and every
+    admin, by an explicit recipient list rather than a role alone, since
+    whoever issued this particular request should hear about it even if they
+    do not administer the workspace.
+    """
+    _enforce_rate_limit(request, "finalize")
+
+    found = tokens.resolve(token)
+    if found is None:
+        raise _client_write_refused()
+
+    workspace_id, intake_id = found
+    borrowed = workspaces.borrow(workspace_id)
+    try:
+        moved = _client_advance(intake_id, intakes.FINALIZED)
+        bundle = storage.get(moved.sent_bundle_id) if moved.sent_bundle_id else None
+
+        # Resolved against the roster at write time, the same as every other
+        # notification in this file - see `inbox.py`'s own docstring on why.
+        # A plain union of two sets rather than two separate `notify()` calls,
+        # so an admin who also happens to be `created_by` is told once, not
+        # twice.
+        recipients = {
+            (member.email or "").strip().lower()
+            for member in members.listing()
+            if member.role == members.ADMIN
+        }
+        created_by = (moved.created_by or "").strip().lower()
+        if created_by:
+            recipients.add(created_by)
+        if recipients:
+            inbox.notify(
+                "intake.finalized",
+                list(recipients),
+                {
+                    "title": "A client finalised their quotation",
+                    "body": " · ".join(
+                        part
+                        for part in (
+                            bundle.estimate.quotation_ref if bundle else "",
+                            bundle.estimate.client_name if bundle else "",
+                            format_money(bundle.estimate.cost.total, bundle.estimate.currency)
+                            if bundle
+                            else "",
+                        )
+                        if part
+                    ),
+                    "href": "#/intakes",
+                },
+            )
+
+        return clientview.of(moved, bundle)
     finally:
         workspaces.give_back(borrowed)
 

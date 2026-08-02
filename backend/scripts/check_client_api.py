@@ -1,4 +1,5 @@
-"""`GET /api/client/{token}` - the first unauthenticated route in this codebase.
+"""`/api/client/{token}` - the first unauthenticated surface in this codebase,
+GET (Task 3) and its three writes (Task 4: `/submit`, `/revise`, `/finalize`).
 
 Runs with real auth ON throughout, not merely available: `SUPABASE_JWT_SECRET`
 is set on `config` directly, right after import, exactly the way
@@ -16,6 +17,17 @@ in `main.py`, including `tokens.build_index()`) only runs that way. A bare
 `TestClient(app)` never fires it, which is exactly how the startup-built token
 index shipped with zero regression coverage the first time: every assertion in
 this file passed identically whether or not that hook existed.
+
+The Task 4 section below drives several extra `TestClient` instances, one per
+IP address it needs to simulate - `client=(ip, port)` at construction is the
+only place Starlette's `TestClient` lets a caller's address be set, and it is
+fixed for that instance's whole lifetime, not per request. Each of those extra
+clients is built bare, without `with`. That is safe here specifically: the ASGI
+lifespan already ran once, at module scope, via the outer `with` below, and
+routing an ordinary request through the same `app` object does not depend on
+running that lifespan a second time - only a *fresh* `app` built without ever
+entering a `with TestClient(...)` would need it, which is exactly the failure
+mode this file's opening section already proves does not apply here.
 
     cd backend
     .venv/Scripts/python.exe scripts/check_client_api.py
@@ -46,13 +58,24 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import auth as auth_module  # noqa: E402
 from app import config  # noqa: E402
+from app import inbox  # noqa: E402
 from app import intakes  # noqa: E402
 from app import main as main_module  # noqa: E402
 from app import members  # noqa: E402
 from app import settings  # noqa: E402
+from app import storage  # noqa: E402
 from app import tokens  # noqa: E402
 from app import workspaces  # noqa: E402
 from app.main import app  # noqa: E402
+from app.schemas import (  # noqa: E402
+    ClientNarrative,
+    CostSummary,
+    Estimate,
+    LineItem,
+    PaymentMilestone,
+    ProposalBundle,
+    UnitKind,
+)
 
 FAILURES: list[str] = []
 
@@ -395,6 +418,567 @@ with TestClient(app) as client:
     ok(
         "a clientview failure answers the same 404 body, not a 500 with a traceback",
         broken.status_code == 404 and broken.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    # ==========================================================================
+    # Task 4: the client writes - POST /submit, /revise, /finalize
+    # ==========================================================================
+    #
+    # Every group below - submit, revise, finalize, the rate limit - is driven
+    # through its own `TestClient` bound to its own IP address, so this file's
+    # own POSTs can never share a rate-limit bucket with each other by
+    # accident, and so the rate-limit section itself can count its own
+    # requests exactly.
+
+    def _client_for(ip: str) -> TestClient:
+        return TestClient(app, client=(ip, 443))
+
+    def _walk(intake_id: str, *steps: tuple) -> None:
+        """Advance straight through `(state, fields)` pairs, bypassing any
+        HTTP route - the same shorthand `check_tokens.py`'s `clientview`
+        fixture and `check_intake_gate.py` both use to reach a state nothing
+        in this plan yet drives through a request of its own."""
+        for state, fields in steps:
+            intakes.advance(intake_id, state, **fields)
+
+    LONG_TEXT = "x" * (config.MAX_BRIEF_CHARS + 1)
+
+    FIXTURE_ESTIMATE = Estimate(
+        project_name="Task 4 Fixture",
+        client_name="Fixture Client Co.",
+        currency="PHP",
+        client=ClientNarrative(
+            title="Task 4 Fixture",
+            executive_summary="A fixture proposal for the client-write routes.",
+            validity_days=30,
+        ),
+        line_items=[
+            LineItem(
+                id="LI-01",
+                category="Backend",
+                description="Build the thing",
+                role="Senior Backend Engineer",
+                quantity=5,
+                unit=UnitKind.hour,
+                unit_rate=1000.0,
+                subtotal=5000.0,
+            ),
+        ],
+        cost=CostSummary(
+            subtotal=5000.0,
+            total=5000.0,
+            payment_milestones=[
+                PaymentMilestone(label="Deposit", percent=50.0, amount=2500.0, trigger="Signing"),
+                PaymentMilestone(label="Delivery", percent=50.0, amount=2500.0, trigger="Delivery"),
+            ],
+        ),
+        quotation_ref="TASK4-0000001",
+    )
+
+    def _sent_intake(workspace, created_by: str, scope: str = "Original scope, before any change."):
+        """A real intake moved by hand straight to `sent`, with a real bundle
+        attached - the only shape `/revise` and `/finalize` are ever reachable
+        from. Built directly rather than by driving a Gemini-stubbed pass
+        through `/api/proposals` the way `check_intake_gate.py` and
+        `check_tokens.py`'s `clientview` section do: those two already prove
+        `clientview.of` renders a real bundle correctly end to end, so this
+        file's fixtures only need a bundle real enough to be read - proving
+        that rendering a second time is not this file's job.
+        """
+        workspaces.use(workspace.id)
+        entry = intakes.create(
+            client_email="quoted@client.com",
+            client_phone="",
+            scope=scope,
+            budget_text="around 100k",
+            preset={},
+            created_by=created_by,
+        )
+        bundle_id = storage.new_id()
+        bundle = ProposalBundle(
+            id=bundle_id,
+            created_at=storage.utc_now_iso(),
+            estimate=FIXTURE_ESTIMATE,
+            files=main_module._build_files(bundle_id, FIXTURE_ESTIMATE),  # noqa: SLF001
+            revision=1,
+            root_id=bundle_id,
+        )
+        storage.save(bundle)
+        _walk(
+            entry.id,
+            (intakes.SUBMITTED, {}),
+            (intakes.PREPARING, {"job_id": "fixture-job"}),
+            (intakes.QUOTED, {"bundle_ids": [bundle_id]}),
+            (intakes.SENT, {"sent_bundle_id": bundle_id, "sent_at": "2026-08-01T00:00:00Z"}),
+        )
+        return intakes.get(entry.id), bundle
+
+    # --- /submit: only from `issued`, and only once --------------------------
+
+    submit_client = _client_for("203.0.113.11")
+
+    workspaces.use(home.id)
+    fresh = intakes.create(
+        client_email="",
+        client_phone="",
+        scope="",
+        budget_text="",
+        preset={},
+        created_by="admin@neptune.ph",
+    )
+    ok(
+        "submit fixture starts issued, with no client words yet",
+        fresh.state == intakes.ISSUED and not fresh.scope,
+    )
+
+    submitted = submit_client.post(
+        f"/api/client/{fresh.token}/submit",
+        json={
+            "client_email": "real@client.com",
+            "client_phone": "+63 917 000 0000",
+            "scope": "A booking site for three branches.",
+            "budget_text": "150,000 - 200,000 PHP",
+        },
+    )
+    ok("submit from issued: 200", submitted.status_code == 200)
+    ok(
+        "submit from issued: the response already reflects the new (waiting) state",
+        submitted.json()["state"] == "waiting",
+    )
+
+    on_disk = intakes.get(fresh.id)
+    ok("submit from issued: the intake itself moved to submitted", on_disk.state == intakes.SUBMITTED)
+    ok(
+        "submit from issued: all four fields are stored verbatim",
+        on_disk.client_email == "real@client.com"
+        and on_disk.client_phone == "+63 917 000 0000"
+        and on_disk.scope == "A booking site for three branches."
+        and on_disk.budget_text == "150,000 - 200,000 PHP",
+    )
+
+    # --- Submit twice: the second is refused, and the record does not move ---
+    #
+    # The second attempt sends deliberately different words - if the state
+    # check were missing, this would overwrite the first submission, which is
+    # exactly what the "record is unchanged" assertion below would then catch.
+
+    second = submit_client.post(
+        f"/api/client/{fresh.token}/submit",
+        json={
+            "client_email": "attacker@evil.example",
+            "client_phone": "000",
+            "scope": "OVERWRITE ATTEMPT",
+            "budget_text": "OVERWRITE ATTEMPT",
+        },
+    )
+    ok(
+        "submit twice: the second attempt is refused with the same opaque body an unknown "
+        "token gets",
+        second.status_code == 404 and second.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+    unchanged = intakes.get(fresh.id)
+    ok("submit twice: the record on disk is still submitted, not re-issued or re-submitted", unchanged.state == intakes.SUBMITTED)
+    ok(
+        "submit twice: and it still carries the FIRST submission's own four fields, not the "
+        "second attempt's",
+        unchanged.client_email == "real@client.com"
+        and unchanged.client_phone == "+63 917 000 0000"
+        and unchanged.scope == "A booking site for three branches."
+        and unchanged.budget_text == "150,000 - 200,000 PHP",
+    )
+
+    # --- Submit from every other state is refused, identically ---------------
+
+    SUBMIT_REFUSAL_FIXTURES = (
+        ("quoted", ((intakes.SUBMITTED, {}), (intakes.PREPARING, {"job_id": "x"}), (intakes.QUOTED, {"bundle_ids": ["a" * 12]}))),
+        (
+            "sent",
+            (
+                (intakes.SUBMITTED, {}),
+                (intakes.PREPARING, {"job_id": "x"}),
+                (intakes.QUOTED, {"bundle_ids": ["a" * 12]}),
+                (intakes.SENT, {"sent_bundle_id": "a" * 12, "sent_at": "2026-01-01T00:00:00Z"}),
+            ),
+        ),
+    )
+    for label, steps in SUBMIT_REFUSAL_FIXTURES:
+        workspaces.use(home.id)
+        candidate = intakes.create(
+            client_email="", client_phone="", scope="", budget_text="", preset={},
+            created_by="admin@neptune.ph",
+        )
+        _walk(candidate.id, *steps)
+        resp = submit_client.post(
+            f"/api/client/{candidate.token}/submit", json={"scope": "x", "budget_text": "y"}
+        )
+        ok(
+            f"submit from {label}: refused with the same opaque body as an unknown token",
+            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        )
+
+    workspaces.use(home.id)
+    closed_candidate = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    intakes.close(closed_candidate.id, "admin@neptune.ph")
+    resp = submit_client.post(
+        f"/api/client/{closed_candidate.token}/submit", json={"scope": "x", "budget_text": "y"}
+    )
+    ok(
+        "submit from closed: refused with the same opaque body as an unknown token",
+        resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    # --- Over-length scope/budget: the studio's own convention, not a second -
+
+    workspaces.use(home.id)
+    length_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    try:
+        main_module._normalise_scope(LONG_TEXT)  # noqa: SLF001
+        expected_scope_detail = None
+    except Exception as exc:  # noqa: BLE001 - capturing FastAPI's own HTTPException
+        expected_scope_detail = exc.detail
+
+    over_scope = submit_client.post(
+        f"/api/client/{length_fixture.token}/submit",
+        json={"client_email": "x@y.com", "scope": LONG_TEXT, "budget_text": "fine"},
+    )
+    ok("submit: an over-length scope is refused with 400", over_scope.status_code == 400)
+    ok(
+        "submit: with the exact detail `_normalise_scope` itself raises - reusing the "
+        "studio's own route's error, not a second convention",
+        over_scope.json()["detail"] == expected_scope_detail,
+    )
+    ok(
+        "submit: refusing on length did not move the intake off issued",
+        intakes.get(length_fixture.id).state == intakes.ISSUED,
+    )
+
+    try:
+        main_module._normalise_budget_text(LONG_TEXT)  # noqa: SLF001
+        expected_budget_detail = None
+    except Exception as exc:  # noqa: BLE001
+        expected_budget_detail = exc.detail
+
+    over_budget = submit_client.post(
+        f"/api/client/{length_fixture.token}/submit",
+        json={"client_email": "x@y.com", "scope": "fine", "budget_text": LONG_TEXT},
+    )
+    ok("submit: an over-length budget is refused with 400", over_budget.status_code == 400)
+    ok(
+        "submit: with the exact detail `_normalise_budget_text` itself raises",
+        over_budget.json()["detail"] == expected_budget_detail,
+    )
+    ok(
+        "submit: refusing on length still did not move the intake off issued",
+        intakes.get(length_fixture.id).state == intakes.ISSUED,
+    )
+
+    # --- A genuine save failure is not folded into the opaque "gone" body ----
+    #
+    # `_client_advance` (main.py) distinguishes `intakes.advance` raising
+    # because the move is illegal from `intakes.advance` raising because
+    # `_write` itself could not save - matched on the wrapped message
+    # `_write` uses, since `IntakeError` does not otherwise say which of the
+    # two happened. Proven directly, the same way this file already forces
+    # `clientview.of` to raise for the "state clientview cannot show" case
+    # above: patch `intakes.advance` (through `main_module.intakes`, the
+    # attribute the handler actually resolves through) to raise exactly the
+    # message `_write` raises, and confirm the door answers 500 - a real
+    # error - rather than quietly claiming the link itself is gone.
+    workspaces.use(home.id)
+    save_failure_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+
+    def _advance_that_cannot_save(*_args, **_kwargs):
+        raise intakes.IntakeError(
+            "That intake could not be saved: [Errno 28] No space left on device"
+        )
+
+    _real_advance = main_module.intakes.advance
+    try:
+        main_module.intakes.advance = _advance_that_cannot_save
+        save_failed = submit_client.post(
+            f"/api/client/{save_failure_fixture.token}/submit",
+            json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+        )
+    finally:
+        main_module.intakes.advance = _real_advance
+
+    ok("a genuine save failure answers 500, not this door's usual refusal", save_failed.status_code == 500)
+    ok(
+        "and its body is not the opaque 'gone' text - a lost submission must not read as a "
+        "dead link",
+        save_failed.json() != {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    # --- /revise: only from `sent` --------------------------------------------
+
+    revise_client = _client_for("203.0.113.12")
+
+    revise_sent, revise_bundle = _sent_intake(home, "author@neptune.ph")
+    revised = revise_client.post(
+        f"/api/client/{revise_sent.token}/revise",
+        json={"asked": "Please drop the SMS module and add a waitlist."},
+    )
+    ok("revise from sent: 200", revised.status_code == 200)
+    ok(
+        "revise from sent: the response already shows revision_requested",
+        revised.json()["state"] == intakes.REVISION_REQUESTED,
+    )
+    ok(
+        "revise from sent: the response's revisions carry what was asked, and nothing else",
+        [item["asked"] for item in revised.json()["revisions"]]
+        == ["Please drop the SMS module and add a waitlist."],
+    )
+
+    on_disk_revised = intakes.get(revise_sent.id)
+    ok(
+        "revise from sent: the intake itself moved to revision_requested",
+        on_disk_revised.state == intakes.REVISION_REQUESTED,
+    )
+    ok(
+        "revise from sent: the revisions log on disk carries the same asked/at pair",
+        len(on_disk_revised.revisions) == 1
+        and on_disk_revised.revisions[0]["asked"] == "Please drop the SMS module and add a waitlist.",
+    )
+    ok(
+        "revise never touches the client's own scope/email/budget - ADVANCE_FIELDS is not "
+        "scoped per transition, but only /submit's handler ever passes these (see "
+        "ADVANCE_FIELDS's own docstring in intakes.py)",
+        on_disk_revised.scope == "Original scope, before any change."
+        and on_disk_revised.client_email == "quoted@client.com"
+        and on_disk_revised.budget_text == "around 100k",
+    )
+
+    # A second revise, before the studio has re-quoted, is refused - the
+    # record is now revision_requested, not sent.
+    second_revise = revise_client.post(
+        f"/api/client/{revise_sent.token}/revise", json={"asked": "One more thing."}
+    )
+    ok(
+        "revise twice before a re-quote: refused with the same opaque body",
+        second_revise.status_code == 404
+        and second_revise.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+    ok(
+        "revise twice: the revisions log did not gain a second entry",
+        len(intakes.get(revise_sent.id).revisions) == 1,
+    )
+
+    REVISE_REFUSAL_FIXTURES = (
+        ("issued", ()),
+        ("submitted", ((intakes.SUBMITTED, {}),)),
+        ("quoted", ((intakes.SUBMITTED, {}), (intakes.PREPARING, {"job_id": "x"}), (intakes.QUOTED, {"bundle_ids": ["a" * 12]}))),
+    )
+    for label, steps in REVISE_REFUSAL_FIXTURES:
+        workspaces.use(home.id)
+        candidate = intakes.create(
+            client_email="", client_phone="", scope="", budget_text="", preset={},
+            created_by="admin@neptune.ph",
+        )
+        _walk(candidate.id, *steps)
+        resp = revise_client.post(f"/api/client/{candidate.token}/revise", json={"asked": "change it"})
+        ok(
+            f"revise from {label}: refused with the same opaque body as an unknown token",
+            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        )
+
+    workspaces.use(home.id)
+    revise_closed = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    intakes.close(revise_closed.id, "admin@neptune.ph")
+    resp = revise_client.post(f"/api/client/{revise_closed.token}/revise", json={"asked": "change it"})
+    ok(
+        "revise from closed: refused with the same opaque body as an unknown token",
+        resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    revise_len_sent, _ = _sent_intake(home, "author2@neptune.ph")
+    try:
+        main_module._normalise_instruction(LONG_TEXT)  # noqa: SLF001
+        expected_instruction_detail = None
+    except Exception as exc:  # noqa: BLE001
+        expected_instruction_detail = exc.detail
+
+    over_len_revise = revise_client.post(
+        f"/api/client/{revise_len_sent.token}/revise", json={"asked": LONG_TEXT}
+    )
+    ok("revise: an over-length ask is refused with 400", over_len_revise.status_code == 400)
+    ok(
+        "revise: with the exact detail `_normalise_instruction` itself raises - the same "
+        "normaliser the studio's own proposal-revise route already uses",
+        over_len_revise.json()["detail"] == expected_instruction_detail,
+    )
+    ok(
+        "revise: refusing on length did not move the intake off sent",
+        intakes.get(revise_len_sent.id).state == intakes.SENT,
+    )
+
+    empty_revise = revise_client.post(f"/api/client/{revise_len_sent.token}/revise", json={"asked": "   "})
+    ok("revise: an empty ask is refused with 400, not silently accepted", empty_revise.status_code == 400)
+    ok(
+        "revise: refusing an empty ask did not move the intake off sent either",
+        intakes.get(revise_len_sent.id).state == intakes.SENT,
+    )
+
+    # --- /finalize: only from `sent`, and it tells created_by + every admin --
+
+    finalize_client = _client_for("203.0.113.13")
+
+    # A dedicated workspace and roster: `home`'s own roster (claimed earlier,
+    # for the STUDIO_PATHS section) already has meaning for an assertion
+    # above, and this needs a roster shaped a specific way - two admins and a
+    # separate, non-admin `created_by` - to prove "created_by and the
+    # admins" means all of that and nothing more.
+    notif_ws = workspaces.create("Finalize Notification Studio")
+    workspaces.use(notif_ws.id)
+    members.claim("owner-admin@neptune.ph", "owner-uid")
+    second_admin_invite = members.invite("second-admin@neptune.ph", members.ADMIN, "owner-admin@neptune.ph")
+    members.accept(second_admin_invite.token, "second-admin@neptune.ph", "second-admin-uid")
+    author_invite = members.invite("author@neptune.ph", members.MEMBER, "owner-admin@neptune.ph")
+    members.accept(author_invite.token, "author@neptune.ph", "author-uid")
+    bystander_invite = members.invite("bystander@neptune.ph", members.MEMBER, "owner-admin@neptune.ph")
+    members.accept(bystander_invite.token, "bystander@neptune.ph", "bystander-uid")
+
+    finalize_sent, finalize_bundle = _sent_intake(notif_ws, "author@neptune.ph")
+
+    finalized = finalize_client.post(f"/api/client/{finalize_sent.token}/finalize")
+    ok("finalize from sent: 200", finalized.status_code == 200)
+    ok(
+        "finalize from sent: the response already shows finalized",
+        finalized.json()["state"] == intakes.FINALIZED,
+    )
+
+    on_disk_finalized = intakes.get(finalize_sent.id)
+    ok("finalize from sent: the intake itself moved to finalized", on_disk_finalized.state == intakes.FINALIZED)
+    ok(
+        "finalize never touches the client's own scope/email/budget either",
+        on_disk_finalized.scope == finalize_sent.scope
+        and on_disk_finalized.client_email == finalize_sent.client_email
+        and on_disk_finalized.budget_text == finalize_sent.budget_text,
+    )
+
+    owner_mail = inbox.listing(person=inbox.key_for("owner-admin@neptune.ph"))
+    second_admin_mail = inbox.listing(person=inbox.key_for("second-admin@neptune.ph"))
+    author_mail = inbox.listing(person=inbox.key_for("author@neptune.ph"))
+    bystander_mail = inbox.listing(person=inbox.key_for("bystander@neptune.ph"))
+
+    ok("finalize: the first admin was told", any(note.kind == "intake.finalized" for note in owner_mail))
+    ok(
+        "finalize: the second admin was told too - every admin, not just the first one found",
+        any(note.kind == "intake.finalized" for note in second_admin_mail),
+    )
+    ok(
+        "finalize: the intake's own created_by was told, even though they are not an admin",
+        any(note.kind == "intake.finalized" for note in author_mail),
+    )
+    ok(
+        "finalize: a member who is neither an admin nor created_by hears nothing about it",
+        not any(note.kind == "intake.finalized" for note in bystander_mail),
+    )
+    owner_note = next(note for note in owner_mail if note.kind == "intake.finalized")
+    ok(
+        "finalize: the note itself names the actual quotation, not a generic sentence",
+        finalize_bundle.estimate.quotation_ref in owner_note.body,
+    )
+
+    FINALIZE_REFUSAL_FIXTURES = (
+        ("issued", ()),
+        ("submitted", ((intakes.SUBMITTED, {}),)),
+        ("quoted", ((intakes.SUBMITTED, {}), (intakes.PREPARING, {"job_id": "x"}), (intakes.QUOTED, {"bundle_ids": ["a" * 12]}))),
+    )
+    for label, steps in FINALIZE_REFUSAL_FIXTURES:
+        workspaces.use(notif_ws.id)
+        candidate = intakes.create(
+            client_email="", client_phone="", scope="", budget_text="", preset={},
+            created_by="owner-admin@neptune.ph",
+        )
+        _walk(candidate.id, *steps)
+        resp = finalize_client.post(f"/api/client/{candidate.token}/finalize")
+        ok(
+            f"finalize from {label}: refused with the same opaque body as an unknown token",
+            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        )
+
+    workspaces.use(notif_ws.id)
+    finalize_closed = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="owner-admin@neptune.ph",
+    )
+    intakes.close(finalize_closed.id, "owner-admin@neptune.ph")
+    resp = finalize_client.post(f"/api/client/{finalize_closed.token}/finalize")
+    ok(
+        "finalize from closed: refused with the same opaque body as an unknown token",
+        resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    # A second finalize, now that the intake is already finalized, is refused
+    # the same way - and does not re-notify anybody. Counted by kind, not by
+    # mailbox length: `inbox.listing()` defaults to the newest 30 and `_save`
+    # trims old notes, so a raw length comparison would still pass if a note
+    # were both added and trimmed - unlikely with one note in a fresh
+    # mailbox, but not what "no second notification" actually claims.
+    owner_finalized_notes_before = sum(
+        1 for note in owner_mail if note.kind == "intake.finalized"
+    )
+    refinalize = finalize_client.post(f"/api/client/{finalize_sent.token}/finalize")
+    ok(
+        "finalize twice: refused with the same opaque body",
+        refinalize.status_code == 404
+        and refinalize.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+    owner_finalized_notes_after = sum(
+        1
+        for note in inbox.listing(person=inbox.key_for("owner-admin@neptune.ph"))
+        if note.kind == "intake.finalized"
+    )
+    ok(
+        "finalize twice: no second notification was written",
+        owner_finalized_notes_after == owner_finalized_notes_before == 1,
+    )
+
+    # --- The rate limit: the 21st write from one IP inside a minute is 429 ---
+
+    rate_ip_a = _client_for("203.0.113.21")
+    rate_ip_b = _client_for("203.0.113.22")
+
+    workspaces.use(home.id)
+    rate_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    rate_body = {"client_email": "rate@client.com", "scope": "x", "budget_text": "y"}
+
+    rate_statuses = [
+        rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", json=rate_body).status_code
+        for _ in range(20)
+    ]
+    ok(
+        "the rate limit: 20 attempts from one IP inside a minute are each judged on their own "
+        "merits, never 429 - the first succeeds (200) and the rest are refused for having "
+        "already submitted (404), not for the rate itself",
+        rate_statuses[0] == 200 and all(status == 404 for status in rate_statuses[1:]),
+    )
+
+    rate_21st = rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", json=rate_body)
+    ok("the rate limit: the 21st attempt from that same IP is refused with 429", rate_21st.status_code == 429)
+
+    rate_other_ip = rate_ip_b.post(f"/api/client/{rate_fixture.token}/submit", json=rate_body)
+    ok(
+        "the rate limit: a different IP hitting the same token right after is unaffected - "
+        "still judged on the merits (404, already submitted), not swept into the first "
+        "address's limit",
+        rate_other_ip.status_code == 404
+        and rate_other_ip.json() == {"detail": main_module._CLIENT_LINK_GONE},
     )
 
 print()
