@@ -29,8 +29,18 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app import config  # noqa: E402
 from app import intakes as intakes_module  # noqa: E402
 from app import main as main_module  # noqa: E402
+from app import storage  # noqa: E402
 from app import workspaces  # noqa: E402
 from app.main import app  # noqa: E402
+from app.schemas import (  # noqa: E402
+    ClientNarrative,
+    CostSummary,
+    Estimate,
+    LineItem,
+    PaymentMilestone,
+    ProposalBundle,
+    UnitKind,
+)
 
 FAILURES: list[str] = []
 
@@ -45,11 +55,73 @@ def _token_from_link(link: str) -> str:
     return link.rsplit("/", 1)[-1]
 
 
+#: A minimal but real `Estimate`, shared by every fixture bundle below - same
+#: idiom `check_client_api.py`'s own `FIXTURE_ESTIMATE` uses, for the same
+#: reason: `send_intake`'s `_quoted_bundle` guard now checks existence in
+#: `storage`, not only membership in `bundle_ids`, so a fabricated hex string
+#: is no longer enough for anything a test expects `/send` to actually accept.
+FIXTURE_ESTIMATE = Estimate(
+    project_name="Task 6 Fixture",
+    client_name="Fixture Client Co.",
+    currency="PHP",
+    client=ClientNarrative(
+        title="Task 6 Fixture",
+        executive_summary="A fixture proposal for the intake routes.",
+        validity_days=30,
+    ),
+    line_items=[
+        LineItem(
+            id="LI-01",
+            category="Backend",
+            description="Build the thing",
+            role="Senior Backend Engineer",
+            quantity=5,
+            unit=UnitKind.hour,
+            unit_rate=1000.0,
+            subtotal=5000.0,
+        ),
+    ],
+    cost=CostSummary(
+        subtotal=5000.0,
+        total=5000.0,
+        payment_milestones=[
+            PaymentMilestone(label="Deposit", percent=50.0, amount=2500.0, trigger="Signing"),
+            PaymentMilestone(label="Delivery", percent=50.0, amount=2500.0, trigger="Delivery"),
+        ],
+    ),
+    quotation_ref="TASK6-0000001",
+)
+
+
+def _real_bundle() -> str:
+    """A bundle that actually exists in `storage`, in whichever workspace is
+    currently ambient - not a fabricated hex string. Returns its id."""
+    bundle_id = storage.new_id()
+    bundle = ProposalBundle(
+        id=bundle_id,
+        created_at=storage.utc_now_iso(),
+        estimate=FIXTURE_ESTIMATE,
+        files=main_module._build_files(bundle_id, FIXTURE_ESTIMATE),  # noqa: SLF001
+        revision=1,
+        root_id=bundle_id,
+    )
+    storage.save(bundle)
+    return bundle_id
+
+
 def _quoted(bundle_ids: list) -> intakes_module.Intake:
     """An intake walked straight to `quoted`, with `bundle_ids` set exactly as
     given - through the module, not the API, since there is no model here to
     actually produce a quotation. Assumes the caller has already pointed
-    `workspaces` at the workspace this should live in."""
+    `workspaces` at the workspace this should live in.
+
+    `bundle_ids` should generally be ids from `_real_bundle()`, not fabricated
+    strings: `send_intake`'s guard now checks existence in `storage` as well
+    as membership here, so a fabricated id is only useful for proving a
+    refusal - either because it names nothing at all, or because it is a
+    dangling id (a member of `bundle_ids` whose actual bundle was never
+    saved, or has since been deleted) - never for proving a send succeeds.
+    """
     entry = intakes_module.create(
         client_email="", client_phone="", scope="", budget_text="", preset={}, created_by="",
     )
@@ -214,7 +286,9 @@ ok(
 # route exists and is proven to stamp it.
 
 workspaces.use(made.id)
-send_target = _quoted(["aaaaaaaaaaaa", "bbbbbbbbbbbb"])
+send_bundle_a = _real_bundle()
+send_bundle_b = _real_bundle()
+send_target = _quoted([send_bundle_a, send_bundle_b])
 
 missing_bundle = client.post(f"/api/intakes/{send_target.id}/send", headers=headers, json={})
 ok("sending with no bundle_id is refused: 400", missing_bundle.status_code == 400)
@@ -222,7 +296,7 @@ ok("sending with no bundle_id is refused: 400", missing_bundle.status_code == 40
 wrong_bundle = client.post(
     f"/api/intakes/{send_target.id}/send",
     headers=headers,
-    json={"bundle_id": "cccccccccccc"},
+    json={"bundle_id": "cccccccccccc"},  # not a member of bundle_ids at all
 )
 ok(
     "a bundle_id that was not quoted for this request is refused: 400",
@@ -233,23 +307,54 @@ ok(
     intakes_module.get(send_target.id).state == intakes_module.QUOTED,
 )
 
+# A bundle_id that *is* a member of bundle_ids but whose bundle was never
+# actually saved (the same shape `DELETE /api/proposals/{id}` leaves behind,
+# since it does not prune `bundle_ids`) must be refused too - membership
+# alone is not sufficient, only necessary.
+dangling_target = _quoted(["dddddddddddd"])
+dangling_send = client.post(
+    f"/api/intakes/{dangling_target.id}/send",
+    headers=headers,
+    json={"bundle_id": "dddddddddddd"},
+)
+ok(
+    "a bundle_id that is a member of bundle_ids but was never actually saved is refused too: 400",
+    dangling_send.status_code == 400,
+)
+ok(
+    "...and the dangling intake was not moved either",
+    intakes_module.get(dangling_target.id).state == intakes_module.QUOTED,
+)
+
 sent = client.post(
     f"/api/intakes/{send_target.id}/send",
     headers=headers,
-    json={"bundle_id": "bbbbbbbbbbbb"},
+    json={"bundle_id": send_bundle_b},
 )
-ok("sending a bundle that was actually quoted answers 200", sent.status_code == 200)
+ok("sending a bundle that was actually quoted and still exists answers 200", sent.status_code == 200)
 sent_body = sent.json()
 ok("the state moves quoted -> sent", sent_body["state"] == "sent")
-ok("sent_bundle_id names the one actually sent, not bundle_ids[0]", sent_body["sent_bundle_id"] == "bbbbbbbbbbbb")
+ok("sent_bundle_id names the one actually sent, not bundle_ids[0]", sent_body["sent_bundle_id"] == send_bundle_b)
 ok("sent_at is stamped - this is the gap Task 2 left open", bool(sent_body.get("sent_at")))
+
+# Joined end to end: the date /send stamped is the same date the client's
+# own door actually shows - not merely present on the studio's own response.
+# `send_target.token` is read straight off the module-level object (a plain
+# Python attribute, not a wire dump), since Task 6's own create/relink routes
+# are not involved in building this particular fixture.
+client_view_after_send = client.get(f"/api/client/{send_target.token}")
+ok(
+    "the client's own door shows the same sent_at /send just stamped",
+    client_view_after_send.status_code == 200
+    and client_view_after_send.json().get("sent_at") == sent_body["sent_at"],
+)
 
 ok(
     "sending an already-sent request is refused: 409, not a silent re-send",
     client.post(
         f"/api/intakes/{send_target.id}/send",
         headers=headers,
-        json={"bundle_id": "aaaaaaaaaaaa"},
+        json={"bundle_id": send_bundle_a},
     ).status_code
     == 409,
 )
@@ -274,7 +379,7 @@ ok(
 # `_gate` - `_quoted()` itself has no workspace argument and relies entirely
 # on this being set correctly first.
 workspaces.use(made.id)
-mutation_target = _quoted(["dddddddddddd"])
+mutation_target = _quoted(["111111111111"])  # its own fixture, distinct from dangling_target's
 _real_quoted_bundle = main_module._quoted_bundle
 
 
@@ -413,21 +518,22 @@ ok("an admin can relink the same one: 200", admin_relinked.status_code == 200)
 ok("...and gets a working link back, not a bare state change", bool(admin_relinked.json().get("link")))
 
 workspaces.use(secured.id)
-secured_quoted = _quoted(["eeeeeeeeeeee"])
+secured_bundle = _real_bundle()
+secured_quoted = _quoted([secured_bundle])
 
 ok(
     "a member cannot send a quotation: 403",
     client.post(
         f"/api/intakes/{secured_quoted.id}/send",
         headers=member_headers,
-        json={"bundle_id": "eeeeeeeeeeee"},
+        json={"bundle_id": secured_bundle},
     ).status_code
     == 403,
 )
 admin_sent = client.post(
     f"/api/intakes/{secured_quoted.id}/send",
     headers=admin_headers,
-    json={"bundle_id": "eeeeeeeeeeee"},
+    json={"bundle_id": secured_bundle},
 )
 ok("an admin can send the same one: 200", admin_sent.status_code == 200)
 
@@ -463,7 +569,7 @@ ok(
     client.post(
         f"/api/intakes/{secured_quoted.id}/send",
         headers=no_token_headers,
-        json={"bundle_id": "eeeeeeeeeeee"},
+        json={"bundle_id": secured_bundle},
     ).status_code
     == 401,
 )

@@ -2676,15 +2676,23 @@ async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
 
 
 def _quoted_bundle(entry: intakes.Intake, bundle_id: str) -> bool:
-    """Whether `bundle_id` is one this intake was actually quoted with -
-    membership in `entry.bundle_ids`, not existence in `storage`: the
-    question `send_intake` is asking is "did PRISM quote this for *this*
-    request", not "does a bundle with this id exist at all" - a real bundle
-    id that belongs to a different intake must be refused exactly like one
-    that was simply guessed. Its own name, rather than inlined into the
-    route, so the guard is one thing a test can disable on its own to prove
-    the route's refusal actually depends on it."""
-    return bundle_id in entry.bundle_ids
+    """Whether `bundle_id` is one this intake was actually quoted with, and
+    that bundle still exists. Membership in `entry.bundle_ids` answers "did
+    PRISM quote this for *this* request" - a real bundle id that belongs to
+    a different intake must be refused exactly like one that was simply
+    guessed - but membership alone is not sufficient: `DELETE
+    /api/proposals/{id}` does not prune `bundle_ids`, so an id recorded at
+    quote time can already be gone by the time a studio tries to send it.
+    Sending a dangling id would move the intake to `sent` with
+    `sent_bundle_id` naming nothing, and the client's own door would answer
+    its opaque "gone" response forever - a state this intake can never
+    escape by itself, since `relink` reissues a link, not a bundle. Checked
+    by `storage.get`, not by re-validating anything about the bundle's own
+    content - the only question here is whether there is still something to
+    send. Its own name, rather than inlined into the route, so a test can
+    disable it on its own to prove the route's refusal actually depends on
+    it."""
+    return bundle_id in entry.bundle_ids and storage.get(bundle_id) is not None
 
 
 class IntakeSendRequest(BaseModel):
