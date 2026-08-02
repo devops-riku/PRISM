@@ -18,6 +18,8 @@ import HomeScreen from './components/HomeScreen'
 import ProposalStudio from './components/ProposalStudio'
 import ProposalList from './components/ProposalList'
 import WorkspacesScreen from './components/WorkspacesScreen'
+import IntakeScreen from './components/IntakeScreen'
+import IntakeListScreen from './components/IntakeListScreen'
 import ProfileScreen from './components/ProfileScreen'
 import TeamScreen from './components/TeamScreen'
 import InviteScreen from './components/InviteScreen'
@@ -45,6 +47,8 @@ type Route =
   | 'documents'
   | 'workspaces'
   | 'teams'
+  | 'intakes'
+  | 'intakeNew'
   | 'profile'
   | 'invite'
   | 'proposal'
@@ -64,6 +68,10 @@ function routeFor(hash: string): Route {
   if (value === '/documents' || value.startsWith('/documents/')) return 'documents'
   if (value === '/workspaces' || value.startsWith('/workspaces/')) return 'workspaces'
   if (value === '/teams' || value.startsWith('/teams/')) return 'teams'
+  // The specific path first: '/intakes/new'.startsWith('/intakes') is true, so
+  // the generic check below would otherwise claim it before this one runs.
+  if (value === '/intakes/new') return 'intakeNew'
+  if (value === '/intakes' || value.startsWith('/intakes/')) return 'intakes'
   if (value === '/profile' || value.startsWith('/profile/')) return 'profile'
   if (value.startsWith('/invite/')) return 'invite'
   // A built proposal reads on its own page, like a quotation does.
@@ -85,6 +93,8 @@ const SCREEN_NAME: Partial<Record<Route, string>> = {
   documents: 'Proposals',
   workspaces: 'Workspaces',
   teams: 'Teams',
+  intakes: 'Client requests',
+  intakeNew: 'New client request',
   profile: 'Profile',
   invite: 'Invitation',
   proposal: 'Proposal',
@@ -560,6 +570,8 @@ export default function App() {
     route === 'documents' ||
     route === 'profile' ||
     route === 'teams' ||
+    route === 'intakes' ||
+    route === 'intakeNew' ||
     route === 'invite' ||
     route === 'proposal'
   ) {
@@ -573,6 +585,8 @@ export default function App() {
           {route === 'documents' ? <ProposalList /> : null}
           {route === 'profile' ? <ProfileScreen /> : null}
           {route === 'teams' ? <TeamScreen /> : null}
+          {route === 'intakes' ? <IntakeListScreen /> : null}
+          {route === 'intakeNew' ? <IntakeScreen /> : null}
           {route === 'invite' ? (
             <InviteScreen token={(window.location.hash || '').replace('#/invite/', '')} />
           ) : null}
