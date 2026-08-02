@@ -3144,9 +3144,15 @@ async def finalize_client_intake(token: str) -> dict:
 #: that has nothing to do with reading a document silently widens what this
 #: route serves too. An allow-list, not the denylist `read_client_view`'s
 #: own `CLOSED` check is - that route shows *something* for every state but
-#: one; this route shows a document for three of the eight states an intake
-#: can be in, so `closed` needs no check of its own here: it was simply
-#: never on the list, the identical answer every other unlisted state gets.
+#: one; this route shows a document for three of the ten states
+#: `intakes.ALLOWED` names, so `closed` needs no check of its own here: it
+#: was simply never on the list, the identical answer every other unlisted
+#: state gets. One of those other seven, `intakes.PROPOSAL_SENT`, is left
+#: off on purpose rather than by oversight: nothing advances an intake to it
+#: until Stage 3 builds the actor that does (see its own comment in
+#: `intakes.py`), and whether a client may still open their quotation once
+#: the proposal itself has gone out is a call Stage 3 should make on
+#: purpose, not inherit as a 404 nobody actually decided.
 _CLIENT_QUOTATION_STATES = {intakes.SENT, intakes.REVISION_REQUESTED, intakes.FINALIZED}
 
 
@@ -3213,22 +3219,77 @@ async def client_quotation_html(token: str) -> HTMLResponse:
     kind = "proposal"
 
     def render(markdown: str, estimate: Estimate, revision: int) -> HTMLResponse:
-        html = render_print_html(markdown, _document_title(estimate, kind), estimate, kind=kind)
+        # Loaded here, inside the borrow `_client_quotation` is still
+        # holding while `render` runs - the studio the token itself names,
+        # never whatever `_gate` left ambient from this request's own
+        # (irrelevant on this door) `X-Workspace` header. Without this, the
+        # page a client is asked to read carries "PRISM" - the tool's name -
+        # on its letterhead instead of the studio's, and none of a studio's
+        # saved colours, fonts or logo. `render_print_html`'s own docstring
+        # is explicit that `brand`/`design` exist for exactly this: a
+        # document a client reads, not one a studio member is looking at on
+        # their own screen (which is what every *other* caller of this
+        # renderer in this file is - `printable_html`, on the studio's own
+        # authenticated side of the app).
+        studio = settings.load()
+        try:
+            html = render_print_html(
+                markdown,
+                _document_title(estimate, kind),
+                estimate,
+                kind=kind,
+                brand=studio.studio_name,
+                design=studio.proposal_design,
+            )
+        except Exception as exc:  # pragma: no cover - a renderer bug, not user input
+            logger.exception("HTML rendering failed for a client's own quotation")
+            raise HTTPException(
+                status_code=500,
+                detail="The page could not be produced. Try again shortly.",
+            ) from exc
         return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
     return _client_quotation(token, render)
 
 
 @app.get("/api/client/{token}/quotation.pdf", tags=["client"])
-async def client_quotation_pdf(token: str) -> Response:
+def client_quotation_pdf(token: str) -> Response:
     """The same document as a PDF, for whoever would rather attach it to an
     email than open a link. No `kind` anywhere - see `_client_quotation`'s
-    own docstring."""
+    own docstring.
+
+    A plain `def`, not `async def` like its `.html` sibling above: building
+    this PDF is real CPU work - reportlab's layout pass, not I/O - and this
+    door is anonymous with no rate limit of its own (`_gate` only gates the
+    three POST routes; a GET here gets neither the limiter nor the body
+    cap). Run on the event loop, that cost is paid by every other request
+    this worker is holding, not just this one. A synchronous path operation
+    is what tells FastAPI to run it on its threadpool instead.
+    `download_pdf` (the studio's own file route, same reportlab cost) is
+    still `async def` and still pays this - not fixed here, since it sits
+    behind auth and is out of this task's scope, but named so the gap is
+    not mistaken for solved elsewhere in this file. This route has no such
+    gate, which is exactly why leaving it `async def` is the sharper
+    version of the same problem.
+    """
     kind = "proposal"
 
     def render(markdown: str, estimate: Estimate, revision: int) -> Response:
+        # See `client_quotation_html`'s own `render` for why this is loaded
+        # here rather than left at the renderer's bare defaults.
+        # `render_pdf` has no separate `brand` text parameter the way
+        # `render_print_html` does - a studio's mark reaches the PDF only
+        # through `design.logo`, and absent one, the page falls back to the
+        # document's own label ("Quotation"), never to the tool's name.
+        studio = settings.load()
         try:
-            data = render_pdf(markdown, _document_title(estimate, kind), estimate, kind=kind)
+            data = render_pdf(
+                markdown,
+                _document_title(estimate, kind),
+                estimate,
+                kind=kind,
+                design=studio.proposal_design,
+            )
         except Exception as exc:  # pragma: no cover - a renderer bug, not user input
             logger.exception("PDF rendering failed for a client's own quotation")
             raise HTTPException(

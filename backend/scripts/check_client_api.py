@@ -35,6 +35,7 @@ mode this file's opening section already proves does not apply here.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -68,6 +69,7 @@ from app import settings  # noqa: E402
 from app import storage  # noqa: E402
 from app import tokens  # noqa: E402
 from app import workspaces  # noqa: E402
+from app.design import ProposalDesign  # noqa: E402
 from app.main import app  # noqa: E402
 from app.schemas import (  # noqa: E402
     ClientNarrative,
@@ -1362,6 +1364,26 @@ with TestClient(app) as client:
 
     quotation_client = _client_for("203.0.113.60")
 
+    # --- The plan's own rule, enforced rather than attested. A `grep` in a
+    #     report is a point-in-time check of a file that can drift the very
+    #     next commit; this is the same check, run every time this script
+    #     runs, against the actual source of the three functions this task's
+    #     whole fix depends on - `_client_quotation` and the two routes that
+    #     call it. Reads live source via `inspect.getsource`, not a copy, so
+    #     it cannot go stale relative to what is actually deployed.
+    _GUARDED_FUNCTIONS = (
+        main_module._client_quotation,  # noqa: SLF001
+        main_module.client_quotation_html,
+        main_module.client_quotation_pdf,
+    )
+    _guarded_source = "\n".join(inspect.getsource(fn) for fn in _GUARDED_FUNCTIONS)
+    ok(
+        "the banned word is enforced by this test, not merely attested in a report: "
+        "'requirement' does not appear anywhere in _client_quotation, "
+        "client_quotation_html or client_quotation_pdf",
+        "requirement" not in _guarded_source.lower(),
+    )
+
     # A marker with no spaces or hyphens and a modest length: long enough to
     # be unmistakable, short enough that reportlab's paragraph layout has no
     # reason to break it across a line - the fixture-control checks just below
@@ -1418,6 +1440,27 @@ with TestClient(app) as client:
         QUOTATION_MARKER in _internal_pdf_text_direct,
     )
 
+    # `home`'s `studio_name` is already distinctive ("Alpha Studio Name",
+    # set at the top of this file) - reused here rather than duplicated,
+    # since it is the plainest proof the letterhead reads the studio's own
+    # name and not the tool's ("PRISM", `render_print_html`'s bare default
+    # when nothing is passed). A footer note on the studio's saved design is
+    # added here as a second, independent marker: colour, font and margin
+    # choices do not survive text extraction the way a literal string does,
+    # so this is what actually proves `design=` itself reaches the PDF
+    # renderer too, not just the HTML one.
+    workspaces.use(home.id)
+    _home_settings = settings.load()
+    settings.save(
+        _home_settings.model_copy(
+            update={
+                "proposal_design": _home_settings.proposal_design.model_copy(
+                    update={"footer_note": "ALPHA-FOOTER-MARK-7"}
+                )
+            }
+        )
+    )
+
     quotation_sent, quotation_bundle = _sent_intake(
         home, "author-q5@neptune.ph", estimate=QUOTATION_ESTIMATE
     )
@@ -1434,6 +1477,37 @@ with TestClient(app) as client:
         "quotation.html: the internal document's marker is not on the page - the leak "
         "test itself",
         QUOTATION_MARKER not in baseline_html.text,
+    )
+    # A route-level drift - the content stays the proposal but the *label*
+    # passed to the renderer says otherwise - is not a content leak, but it
+    # hands the buyer a page that presents itself as the studio's own
+    # internal duplicate. `renderers/html.py`'s `_is_duplicate` is what
+    # decides the letterhead and the body class; checked directly against
+    # both tells, and their opposites' absence, so a partial fix (say, the
+    # label but not the class) cannot pass by accident. The body class is
+    # matched as the full `class="doc doc--original"` attribute, not a bare
+    # substring: the embedded stylesheet unconditionally defines *both*
+    # `.doc--original` and `.doc--duplicate` CSS selectors regardless of
+    # which document is served, so a bare `"doc--duplicate" in text` check
+    # would always be true and this assertion would never be able to fail.
+    ok(
+        "quotation.html: presents itself as the original, for the client - not the "
+        "studio's own internal duplicate, on both of the renderer's tells (body class, "
+        "letterhead label) and their opposites, both absent",
+        'class="doc doc--original"' in baseline_html.text
+        and "Original · for the client" in baseline_html.text
+        and 'class="doc doc--duplicate"' not in baseline_html.text
+        and "Duplicate · for the developer" not in baseline_html.text,
+    )
+    ok(
+        "quotation.html: the letterhead carries the studio's own name, not the tool's "
+        "('PRISM' is render_print_html's bare default when no brand is passed)",
+        "Alpha Studio Name" in baseline_html.text,
+    )
+    ok(
+        "quotation.html: the studio's saved design actually reached the renderer - its "
+        "footer note is on the page",
+        "ALPHA-FOOTER-MARK-7" in baseline_html.text,
     )
 
     # --- .pdf for the same intake: same proof, through the PDF renderer -----
@@ -1453,6 +1527,22 @@ with TestClient(app) as client:
         "quotation.pdf: the internal document's marker is not in the extracted text - the "
         "leak test itself, through the PDF path",
         QUOTATION_MARKER not in baseline_pdf_text,
+    )
+    # Same "original, not the duplicate" property as .html above, checked the
+    # way a PDF actually exposes it: the downloaded filename. `_filename`
+    # picks "quotation" or "requirements" off the same route-level `kind`
+    # `renderers/html.py`'s label reads - a drift there mislabels the
+    # download exactly as it mislabels the printed page.
+    baseline_pdf_disposition = baseline_pdf.headers.get("content-disposition", "")
+    ok(
+        "quotation.pdf: the downloaded filename says quotation, not the internal "
+        "document's own name",
+        "quotation" in baseline_pdf_disposition and "requirements" not in baseline_pdf_disposition,
+    )
+    ok(
+        "quotation.pdf: the studio's saved design reached the PDF renderer too - its "
+        "footer note is in the extracted text",
+        "ALPHA-FOOTER-MARK-7" in baseline_pdf_text,
     )
 
     # --- X-Workspace is ignored here too - the token alone decides the ------
@@ -1650,6 +1740,65 @@ with TestClient(app) as client:
             "not a 500 with a traceback",
             resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
         )
+
+    # --- Both routes answer the same way for a renderer bug ------------------
+    #
+    # `.pdf` always wrapped `render_pdf` in a try/except; `.html` did not wrap
+    # `render_print_html` the same way until this round of review found the
+    # asymmetry. Proven directly rather than assumed symmetric: patch each
+    # renderer in turn to raise, and confirm both routes answer 500 with a
+    # real body - not a traceback, and not this door's opaque "gone" text
+    # either (a renderer bug is not the same thing as "that link is dead").
+
+    def _boom_render(*_args, **_kwargs):
+        raise RuntimeError("simulated renderer bug")
+
+    _real_render_print_html = main_module.render_print_html
+    try:
+        main_module.render_print_html = _boom_render
+        html_boom = quotation_client.get(f"/api/client/{quotation_sent.token}/quotation.html")
+    finally:
+        main_module.render_print_html = _real_render_print_html
+    ok(
+        "quotation.html: a renderer bug answers 500 with a real body, not a traceback and "
+        "not this door's opaque 'gone' text",
+        html_boom.status_code == 500
+        and html_boom.json() != {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    _real_render_pdf = main_module.render_pdf
+    try:
+        main_module.render_pdf = _boom_render
+        pdf_boom = quotation_client.get(f"/api/client/{quotation_sent.token}/quotation.pdf")
+    finally:
+        main_module.render_pdf = _real_render_pdf
+    ok(
+        "quotation.pdf: a renderer bug answers 500 with a real body too - the same shape "
+        "quotation.html now answers with, not merely a coincidence of two separate "
+        "code paths",
+        pdf_boom.status_code == 500 and pdf_boom.json() != {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    # --- .pdf runs off the event loop; .html does not, on purpose ------------
+    #
+    # `client_quotation_pdf` is a plain `def` (FastAPI runs it on its
+    # threadpool) because building the PDF is real, measurable CPU work on an
+    # anonymous, unrated-limited door. `client_quotation_html` stays
+    # `async def` - it does no comparable CPU work. A regression guard, not a
+    # behavioural test: this is what stops someone "helpfully" making the PDF
+    # route `async def` again, which `inspect` can tell apart from the
+    # outside without needing to measure latency to prove it.
+    ok(
+        "client_quotation_pdf is a plain `def` - FastAPI runs it on its threadpool, off "
+        "the event loop, since reportlab's layout pass is real CPU work on a door with no "
+        "rate limit of its own",
+        not inspect.iscoroutinefunction(main_module.client_quotation_pdf),
+    )
+    ok(
+        "client_quotation_html stays `async def` - it does no comparable CPU work, so "
+        "this is a deliberate asymmetry with .pdf, not an oversight",
+        inspect.iscoroutinefunction(main_module.client_quotation_html),
+    )
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")
