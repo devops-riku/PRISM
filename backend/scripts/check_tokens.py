@@ -25,8 +25,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-tokens-")
+# The `clientview` section below drives a real pass through `/api/proposals`
+# via `TestClient` to get a genuine `ProposalBundle` - exactly how
+# `check_intake_gate.py` builds one. `app.config` reads these three once at
+# import time via `load_dotenv(..., override=False)`, so a real backend/.env
+# (this repo's has a Supabase project configured) would otherwise win and turn
+# on token verification, 401-ing every request below before a single route
+# ran. Set before the first `app.*` import - `workspaces` already imports
+# `app.config`, so that import is what triggers the dotenv read.
+os.environ["SUPABASE_URL"] = ""
+os.environ["SUPABASE_ANON_KEY"] = ""
+os.environ["SUPABASE_JWT_SECRET"] = ""
 
-from app import intakes, tokens, workspaces  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app import clientview, intakes, main, settings, storage, tokens, workspaces  # noqa: E402
+from app.schemas import (  # noqa: E402
+    ClientNarrative,
+    CostSummary,
+    Estimate,
+    LineItem,
+    PaymentMilestone,
+    TierSibling,
+    UnitKind,
+)
 
 FAILURES: list[str] = []
 
@@ -410,6 +432,376 @@ try:
     ok("relink refuses a closed intake", False)
 except intakes.IntakeError:
     ok("relink refuses a closed intake", True)
+
+# ============================================================================
+# clientview.of() - the security boundary: what a client is allowed to see
+# ============================================================================
+#
+# The quotation-face fixture is a real `ProposalBundle`, built the way
+# `check_intake_gate.py` builds one: a genuine pass through `/api/proposals`,
+# Gemini stubbed, everything after it - the rate card, the payment terms, the
+# costing, the two rendered documents - running for real. `clientview.of()` is
+# then exercised directly off the result, the same way Task 3's anonymous
+# route eventually will.
+
+cv_ws = workspaces.create("Clientview Fixture Studio")
+workspaces.use(cv_ws.id)
+settings.save(settings.load().model_copy(update={"studio_name": "Neptune Labs"}))
+
+api = TestClient(app=main.app)
+cv_headers = {"X-Workspace": cv_ws.id}
+
+CV_STUB_ESTIMATE = Estimate(
+    project_name="Clientview Fixture",
+    currency="PHP",
+    client=ClientNarrative(
+        title="Clientview Fixture",
+        executive_summary="A fixture proposal, built only to exercise the leak test.",
+        validity_days=45,
+    ),
+    line_items=[
+        LineItem(
+            id="LI-01",
+            category="Backend",
+            description="Build the booking flow",
+            role="Senior Backend Engineer",
+            quantity=10,
+            unit=UnitKind.hour,
+            unit_rate=1000.0,
+            subtotal=10000.0,
+        ),
+    ],
+    cost=CostSummary(
+        subtotal=10000.0,
+        total=10000.0,
+        payment_milestones=[
+            PaymentMilestone(label="Deposit", percent=50.0, amount=5000.0, trigger="Signing"),
+            PaymentMilestone(label="Delivery", percent=50.0, amount=5000.0, trigger="Delivery"),
+        ],
+    ),
+)
+
+
+async def _cv_stub_estimate(*args, **kwargs):
+    return CV_STUB_ESTIMATE
+
+
+cv_intake = intakes.create(
+    client_email="waiting@client.com",
+    client_phone="0917-000-0000",
+    scope="x" * 137,
+    budget_text="BUDGETLEAK-777k",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+# See the same hop in `check_intake_gate.py`'s fixtures: Stage 2's
+# `intakes.create` now starts every intake `issued`, and nothing stands
+# between that and `submitted` until Task 4 builds the client's own submit
+# route - so this stands in for it by hand.
+intakes.advance(cv_intake.id, intakes.SUBMITTED)
+
+cv_real_generate_estimate = main.generate_estimate
+main.generate_estimate = _cv_stub_estimate
+try:
+    cv_response = api.post(
+        "/api/proposals",
+        headers=cv_headers,
+        data={"brief": "Clientview fixture.", "intake_id": cv_intake.id},
+    )
+    ok("clientview fixture: the pad answers 202", cv_response.status_code == 202)
+
+    cv_deadline = time.time() + 20.0
+    while time.time() < cv_deadline and intakes.get(cv_intake.id).state != intakes.QUOTED:
+        time.sleep(0.25)
+finally:
+    # Nothing in this file runs `/api/proposals` after this section today, so
+    # leaving the stub in place would currently be harmless - but the module
+    # global is shared process-wide, and a script that monkeypatches it
+    # without restoring is exactly the kind of thing that turns into a
+    # confusing failure the day something is appended after it.
+    main.generate_estimate = cv_real_generate_estimate
+
+cv_quoted = intakes.get(cv_intake.id)
+ok("clientview fixture: the intake reaches quoted", cv_quoted.state == intakes.QUOTED)
+
+cv_bundle_id = cv_quoted.bundle_ids[0] if cv_quoted.bundle_ids else ""
+cv_bundle = storage.get(cv_bundle_id)
+ok("clientview fixture: a real bundle exists", cv_bundle is not None)
+if cv_bundle is None:
+    print()
+    print("clientview fixture never quoted - cannot exercise clientview.of at all.")
+    print(f"{len(FAILURES)} FAILED")
+    sys.exit(1)
+
+# Poisoned past what the real pipeline actually produced: these fields are
+# populated here by hand with sentinel strings no legitimate value would ever
+# contain, so the sweep below can catch a nested leak by *value* as well as by
+# field name. The real pipeline leaves most of these empty for a fixture this
+# small (no rate card configured, no target, a single tier) - an empty field
+# proves nothing about whether `clientview.of` would have let a *populated*
+# one through.
+CV_SENTINELS = ["RATECARDLEAK", "TARGETNOTELEAK", "TIERCAPLEAK", "TIERSIBLINGLEAK"]
+cv_poisoned = cv_bundle.model_copy(
+    update={
+        "rate_card_bound": 4,
+        "rate_card_removed": ["RATECARDLEAK-role-not-covered"],
+        "rate_card_removed_value": 4321.0,
+        "target_note": "TARGETNOTELEAK - could not land on the requested figure",
+        "tier_cap_note": "TIERCAPLEAK - the cap could not be applied exactly",
+        "tier_siblings": [
+            TierSibling(
+                id="sibling-id",
+                tier_name="TIERSIBLINGLEAK-tier",
+                tier_index=1,
+                total=1.0,
+                currency="PHP",
+            ),
+        ],
+    }
+)
+
+# --- issued: the studio's name and nothing else - the form is unsubmitted ---
+
+cv_issued = intakes.Intake(
+    id="0" * 12,
+    state=intakes.ISSUED,
+    created_at="2026-01-01T00:00:00Z",
+    created_by="riku@neptune.ph",
+    client_email="unopened@client.com",
+)
+cv_issued_view = clientview.of(cv_issued)
+ok("issued: exactly state and studio_name", set(cv_issued_view) == {"state", "studio_name"})
+ok("issued: state is carried through", cv_issued_view["state"] == intakes.ISSUED)
+ok("issued: studio name is carried through", cv_issued_view["studio_name"] == "Neptune Labs")
+
+# --- the four waiting states: one identical face ----------------------------
+#
+# submitted, preparing, quoted and quote_failed must be indistinguishable to
+# the client - never a hint that a model is currently running, or that a pass
+# already failed once - and never the budget, only the studio's name, when the
+# request came in, their own masked address, and how much they wrote.
+
+CV_WAITING_KEYS = {"state", "studio_name", "sent_at", "email", "scope_length"}
+
+
+def _reference_masked(email: str) -> str:
+    """An independent re-implementation of `InviteScreen.tsx`'s `masked()`,
+    so this proves `clientview.py` matches that behaviour rather than merely
+    agreeing with its own private helper."""
+    name, sep, domain = email.partition("@")
+    if not sep:
+        return email
+    head = name[:1]
+    dots = "•" * max(3, min(len(name) - 1, 6))
+    return f"{head}{dots}@{domain}"
+
+
+for cv_state in (intakes.SUBMITTED, intakes.PREPARING, intakes.QUOTED, intakes.QUOTE_FAILED):
+    cv_waiting = intakes.Intake(
+        id="1" * 12,
+        state=cv_state,
+        created_at="2026-02-03T04:05:06Z",
+        created_by="riku@neptune.ph",
+        client_email="waiting@client.com",
+        client_phone="0917-000-0000",
+        scope="x" * 137,
+        budget_text="BUDGETLEAK-777k",
+        error="Gemini answered with no usable JSON." if cv_state == intakes.QUOTE_FAILED else "",
+    )
+    cv_waiting_view = clientview.of(cv_waiting)
+    ok(f"{cv_state}: exactly the waiting keys", set(cv_waiting_view) == CV_WAITING_KEYS)
+    ok(f"{cv_state}: state is carried through", cv_waiting_view["state"] == cv_state)
+    ok(f"{cv_state}: studio name is carried through", cv_waiting_view["studio_name"] == "Neptune Labs")
+    ok(
+        f"{cv_state}: sent_at reads when the request came in, not blank",
+        cv_waiting_view["sent_at"] == "2026-02-03T04:05:06Z",
+    )
+    ok(
+        f"{cv_state}: email is masked the way InviteScreen.tsx masks it",
+        cv_waiting_view["email"] == _reference_masked("waiting@client.com"),
+    )
+    ok(f"{cv_state}: scope_length matches what they wrote", cv_waiting_view["scope_length"] == 137)
+    cv_waiting_dumped = json.dumps(cv_waiting_view)
+    ok(
+        f"{cv_state}: never the budget",
+        "BUDGETLEAK" not in cv_waiting_dumped and "budget" not in cv_waiting_dumped.lower(),
+    )
+    ok(
+        f"{cv_state}: never a hint that a model is running or a pass already failed",
+        "gemini" not in cv_waiting_dumped.lower()
+        and "error" not in cv_waiting_dumped.lower()
+        and "json" not in cv_waiting_dumped.lower(),
+    )
+    ok(f"{cv_state}: never the client's phone number", "0917-000-0000" not in cv_waiting_dumped)
+
+# --- closed: nothing but the state ------------------------------------------
+
+cv_closed = intakes.Intake(
+    id="2" * 12,
+    state=intakes.CLOSED,
+    created_at="2026-01-01T00:00:00Z",
+    created_by="riku@neptune.ph",
+    client_email="closed@client.com",
+    scope="something",
+    budget_text="never shown either",
+    closed_at="2026-01-02T00:00:00Z",
+    closed_by="riku@neptune.ph",
+)
+cv_closed_view = clientview.of(cv_closed)
+ok("closed: exactly state", set(cv_closed_view) == {"state"})
+ok("closed: state is closed", cv_closed_view["state"] == intakes.CLOSED)
+
+# --- sent, revision_requested, finalized: the quotation ---------------------
+
+CV_QUOTED_KEYS = {
+    "state",
+    "studio_name",
+    "reference",
+    "total",
+    "currency",
+    "validity",
+    "payment_schedule",
+    "narrative",
+    "sent_at",
+    "revisions",
+    "can_revise",
+    "can_finalize",
+}
+
+cv_sent = intakes.Intake(
+    id="3" * 12,
+    state=intakes.SENT,
+    created_at="2026-01-01T00:00:00Z",
+    created_by="riku@neptune.ph",
+    client_email="quotation@client.com",
+    scope="whatever they originally wrote",
+    budget_text="BUDGETLEAK-777k",
+    bundle_ids=[cv_bundle_id],
+    sent_bundle_id=cv_bundle_id,
+    sent_at="2026-03-04T05:06:07Z",
+    revisions=[],
+)
+cv_revreq = cv_sent.model_copy(
+    update={
+        "state": intakes.REVISION_REQUESTED,
+        "revisions": [{"asked": "Please drop the SMS module.", "at": "2026-03-05T00:00:00Z"}],
+    }
+)
+cv_finalized = cv_sent.model_copy(
+    update={
+        "state": intakes.FINALIZED,
+        "revisions": [{"asked": "Please drop the SMS module.", "at": "2026-03-05T00:00:00Z"}],
+    }
+)
+
+CV_FORBIDDEN = [
+    "line_items",
+    "rate_card_bound",
+    "rate_card_removed",
+    "target_note",
+    "tier_cap_note",
+    "tier_siblings",
+    "files",
+    "id",
+    "estimate",
+    "priced_scope",
+    "priced_budget",
+    "client_email",
+    "client_phone",
+    "job_id",
+    "bundle_ids",
+]
+
+
+def _cv_forbidden_present(term: str, haystack: str) -> bool:
+    """A bare substring search for every forbidden name except `id`.
+
+    `id` also occurs harmlessly inside `validity` ("val-id-ity") - the one
+    legitimate key in this view that happens to spell it - so a bare search
+    for `id` can never pass once `validity` is a key, regardless of what
+    `clientview.of` actually does. Searched for as a JSON key instead
+    (`"id":`), which is the actual shape a leaked `bundle.id` or `intake.id`
+    would take, nested or not, without also flagging the word it sits inside.
+    """
+    if term == "id":
+        return '"id":' in haystack
+    return term in haystack
+
+
+cv_sent_view = clientview.of(cv_sent, cv_poisoned)
+cv_revreq_view = clientview.of(cv_revreq, cv_poisoned)
+cv_finalized_view = clientview.of(cv_finalized, cv_poisoned)
+
+for cv_label, cv_view, cv_state_const in (
+    ("sent", cv_sent_view, intakes.SENT),
+    ("revision_requested", cv_revreq_view, intakes.REVISION_REQUESTED),
+    ("finalized", cv_finalized_view, intakes.FINALIZED),
+):
+    ok(f"{cv_label}: exactly the quotation keys", set(cv_view) == CV_QUOTED_KEYS)
+    ok(f"{cv_label}: state is carried through", cv_view["state"] == cv_state_const)
+    ok(f"{cv_label}: studio name is carried through", cv_view["studio_name"] == "Neptune Labs")
+    ok(f"{cv_label}: reference is the estimate's own", cv_view["reference"] == cv_bundle.estimate.quotation_ref)
+    ok(f"{cv_label}: total matches the costed estimate", cv_view["total"] == cv_bundle.estimate.cost.total)
+    ok(f"{cv_label}: currency matches", cv_view["currency"] == cv_bundle.estimate.currency)
+    ok(f"{cv_label}: validity is the narrative's validity_days", cv_view["validity"] == 45)
+    ok(
+        f"{cv_label}: both payment milestones carried, named fields only",
+        len(cv_view["payment_schedule"]) == 2
+        and all(set(row) == {"label", "percent", "amount", "trigger"} for row in cv_view["payment_schedule"]),
+    )
+    ok(
+        f"{cv_label}: narrative is exactly the client markdown already on the bundle",
+        cv_view["narrative"] == storage.markdown_for(cv_poisoned, "proposal"),
+    )
+    ok(
+        f"{cv_label}: sent_at is the intake's own timestamp, not the bundle's created_at",
+        cv_view["sent_at"] == "2026-03-04T05:06:07Z" and cv_view["sent_at"] != cv_poisoned.created_at,
+    )
+
+    # The forbidden-substring sweep runs on the view with `narrative` excluded:
+    # `narrative` is real client-facing markdown prose, and a bare search for
+    # `id` or `files` inside prose collides with ordinary English ("provide",
+    # "identifies", "profiles") - a false failure that would either be ignored
+    # or, worse, "fixed" by weakening the forbidden list. `narrative` is
+    # instead checked above for exact identity with the trusted markdown
+    # already on the bundle, which is the actual guarantee this module can
+    # make about it - it forwards that string, it does not rebuild it.
+    cv_without_narrative = json.dumps({key: value for key, value in cv_view.items() if key != "narrative"})
+    for cv_term in CV_FORBIDDEN:
+        ok(
+            f"{cv_label}: never leaks {cv_term!r} outside the narrative",
+            not _cv_forbidden_present(cv_term, cv_without_narrative),
+        )
+    # The sentinel sweep runs over the *whole* dump, narrative included: these
+    # strings are distinctive enough that no legitimate markdown, reference or
+    # label would ever contain one by coincidence, so this is the check that
+    # would actually catch a nested leak inside the narrative too.
+    cv_full_dump = json.dumps(cv_view)
+    for cv_sentinel in CV_SENTINELS:
+        ok(f"{cv_label}: never leaks the sentinel {cv_sentinel!r}, narrative included", cv_sentinel not in cv_full_dump)
+
+ok(
+    "can_revise and can_finalize are true only in sent",
+    cv_sent_view["can_revise"] is True and cv_sent_view["can_finalize"] is True,
+)
+ok(
+    "revision_requested carries can_revise/can_finalize false",
+    cv_revreq_view["can_revise"] is False and cv_revreq_view["can_finalize"] is False,
+)
+ok(
+    "finalized carries can_revise/can_finalize false",
+    cv_finalized_view["can_revise"] is False and cv_finalized_view["can_finalize"] is False,
+)
+ok(
+    "revision_requested's revisions carry asked/at pairs, nothing else",
+    cv_revreq_view["revisions"] == [{"asked": "Please drop the SMS module.", "at": "2026-03-05T00:00:00Z"}],
+)
+
+try:
+    clientview.of(cv_sent, None)
+    ok("a quotation-face state with no bundle raises rather than inventing one", False)
+except ValueError:
+    ok("a quotation-face state with no bundle raises rather than inventing one", True)
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")

@@ -102,10 +102,15 @@ ALLOWED: dict = {
 #: record onto a new id or overwrite a pydantic method by passing its name as a
 #: keyword - both were reachable through the `hasattr` check this replaces.
 #:
-#: `revisions` and `sent_bundle_id` are Stage 2's additions: the first is the
-#: log `REVISION_REQUESTED` appends to, the second is which bundle among
-#: `bundle_ids` a `send` call actually sent - named explicitly rather than
-#: assumed, since a re-quoted intake can have more than one candidate on file.
+#: `revisions`, `sent_bundle_id` and `sent_at` are Stage 2's additions: the
+#: first is the log `REVISION_REQUESTED` appends to, the second is which
+#: bundle among `bundle_ids` a `send` call actually sent - named explicitly
+#: rather than assumed, since a re-quoted intake can have more than one
+#: candidate on file - and the third is when that call happened, which
+#: `app.clientview` needs to tell a client when their quotation was sent and
+#: has nowhere else to read it from: `bundle.created_at` is when the
+#: quotation was *prepared*, not when the studio actually let the client see
+#: it, and those two moments can be days apart.
 ADVANCE_FIELDS = {
     "job_id",
     "bundle_ids",
@@ -115,6 +120,7 @@ ADVANCE_FIELDS = {
     "error",
     "revisions",
     "sent_bundle_id",
+    "sent_at",
 }
 
 
@@ -181,6 +187,13 @@ class Intake(BaseModel):
     #: `send` runs, so this says which one the client saw rather than
     #: leaving a reader to guess `bundle_ids[0]`.
     sent_bundle_id: str = ""
+    #: When `send` actually ran - the moment `QUOTED` became `SENT`. Empty in
+    #: every state before that, including a quotation that has been prepared
+    #: but not yet handed to the client: `app.clientview` reads this, never
+    #: `bundle.created_at`, because a studio can sit on a finished quotation
+    #: for days before sending it and the client must be told when they were
+    #: actually shown something, not when it was made.
+    sent_at: str = ""
 
     closed_at: str = ""
     closed_by: str = ""
