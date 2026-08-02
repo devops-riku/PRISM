@@ -102,6 +102,7 @@ POST /api/proposals            multipart/form-data -> 202 JobView
           tax_mode (str: exclusive | inclusive | none), tax_inclusive (str, legacy)
           deposit_pct, instalments, payment_cadence, deposit_trigger, payment_schedule (str)
           tiers, tier_ceiling (str)
+          intake_id (str, optional - the client intake this quotation is being prepared for, if any)
           images (repeated UploadFile, optional, image/* only, <= 8 files, <= 8 MB each)
 
 POST /api/proposals/{id}/revise  instruction, target_total -> 202 JobView

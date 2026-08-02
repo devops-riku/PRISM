@@ -1057,16 +1057,28 @@ async def create_proposal(
         Never raises: a quotation is the thing being prepared, and losing the
         bookkeeping around it must not lose the quotation. An intake_id that
         does not resolve is a stale form, not a reason to refuse the work.
-        Caught broadly rather than just `intakes.IntakeError` for the same
-        reason - the QUOTED stamp runs after `jobs.finish`, so anything this
-        raises, of any kind, must not read back as the quotation having failed.
+        Caught broadly rather than just `intakes.IntakeError`, because
+        `intakes.advance` reaches `workspaces.root()` on its way to a file on
+        disk and that can raise `NoWorkspace` or a bare `OSError` - neither is
+        an `IntakeError`. A narrower catch would let either escape `stamp`
+        itself, and the two call sites fail differently if it does: at the
+        PREPARING call there is no enclosing `try` in `run()` yet, so `run()`
+        would die before `jobs.start` ever executes and the job would sit at
+        `queued` forever with no `jobs.fail` and no notification; at the
+        QUOTED call, which runs after `jobs.finish` has already recorded
+        success, it would fall into `run()`'s own `except Exception` and
+        report a quotation that was saved as one that failed. `IntakeError`'s
+        message is self-describing and logged as-is; anything else is logged
+        with its type and stack, since a plain %s of those loses both.
         """
         if not intake_id:
             return
         try:
             intakes.advance(intake_id, to, **fields)
-        except Exception as exc:
+        except intakes.IntakeError as exc:
             logger.warning("Intake %s not moved to %s: %s", intake_id, to, exc)
+        except Exception:
+            logger.exception("Intake %s could not be moved to %s", intake_id, to)
 
     async def run() -> None:
         stamp(intakes.PREPARING, job_id=job.id)
