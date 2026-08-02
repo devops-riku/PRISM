@@ -13,6 +13,11 @@ stamp `QUOTE_FAILED` with the same string `jobs.fail` got. This exercises all
 four, not just the generic one, plus `priced_budget` and a tiered pass that
 produces more than one bundle.
 
+It also checks that a `QUOTE_FAILED` stamp tells somebody: `inbox.ADMINS`
+resolves against the roster at write time, so the workspace here claims an
+admin before any of that runs, and the check reads that admin's own inbox
+rather than trusting that the write merely didn't crash.
+
     cd backend
     .venv/Scripts/python.exe scripts/check_intake_gate.py
 """
@@ -38,7 +43,7 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import intakes, jobs, main, workspaces  # noqa: E402
+from app import inbox, intakes, jobs, main, members, workspaces  # noqa: E402
 from app.gemini_service import GeminiConfigError, GeminiResponseError  # noqa: E402
 from app.schemas import Estimate  # noqa: E402
 
@@ -74,8 +79,30 @@ def settle_job(job_id: str, want: str, seconds: float = 20.0) -> str:
     return found.state if found is not None else "missing"
 
 
+def settle_note(kind: str, seconds: float = 5.0) -> bool:
+    """Wait for a note of this kind to land, rather than reading once.
+
+    `intakes.get(...).state` flips to `quote_failed` the moment `advance`'s
+    own write returns - which is *before* `stamp`'s separate, independently
+    guarded notify call runs. A single read of `inbox.listing()` taken right
+    after `settle()` sees the new state can land in that gap and find nothing
+    there yet, so this polls the inbox exactly the way `settle` polls the
+    intake.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if any(note.kind == kind for note in inbox.listing()):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 workspaces.ensure_ready()
 made = workspaces.create("Neptune Labs")
+# `inbox.ADMINS` is resolved against the roster at write time - an empty
+# roster delivers to nobody. This claims the workspace for an admin so the
+# quote_failed notifications below have somewhere to land.
+members.claim("riku@neptune.ph", "u1")
 client = TestClient(app=main.app)
 headers = {"X-Workspace": made.id}
 
@@ -258,6 +285,16 @@ ok(
     intakes.get(target_broken.id).error
     == "This quotation has no priced line item to adjust, so its total cannot be moved.",
 )
+
+# --- A failed pass is announced, not just recorded --------------------------
+#
+# Any of the four quote_failed passes above could have raised this note -
+# `settle_note` only asks whether one is there, not which pass wrote it. It
+# polls rather than reading once because the intake's state flips to
+# quote_failed the moment `advance`'s write returns, which is before
+# `stamp`'s separate, independently guarded notify call runs.
+inbox.use_identity("riku@neptune.ph", "u1")
+ok("a failed pass raises a note", settle_note("intake.quote_failed"))
 
 # --- A non-IntakeError escaping intakes.advance must not take the job with it
 #

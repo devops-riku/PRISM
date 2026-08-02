@@ -1070,6 +1070,18 @@ async def create_proposal(
         report a quotation that was saved as one that failed. `IntakeError`'s
         message is self-describing and logged as-is; anything else is logged
         with its type and stack, since a plain %s of those loses both.
+
+        A move to `QUOTE_FAILED` is also told to the admins - a request that
+        failed silently is one nobody comes back to. That announcement sits
+        after this `try`, not inside it, and carries its own `except`: the
+        client asked, and the quotation failed, whether or not the move above
+        also landed, so it must not be skipped just because `advance` raised;
+        and `intakes.get` below reaches `workspaces.root()` exactly as
+        `advance` does, so it is exactly as capable of raising `NoWorkspace`
+        - `inbox.notify` itself is verified never to (everything in it runs
+        inside one broad `except Exception` that returns 0 rather than
+        raise), but the lookup that builds its words is not, and this is
+        still `stamp`: nothing past this line may reach `run()`.
         """
         if not intake_id:
             return
@@ -1079,6 +1091,30 @@ async def create_proposal(
             logger.warning("Intake %s not moved to %s: %s", intake_id, to, exc)
         except Exception:
             logger.exception("Intake %s could not be moved to %s", intake_id, to)
+
+        if to == intakes.QUOTE_FAILED:
+            try:
+                entry = intakes.get(intake_id)
+                inbox.notify(
+                    "intake.quote_failed",
+                    inbox.ADMINS,
+                    {
+                        "title": "A client request could not be quoted",
+                        "body": " - ".join(
+                            part
+                            for part in (
+                                (entry.client_email if entry else ""),
+                                str(fields.get("error", "")),
+                            )
+                            if part
+                        ),
+                        "href": "#/intakes",
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Intake %s: could not notify admins of a failed quote", intake_id
+                )
 
     async def run() -> None:
         stamp(intakes.PREPARING, job_id=job.id)
