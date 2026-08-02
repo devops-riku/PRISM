@@ -251,6 +251,10 @@ def delete(workspace_id: str) -> bool:
     from app import inbox
 
     inbox.forget(key)
+    # Imported here rather than at module scope: `intakes` imports this module.
+    from app import intakes
+
+    intakes.forget(key)
 
     logger.info("Workspace %s deleted with everything in it", key)
     return True
