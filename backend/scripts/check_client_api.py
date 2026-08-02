@@ -35,6 +35,7 @@ mode this file's opening section already proves does not apply here.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -55,6 +56,7 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 
 import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from pypdf import PdfReader  # noqa: E402
 
 from app import auth as auth_module  # noqa: E402
 from app import config  # noqa: E402
@@ -70,12 +72,22 @@ from app.main import app  # noqa: E402
 from app.schemas import (  # noqa: E402
     ClientNarrative,
     CostSummary,
+    DeveloperSpec,
     Estimate,
     LineItem,
     PaymentMilestone,
     ProposalBundle,
     UnitKind,
 )
+
+
+def pdf_text(data: bytes) -> str:
+    """Extractable text from a rendered PDF - the same idiom
+    `check_kind_titles.py` already uses, needed here because reportlab
+    compresses its content streams: a raw substring test against `data`
+    itself would pass or fail independently of what the PDF actually says."""
+    reader = PdfReader(io.BytesIO(data))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 FAILURES: list[str] = []
 
@@ -475,7 +487,12 @@ with TestClient(app) as client:
         quotation_ref="TASK4-0000001",
     )
 
-    def _sent_intake(workspace, created_by: str, scope: str = "Original scope, before any change."):
+    def _sent_intake(
+        workspace,
+        created_by: str,
+        scope: str = "Original scope, before any change.",
+        estimate: Estimate = FIXTURE_ESTIMATE,
+    ):
         """A real intake moved by hand straight to `sent`, with a real bundle
         attached - the only shape `/revise` and `/finalize` are ever reachable
         from. Built directly rather than by driving a Gemini-stubbed pass
@@ -484,6 +501,12 @@ with TestClient(app) as client:
         `clientview.of` renders a real bundle correctly end to end, so this
         file's fixtures only need a bundle real enough to be read - proving
         that rendering a second time is not this file's job.
+
+        `estimate` defaults to the shared fixture every earlier section of
+        this file already uses; Task 5's section below passes its own, built
+        with a distinctive marker on the internal document, so the bundle
+        this call attaches carries content that can actually prove the leak
+        test bites.
         """
         workspaces.use(workspace.id)
         entry = intakes.create(
@@ -498,8 +521,8 @@ with TestClient(app) as client:
         bundle = ProposalBundle(
             id=bundle_id,
             created_at=storage.utc_now_iso(),
-            estimate=FIXTURE_ESTIMATE,
-            files=main_module._build_files(bundle_id, FIXTURE_ESTIMATE),  # noqa: SLF001
+            estimate=estimate,
+            files=main_module._build_files(bundle_id, estimate),  # noqa: SLF001
             revision=1,
             root_id=bundle_id,
         )
@@ -1321,6 +1344,312 @@ with TestClient(app) as client:
     finally:
         main_module._rate_limit_hits = _real_rate_limit_hits
         main_module._RATE_LIMIT_MAX_TRACKED_KEYS = _real_max_tracked_keys
+
+    # ==========================================================================
+    # Task 5: the client reads the quotation - GET .../quotation.html and .pdf
+    # ==========================================================================
+    #
+    # The plan calls this the single most important test in it, and this route
+    # the single most likely real bug in the feature: PRISM writes two
+    # documents from one estimate, the proposal a client is meant to read and
+    # the studio's own internal one beside it, and the existing file routes
+    # (`printable_html`, `download_pdf`) take which of the two to serve as a
+    # `{kind}` path segment. If `kind` were ever reachable from anything this
+    # anonymous door accepts, a client could read the internal document. The
+    # fix is that `kind` is not a parameter anywhere on this route at all - see
+    # `_client_quotation`'s own docstring in main.py - and this section is
+    # built to prove that claim rather than merely exercise the happy path.
+
+    quotation_client = _client_for("203.0.113.60")
+
+    # A marker with no spaces or hyphens and a modest length: long enough to
+    # be unmistakable, short enough that reportlab's paragraph layout has no
+    # reason to break it across a line - the fixture-control checks just below
+    # prove directly that it survives markdown, HTML and PDF-plus-text-
+    # extraction intact, so a failure later can never be blamed on the marker
+    # itself going missing along the way.
+    QUOTATION_MARKER = "PRISMSECRETSHEETZQ9"
+    QUOTATION_TITLE = "Task 5 Client-Facing Title"
+
+    QUOTATION_ESTIMATE = FIXTURE_ESTIMATE.model_copy(
+        update={
+            "project_name": "Task 5 Fixture",
+            "client": FIXTURE_ESTIMATE.client.model_copy(update={"title": QUOTATION_TITLE}),
+            # The internal document's only distinctive content. `developer`
+            # is read exclusively by `render_developer_requirements` (see
+            # `renderers/markdown.py`) - `render_client_proposal` never opens
+            # this field - so the marker landing in the client's response
+            # would mean the wrong document was served, not a stray field
+            # leaking through the right one.
+            "developer": DeveloperSpec(
+                overview=(
+                    f"Internal engineering notes only, never for a client. "
+                    f"Marker {QUOTATION_MARKER}."
+                )
+            ),
+        }
+    )
+
+    # --- Fixture control: prove the marker actually lands where it should,
+    #     and only there, before a single HTTP request runs. Every assertion
+    #     below this point that checks the marker is *absent* from a client
+    #     response is only meaningful because these checks first establish
+    #     that the marker is *present* somewhere real - without this, a typo
+    #     that dropped the marker from the estimate entirely would make every
+    #     "absent" assertion pass for the wrong reason.
+    _internal_markdown = main_module.render_developer_requirements(QUOTATION_ESTIMATE)
+    ok(
+        "fixture control: the internal document's own markdown carries the marker",
+        QUOTATION_MARKER in _internal_markdown,
+    )
+    _proposal_markdown = main_module.render_client_proposal(QUOTATION_ESTIMATE)
+    ok(
+        "fixture control: the proposal's own markdown does not carry the marker - it was "
+        "never written into a field that renderer reads",
+        QUOTATION_MARKER not in _proposal_markdown,
+    )
+    _internal_pdf_direct = main_module.render_pdf(
+        _internal_markdown, "Fixture control", QUOTATION_ESTIMATE, kind="requirements"
+    )
+    _internal_pdf_text_direct = pdf_text(_internal_pdf_direct)
+    ok(
+        "fixture control: the marker survives PDF rendering and text extraction intact - "
+        "the PDF leak assertions below can actually catch a leak, not just pass vacuously",
+        QUOTATION_MARKER in _internal_pdf_text_direct,
+    )
+
+    quotation_sent, quotation_bundle = _sent_intake(
+        home, "author-q5@neptune.ph", estimate=QUOTATION_ESTIMATE
+    )
+
+    # --- .html for a sent intake: the proposal, not the internal document ---
+
+    baseline_html = quotation_client.get(f"/api/client/{quotation_sent.token}/quotation.html")
+    ok("quotation.html for a sent intake: 200", baseline_html.status_code == 200)
+    ok(
+        "quotation.html: it is the proposal - the client's own title is on the page",
+        QUOTATION_TITLE in baseline_html.text,
+    )
+    ok(
+        "quotation.html: the internal document's marker is not on the page - the leak "
+        "test itself",
+        QUOTATION_MARKER not in baseline_html.text,
+    )
+
+    # --- .pdf for the same intake: same proof, through the PDF renderer -----
+
+    baseline_pdf = quotation_client.get(f"/api/client/{quotation_sent.token}/quotation.pdf")
+    ok("quotation.pdf for a sent intake: 200", baseline_pdf.status_code == 200)
+    ok(
+        "quotation.pdf: content-type is application/pdf",
+        baseline_pdf.headers.get("content-type", "").startswith("application/pdf"),
+    )
+    baseline_pdf_text = pdf_text(baseline_pdf.content)
+    ok(
+        "quotation.pdf: it is the proposal - the client's own title is in the extracted text",
+        QUOTATION_TITLE in baseline_pdf_text,
+    )
+    ok(
+        "quotation.pdf: the internal document's marker is not in the extracted text - the "
+        "leak test itself, through the PDF path",
+        QUOTATION_MARKER not in baseline_pdf_text,
+    )
+
+    # --- X-Workspace is ignored here too - the token alone decides the ------
+    #     workspace, exactly as `read_client_view` promises, and this route's
+    #     own render step runs entirely inside the borrowed workspace to
+    #     guarantee it (see `_client_quotation`'s own docstring).
+    crossed_quotation = quotation_client.get(
+        f"/api/client/{quotation_sent.token}/quotation.html", headers={"X-Workspace": other.id}
+    )
+    ok(
+        "quotation.html ignores X-Workspace: still 200 with home's own document",
+        crossed_quotation.status_code == 200 and crossed_quotation.content == baseline_html.content,
+    )
+
+    # --- There is no parameter, anywhere, by which a client can ask for the -
+    #     internal document. Each attempt below either 404s outright or comes
+    #     back byte-identical (PDF: text-identical, since reportlab stamps a
+    #     fresh `/CreationDate` into every render) to the untampered baseline
+    #     - "ignored, not honoured" means the second document never renders
+    #     AND the first one renders exactly as it would have without the
+    #     tampering, not merely "some 200 that happens to lack the marker".
+
+    TAMPER_HTML_ATTEMPTS = [
+        ("?kind=requirements query param", f"/api/client/{quotation_sent.token}/quotation.html?kind=requirements"),
+        (
+            "?kind=proposal query param (must be ignored, not specially honoured either)",
+            f"/api/client/{quotation_sent.token}/quotation.html?kind=proposal",
+        ),
+        (
+            "a differently-shaped path naming the internal document directly",
+            f"/api/client/{quotation_sent.token}/quotation.requirements.html",
+        ),
+        (
+            "a path-traversal attempt inside the extension segment (percent-encoded)",
+            f"/api/client/{quotation_sent.token}/quotation.%2e%2e%2Frequirements.html",
+        ),
+        (
+            "a second, literal-dots traversal spelling",
+            f"/api/client/{quotation_sent.token}/quotation.html/../quotation.requirements.html",
+        ),
+    ]
+    for label, path in TAMPER_HTML_ATTEMPTS:
+        resp = quotation_client.get(path)
+        ok(
+            f"quotation.html tamper - {label}: either 404 or byte-identical to the "
+            "untampered proposal",
+            resp.status_code == 404 or resp.content == baseline_html.content,
+        )
+        ok(
+            f"quotation.html tamper - {label}: the internal document's marker never "
+            "appears either way",
+            QUOTATION_MARKER.encode() not in resp.content,
+        )
+
+    # A `kind` smuggled in a JSON body on the GET itself - nothing on this
+    # route declares a body parameter, so FastAPI never even parses it.
+    body_attempt = quotation_client.request(
+        "GET",
+        f"/api/client/{quotation_sent.token}/quotation.html",
+        json={"kind": "requirements"},
+    )
+    ok(
+        "quotation.html tamper - kind in a JSON body: either 404 or byte-identical to the "
+        "untampered proposal",
+        body_attempt.status_code == 404 or body_attempt.content == baseline_html.content,
+    )
+    ok(
+        "quotation.html tamper - kind in a JSON body: the internal document's marker "
+        "never appears",
+        QUOTATION_MARKER.encode() not in body_attempt.content,
+    )
+
+    # The same tampering shapes against .pdf - text-compared, since two PDF
+    # renders of the same markdown are not byte-identical (reportlab writes a
+    # fresh `/CreationDate` on every call).
+    TAMPER_PDF_ATTEMPTS = [
+        ("?kind=requirements query param", f"/api/client/{quotation_sent.token}/quotation.pdf?kind=requirements"),
+        (
+            "a differently-shaped path naming the internal document directly",
+            f"/api/client/{quotation_sent.token}/quotation.requirements.pdf",
+        ),
+    ]
+    for label, path in TAMPER_PDF_ATTEMPTS:
+        resp = quotation_client.get(path)
+        if resp.status_code == 404:
+            ok(f"quotation.pdf tamper - {label}: refused with 404", True)
+        else:
+            text = pdf_text(resp.content)
+            ok(
+                f"quotation.pdf tamper - {label}: 200 still means the untampered proposal "
+                "text",
+                text == baseline_pdf_text,
+            )
+            ok(
+                f"quotation.pdf tamper - {label}: the internal document's marker never "
+                "appears",
+                QUOTATION_MARKER not in text,
+            )
+
+    # --- All three states a client may actually fetch from - not just `sent`,
+    #     the state every check above already covers. A typo that dropped
+    #     `REVISION_REQUESTED` or `FINALIZED` from the route's own allow-list
+    #     would pass every assertion above and be caught only here.
+
+    revreq_sent, _ = _sent_intake(home, "author-q5-revreq@neptune.ph", estimate=QUOTATION_ESTIMATE)
+    intakes.advance(
+        revreq_sent.id,
+        intakes.REVISION_REQUESTED,
+        revisions=[{"asked": "Please reconsider the timeline.", "at": "2026-01-01T00:00:00Z"}],
+    )
+    revreq_html = quotation_client.get(f"/api/client/{revreq_sent.token}/quotation.html")
+    ok("quotation.html from revision_requested: 200", revreq_html.status_code == 200)
+    ok(
+        "quotation.html from revision_requested: still the proposal, marker still absent",
+        QUOTATION_TITLE in revreq_html.text and QUOTATION_MARKER not in revreq_html.text,
+    )
+
+    finalized_sent, _ = _sent_intake(home, "author-q5-final@neptune.ph", estimate=QUOTATION_ESTIMATE)
+    intakes.advance(finalized_sent.id, intakes.FINALIZED)
+    finalized_html = quotation_client.get(f"/api/client/{finalized_sent.token}/quotation.html")
+    ok("quotation.html from finalized: 200", finalized_html.status_code == 200)
+    ok(
+        "quotation.html from finalized: still the proposal, marker still absent",
+        QUOTATION_TITLE in finalized_html.text and QUOTATION_MARKER not in finalized_html.text,
+    )
+
+    # --- Every other state is refused, with the same opaque body an unknown -
+    #     token gets - `issued`, `submitted`, `preparing`, `quote_failed` and
+    #     `quoted` all come before a quotation was ever sent, and `closed`
+    #     never appears in the route's own allow-list at all.
+
+    QUOTATION_REFUSAL_FIXTURES = (
+        ("issued", ()),
+        ("submitted", ((intakes.SUBMITTED, {}),)),
+        ("preparing", ((intakes.SUBMITTED, {}), (intakes.PREPARING, {"job_id": "x"}))),
+        (
+            "quote_failed",
+            (
+                (intakes.SUBMITTED, {}),
+                (intakes.PREPARING, {"job_id": "x"}),
+                (intakes.QUOTE_FAILED, {"error": "simulated failure"}),
+            ),
+        ),
+        ("quoted", _QUOTED_STEPS),
+    )
+    for label, steps in QUOTATION_REFUSAL_FIXTURES:
+        workspaces.use(home.id)
+        candidate = intakes.create(
+            client_email="", client_phone="", scope="", budget_text="", preset={},
+            created_by="admin@neptune.ph",
+        )
+        _walk(candidate.id, *steps)
+        for suffix in ("quotation.html", "quotation.pdf"):
+            resp = quotation_client.get(f"/api/client/{candidate.token}/{suffix}")
+            ok(
+                f"{suffix} from {label}: refused with the same opaque body as an unknown token",
+                resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            )
+
+    workspaces.use(home.id)
+    quotation_closed = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    intakes.close(quotation_closed.id, "admin@neptune.ph")
+    for suffix in ("quotation.html", "quotation.pdf"):
+        resp = quotation_client.get(f"/api/client/{quotation_closed.token}/{suffix}")
+        ok(
+            f"{suffix} from closed: refused with the same opaque body as an unknown token",
+            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        )
+
+    for suffix in ("quotation.html", "quotation.pdf"):
+        resp = quotation_client.get(f"/api/client/not-a-real-token-at-all/{suffix}")
+        ok(
+            f"{suffix} for an unknown token: refused with the same opaque body",
+            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        )
+
+    # --- A sent intake whose bundle has since been deleted is refused, not a
+    #     500 - the same dangling-bundle case `/revise` and `/finalize`
+    #     already guard, reached here through a third door.
+    dangling_q_sent, dangling_q_bundle = _sent_intake(
+        home, "author-q5-dangling@neptune.ph", estimate=QUOTATION_ESTIMATE
+    )
+    storage.delete(dangling_q_bundle.id)
+    ok(
+        "dangling-bundle quotation fixture: the bundle is genuinely gone",
+        storage.get(dangling_q_bundle.id) is None,
+    )
+    for suffix in ("quotation.html", "quotation.pdf"):
+        resp = quotation_client.get(f"/api/client/{dangling_q_sent.token}/{suffix}")
+        ok(
+            f"{suffix} against a sent intake whose bundle was deleted: opaque refusal, "
+            "not a 500 with a traceback",
+            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        )
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")

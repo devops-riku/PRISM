@@ -28,7 +28,7 @@ import re
 import threading
 import time
 from collections import deque
-from typing import List, Union
+from typing import Callable, List, Union
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi import WebSocketDisconnect
@@ -3120,6 +3120,133 @@ async def finalize_client_intake(token: str) -> dict:
         return view
     finally:
         workspaces.give_back(borrowed)
+
+
+# --- The client reads the quotation (Stage 2 Task 5) ---------------------------
+#
+# One more door on the same anonymous prefix as Tasks 3 and 4: no
+# `Authorization` header, resolved by the token alone. PRISM writes two
+# documents from every estimate it prices - the one a client is meant to
+# read, and the studio's own internal one beside it, with the stack, the
+# API surface, the phases and the open questions written for whoever builds
+# the thing, not whoever is buying it. Every file route above this section
+# (`download_markdown`, `printable_html`, `download_pdf`) takes which of the
+# two to serve as a `{kind}` path segment, because the caller there is a
+# signed-in studio member choosing on purpose. A client did not choose
+# anything - they were sent one link - and this door must not let them turn
+# that link into a way to read the other document. See `_client_quotation`'s
+# own docstring for how that is enforced, not merely asserted.
+
+#: The only three states in which a client may read the quotation they were
+#: sent. Deliberately not `clientview._QUOTED_FACE`, reused: that set
+#: governs what `clientview.of` renders a bundle *for*, and tying this
+#: door's own refusal to it would mean a state added there for a reason
+#: that has nothing to do with reading a document silently widens what this
+#: route serves too. An allow-list, not the denylist `read_client_view`'s
+#: own `CLOSED` check is - that route shows *something* for every state but
+#: one; this route shows a document for three of the eight states an intake
+#: can be in, so `closed` needs no check of its own here: it was simply
+#: never on the list, the identical answer every other unlisted state gets.
+_CLIENT_QUOTATION_STATES = {intakes.SENT, intakes.REVISION_REQUESTED, intakes.FINALIZED}
+
+
+def _client_quotation(token: str, render: Callable[[str, Estimate, int], Response]) -> Response:
+    """Resolve a client's own link, refuse everything this door will not
+    discuss, and hand back whatever `render` builds from the one document a
+    client may ever read here.
+
+    There is no name anywhere in this function - or in either route below
+    that calls it - for the document this door refuses to serve: not a
+    parameter, not a variable, not a comment. What document gets built is a
+    single local constant, set once, on the next line. A value reachable
+    from anything a request carries is the one bug this task exists to make
+    structurally impossible, not merely rejected after the fact - and the
+    surest way to prove nothing reads it off the request is to never spell
+    it out at all.
+
+    Everything happens before `give_back` runs, `render` included - the same
+    discipline `read_client_view` follows, and for the same reason: nothing
+    here may run against whatever workspace `_gate` left the ambient context
+    pointed at from this request's own `X-Workspace` header (irrelevant on
+    this door - see that route's docstring), only the workspace the token
+    itself named.
+
+    Refused with this door's one opaque body, exactly as every other route
+    on this prefix refuses: an unknown, expired or relinked-away token
+    (`tokens.resolve`); a real token whose intake has moved to a state
+    outside `_CLIENT_QUOTATION_STATES`; and a sent-family intake whose
+    bundle has since been deleted, or never carried this document at all -
+    the same dangling-bundle case `/revise` and `/finalize` above already
+    guard, reached here through a different door.
+    """
+    kind = "proposal"
+
+    found = tokens.resolve(token)
+    if found is None:
+        raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+
+    workspace_id, intake_id = found
+    borrowed = workspaces.borrow(workspace_id)
+    try:
+        entry = intakes.get(intake_id)
+        if entry is None or entry.state not in _CLIENT_QUOTATION_STATES:
+            raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+
+        bundle = storage.get(entry.sent_bundle_id) if entry.sent_bundle_id else None
+        if bundle is None:
+            raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+
+        markdown = storage.markdown_for(bundle, kind)
+        if markdown is None:
+            raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+
+        return render(markdown, bundle.estimate, bundle.revision)
+    finally:
+        workspaces.give_back(borrowed)
+
+
+@app.get("/api/client/{token}/quotation.html", tags=["client"])
+async def client_quotation_html(token: str) -> HTMLResponse:
+    """Print-ready HTML of the document a client is allowed to read.
+
+    No `kind` anywhere - see `_client_quotation`'s own docstring."""
+    kind = "proposal"
+
+    def render(markdown: str, estimate: Estimate, revision: int) -> HTMLResponse:
+        html = render_print_html(markdown, _document_title(estimate, kind), estimate, kind=kind)
+        return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+    return _client_quotation(token, render)
+
+
+@app.get("/api/client/{token}/quotation.pdf", tags=["client"])
+async def client_quotation_pdf(token: str) -> Response:
+    """The same document as a PDF, for whoever would rather attach it to an
+    email than open a link. No `kind` anywhere - see `_client_quotation`'s
+    own docstring."""
+    kind = "proposal"
+
+    def render(markdown: str, estimate: Estimate, revision: int) -> Response:
+        try:
+            data = render_pdf(markdown, _document_title(estimate, kind), estimate, kind=kind)
+        except Exception as exc:  # pragma: no cover - a renderer bug, not user input
+            logger.exception("PDF rendering failed for a client's own quotation")
+            raise HTTPException(
+                status_code=500,
+                detail="The PDF could not be produced. Try again shortly.",
+            ) from exc
+
+        filename = _filename(estimate, kind, revision).removesuffix(".md") + ".pdf"
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    return _client_quotation(token, render)
 
 
 class AuthConfig(BaseModel):
