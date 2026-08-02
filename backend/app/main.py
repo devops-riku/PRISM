@@ -2289,7 +2289,11 @@ async def create_intake(request: Request, body: IntakeRequest) -> intakes.Intake
             created_by=_who_email(request),
         )
     except intakes.IntakeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # A brand-new intake has no existing state to conflict with - the only
+        # way `create()` raises is that the record could not be written (a
+        # full disk, a permissions problem). That is ours to report, not a
+        # 409 implying the caller sent something to fix and retry.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/intakes", response_model=List[intakes.Intake], tags=["intakes"])
@@ -2318,10 +2322,19 @@ async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
     """Not going ahead. Reversible only by making a new request. Admin-only,
     the same side of the line as issuing one in the first place."""
     _require_admin(request, "Only an admin of this workspace can close a client request.")
+    # Checked here rather than folded into the `except` below: `close()` raises
+    # `IntakeError` both for an id that does not exist and for a write that
+    # failed after it found one, and those are not the same answer. Deciding
+    # "not found" here first means anything `close()` still raises has to be
+    # the second kind - a real failure to save, which is a 500 that says so
+    # rather than a 404 that sends someone looking for a request that is
+    # actually still sitting there, just unmodified.
+    if intakes.get(intake_id) is None:
+        raise HTTPException(status_code=404, detail="That request does not exist.")
     try:
         return intakes.close(intake_id, _who_email(request))
     except intakes.IntakeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 class AuthConfig(BaseModel):
