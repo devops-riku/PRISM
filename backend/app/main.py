@@ -902,6 +902,11 @@ async def create_proposal(
     tiers: str = Form(""),
     tier_ceiling: str = Form(""),
     pricing_basis: str = Form(""),
+    #: Which client intake this quotation is being prepared for, if any. Blank
+    #: for every caller that predates intakes - the pad included, until Stage 2
+    #: wires it through - and for the pad's own "quick quote" path, which has
+    #: no client request behind it at all.
+    intake_id: str = Form(""),
     images: List[Union[UploadFile, str]] = File(default=[]),
     documents: List[Union[UploadFile, str]] = File(default=[]),
 ) -> jobs.JobView:
@@ -1046,7 +1051,25 @@ async def create_proposal(
         steps=[f"Pricing {tier}" for tier in reversed(tiers)] or ["Pricing the work"],
     )
 
+    def stamp(to: str, **fields) -> None:
+        """Move the intake this quotation came from, if it came from one.
+
+        Never raises: a quotation is the thing being prepared, and losing the
+        bookkeeping around it must not lose the quotation. An intake_id that
+        does not resolve is a stale form, not a reason to refuse the work.
+        Caught broadly rather than just `intakes.IntakeError` for the same
+        reason - the QUOTED stamp runs after `jobs.finish`, so anything this
+        raises, of any kind, must not read back as the quotation having failed.
+        """
+        if not intake_id:
+            return
+        try:
+            intakes.advance(intake_id, to, **fields)
+        except Exception as exc:
+            logger.warning("Intake %s not moved to %s: %s", intake_id, to, exc)
+
     async def run() -> None:
+        stamp(intakes.PREPARING, job_id=job.id)
         jobs.start(job.id, "Reading the brief")
         try:
             if tiers:
@@ -1087,6 +1110,12 @@ async def create_proposal(
                 estimates, request, tiers, target, ceiling, studio, card, terms
             )
             jobs.finish(job.id, [bundle.id for bundle in bundles])
+            stamp(
+                intakes.QUOTED,
+                bundle_ids=[bundle.id for bundle in bundles],
+                priced_scope=brief,
+                priced_budget=budget_hint,
+            )
             first = bundles[0]
             # A quotation that had to be stretched, held down or could not
             # reach its target is still ready - and saying only "ready" would
@@ -1120,9 +1149,11 @@ async def create_proposal(
         except GeminiConfigError as exc:
             logger.error("Generation blocked by configuration: %s", exc)
             jobs.fail(job.id, str(exc))
+            stamp(intakes.QUOTE_FAILED, error=str(exc))
         except GeminiResponseError as exc:
             logger.error("Unusable Gemini response: %s | snippet=%s", exc, exc.snippet)
             jobs.fail(job.id, str(exc))
+            stamp(intakes.QUOTE_FAILED, error=str(exc))
             inbox.notify(
                 "quotation_failed",
                 inbox.ACTOR,
@@ -1134,6 +1165,7 @@ async def create_proposal(
             )
         except HTTPException as exc:
             jobs.fail(job.id, str(exc.detail))
+            stamp(intakes.QUOTE_FAILED, error=str(exc.detail))
             # Late by nature: the costing solver only runs after the model call,
             # so an unreachable target is a ninety-second answer to a number
             # somebody typed. Say which number, and where to change it.
@@ -1151,6 +1183,10 @@ async def create_proposal(
             jobs.fail(
                 job.id,
                 "The quotation could not be prepared. The error is in the API log.",
+            )
+            stamp(
+                intakes.QUOTE_FAILED,
+                error="The quotation could not be prepared. The error is in the API log.",
             )
             # Both, and in different words. The person waiting needs to know
             # their work is gone and that somebody has been told; the admins
