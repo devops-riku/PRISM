@@ -202,50 +202,57 @@ export default function HomeScreen() {
           </div>
         </div>
 
-        <nav
-          id="home-panel"
-          role="tabpanel"
-          aria-labelledby={`home-tab-${side}`}
-          className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
-        >
-          {destinations.filter((place) => isAdmin || place.href !== '#/settings').map(
-            (place) => (
-            <a
-              key={place.href}
-              href={place.href}
-              // Square, so the five read as one set: the longest label used to
-              // set the height for all of them, and a card that is taller
-              // because its words are longer looks like it matters more.
-              className="group flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet transition-[border-color,transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-ballpoint hover:shadow-raised active:translate-y-0 active:shadow-sheet motion-reduce:transform-none motion-reduce:transition-none"
-            >
-              <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent-soft text-ballpoint">
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  className="h-[22px] w-[22px]"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  {place.icon}
-                </svg>
-              </span>
-              {/* Both text blocks reserve two lines whether they use them or
-                  not. Without that, a one-line label makes its whole block
-                  shorter, the centred block shifts down, and the five marks end
-                  up at five different heights. */}
-              <span className="mt-4 flex min-h-[2.2em] items-center font-label text-[12px] font-medium uppercase leading-[1.35] tracking-[0.14em] text-ink group-hover:text-ballpoint">
-                {place.label}
-              </span>
-              <span className="mt-1 flex min-h-[3em] items-start font-body text-[13px] leading-[1.5] text-void">
-                {place.detail}
-              </span>
-            </a>
-            ),
-          )}
-        </nav>
+        {/* <nav> does not permit role="tabpanel" (ARIA-in-HTML only allows
+            menu/menubar/none/presentation/tablist on it) - axe's own
+            aria-allowed-role writeup is blunt that a disallowed role can
+            silently do nothing or disable accessibility for the whole
+            subtree. The panel role and its dynamic label live on this
+            wrapping div instead, leaving <nav> underneath with its native
+            landmark role and its own static label intact. */}
+        <div id="home-panel" role="tabpanel" aria-labelledby={`home-tab-${side}`}>
+          <nav
+            aria-label="Where to go"
+            className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
+          >
+            {destinations.filter((place) => isAdmin || place.href !== '#/settings').map(
+              (place) => (
+              <a
+                key={place.href}
+                href={place.href}
+                // Square, so the five read as one set: the longest label used to
+                // set the height for all of them, and a card that is taller
+                // because its words are longer looks like it matters more.
+                className="group flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet transition-[border-color,transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-ballpoint hover:shadow-raised active:translate-y-0 active:shadow-sheet motion-reduce:transform-none motion-reduce:transition-none"
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent-soft text-ballpoint">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className="h-[22px] w-[22px]"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    {place.icon}
+                  </svg>
+                </span>
+                {/* Both text blocks reserve two lines whether they use them or
+                    not. Without that, a one-line label makes its whole block
+                    shorter, the centred block shifts down, and the five marks end
+                    up at five different heights. */}
+                <span className="mt-4 flex min-h-[2.2em] items-center font-label text-[12px] font-medium uppercase leading-[1.35] tracking-[0.14em] text-ink group-hover:text-ballpoint">
+                  {place.label}
+                </span>
+                <span className="mt-1 flex min-h-[3em] items-start font-body text-[13px] leading-[1.5] text-void">
+                  {place.detail}
+                </span>
+              </a>
+              ),
+            )}
+          </nav>
+        </div>
 
         {/* Only the one figure that changes while you watch. "On file" said the
             same thing as the PAD Quotations card directly above it, and a

@@ -398,15 +398,6 @@
     box-shadow: var(--shadow-sheet);
   }
 
-  /* The base focus ring is drawn for square controls (--radius-DEFAULT). A
-     pill-shaped tab needs its own outline radius so the ring follows the
-     curve instead of squaring off a rounded control - this rule only
-     replaces that one property, the ring's colour and offset still come
-     from the base rule underneath it. */
-  .pill__tab:focus-visible {
-    border-radius: var(--radius-pill);
-  }
-
   /* ── Heading type ─────────────────────────────────────────────────────
      Figtree at 600 with tight tracking. Not uppercase: the kit sets
      its headings in sentence case and saves capitals for the small labels. */
