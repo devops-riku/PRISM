@@ -88,6 +88,7 @@ type IntakeRowProps = {
   row: Intake
   isAdmin: boolean
   confirming: boolean
+  closing: boolean
   onRequestClose: (id: string) => void
   onConfirmClose: (id: string) => void
   onCancelClose: () => void
@@ -97,6 +98,7 @@ function IntakeRow({
   row,
   isAdmin,
   confirming,
+  closing,
   onRequestClose,
   onConfirmClose,
   onCancelClose,
@@ -139,10 +141,11 @@ function IntakeRow({
           <span className="inline-flex gap-2">
             <button
               type="button"
+              disabled={closing}
               className={`${ACTION} border-alert text-alert`}
               onClick={() => onConfirmClose(row.id)}
             >
-              Close it
+              {closing ? 'Closing' : 'Close it'}
             </button>
             <button type="button" className={ACTION} onClick={onCancelClose}>
               Keep it
@@ -179,6 +182,11 @@ export default function IntakeListScreen() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [confirmingId, setConfirmingId] = useState('')
+  // Set synchronously before the request leaves, not when it comes back: a
+  // second click inside the round trip would otherwise reach the server as
+  // advance(closed -> closed), which `ALLOWED[CLOSED]` refuses - a visible
+  // "not closed" over a row that plainly is.
+  const [closingId, setClosingId] = useState('')
 
   useEffect(() => {
     let live = true
@@ -201,12 +209,16 @@ export default function IntakeListScreen() {
 
   const handleClose = (id: string) => {
     setError('')
+    setClosingId(id)
     closeIntake(id)
       .then((updated) => {
-        setConfirmingId('')
+        // Conditional, not a bare clear: resolving row A must not wipe out a
+        // confirm somebody opened on row B while A's request was in flight.
+        setConfirmingId((current) => (current === id ? '' : current))
         setRows((current) => current.map((row) => (row.id === id ? updated : row)))
       })
       .catch((failure) => setError(failure?.message || 'That request was not closed.'))
+      .finally(() => setClosingId((current) => (current === id ? '' : current)))
   }
 
   const sections = buildSections(rows).filter((section) => section.rows.length > 0)
@@ -253,6 +265,7 @@ export default function IntakeListScreen() {
                     row={row}
                     isAdmin={isAdmin}
                     confirming={confirmingId === row.id}
+                    closing={closingId === row.id}
                     onRequestClose={setConfirmingId}
                     onConfirmClose={handleClose}
                     onCancelClose={() => setConfirmingId('')}
