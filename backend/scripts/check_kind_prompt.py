@@ -48,11 +48,20 @@ from app.schemas import ProposalRequest  # noqa: E402
 
 
 #: Taken from `app.prompts` before the kind branch was added to it.
+#:
+#: Re-baselined in Stage 2 Task 6: the paragraph after `BRIEF_END` was
+#: deliberately reworded to frame the brief the way
+#: `attachments.describe_for_prompt` frames an uploaded document - material
+#: to quote from, never an instruction - because `req.brief` can now be a
+#: client's own words, carried verbatim through `intake.scope` from
+#: `POST /api/client/{token}/submit`, with nobody at the studio reading them
+#: first. `SYSTEM_INSTRUCTION` and `REVISION_SYSTEM_INSTRUCTION` were not
+#: touched and keep their original hashes below unchanged.
 BASELINE = {
-    "plain": "431eebc007a7789fdc1c9c70a92dfd2437d8649e2e5b085a904c010b23be6a33",
-    "full": "61f7133a2b6736d7cc074f865addc75a589e6fbc9feae1c0188e4462ebfbdaf9",
-    "untaxed": "2ea5b44e4f2fabead81f8b1afb5cae4f0afc1fec4063c596e0637ac7cf72c1dc",
-    "tiered": "fd15dd51aa261b4b0c26182d37ba66ab8d20e14f73eb705e1e8bf4dfa6ab26b4",
+    "plain": "73471f1cc4e68ace1f2380d977de1dad8d8d0b4d9cf4fda3c2b1b4fbecebbe47",
+    "full": "80bb2734737e75257690bd135f89b913cfd2e0e525ea6b9b8d6d351612df97a5",
+    "untaxed": "b4adefb32972ca5d50968d13fb8def55df3dea31f62e0e5d3fdd72fad7674be5",
+    "tiered": "4bd444d0af9d9df16e13301e547770348a655cf714d8c7b04664158121b80a3d",
     "SYSTEM_INSTRUCTION": "d02525ae5aea31570a954d0a9cd4f168bfd86b466dd7cb5e3252aa8962883e10",
     "REVISION_SYSTEM_INSTRUCTION": "5f70fe890fc7df1715be15cce61aeeabe02f59d4c71cf7797dcc38152c7d1452",
 }

@@ -2536,35 +2536,93 @@ async def delete_workspace(request: Request, workspace_id: str) -> Response:
 
 
 class IntakeRequest(BaseModel):
-    """What the studio heard from the client, plus how it should be quoted."""
+    """The PAD settings this intake will be quoted under - kind, currency,
+    market region, tax basis, payment terms, tiers. No client words: from
+    Stage 2 onward those arrive through the client's own link
+    (`POST /api/client/{token}/submit`), never typed in by the studio.
 
-    client_email: str = ""
-    client_phone: str = ""
-    scope: str = ""
-    budget_text: str = ""
+    `preset` is a loose dict, deliberately not a typed sub-model - it mirrors
+    `Intake.preset`, which is itself opaque storage for exactly this reason
+    (see its own docstring), and the one field inside it this route actually
+    reasons about (`currency`) is normalised below the same way `/api/proposals`
+    normalises it. Nothing here validates the rest, because nothing downstream
+    needs it validated yet: it is read back only to prefill the pad, by a
+    later task, and revalidated in full - `kind`, `market_region`, the payment
+    terms, `tiers` - the moment it is actually used to generate a quotation.
+    """
+
     preset: dict = Field(default_factory=dict)
 
 
-@app.post("/api/intakes", response_model=intakes.Intake, status_code=201, tags=["intakes"])
-async def create_intake(request: Request, body: IntakeRequest) -> intakes.Intake:
-    """Record a client request. Admin-only: an intake is the start of a price,
-    and issuing one is nearer to inviting somebody than to drafting a
-    quotation. This is deliberate rather than incidental - the gate's
-    member/admin split (`_gate`, main.py:311-319) only blocks a member's
-    POST to `/api/settings` and `/api/team`, so without this call a member's
-    POST here would go through unchecked."""
+#: Where a client's link points. `#/c/<token>` is the hash route Stage 2's
+#: client shell resolves ahead of the signed-in app - see
+#: `docs/superpowers/plans/2026-08-03-client-intake-stage-2.md`'s Task 7. The
+#: same shape `_invite_link` already uses for a teammate's invitation.
+def _client_link(token: str) -> str:
+    return f"{config.APP_ORIGIN.rstrip('/')}/#/c/{token}"
+
+
+class IntakeIssued(intakes.Intake):
+    """`Intake`'s own wire shape, plus the one thing `Intake.token`'s own
+    `exclude=True` deliberately drops: a link the studio can actually hand to
+    a client. Returned only by the two calls that mint a fresh token under an
+    admin's own hand - `create_intake` and `relink_intake` - never by
+    `list_intakes` or `read_intake`, which stay exactly as `Intake.token`'s
+    docstring requires: any member may read the queue, so the credential that
+    gates an unauthenticated route must not ride along with it.
+
+    This is Task 1's deferred boundary (see `intakes.py`, `Intake.token`'s
+    docstring, and the `RULING` in this branch's progress ledger): carry the
+    storage shape as-is, and let Task 6 design the split with the split's own
+    shape known. `IntakeIssued` inherits `token`'s exclusion unchanged rather
+    than reintroducing it in cleartext - `link` is derived, additive, and
+    built from the same field the wire has always hidden, not a second name
+    for the secret itself.
+
+    The other shape on offer was a dedicated `GET /api/intakes/{id}/link`,
+    admin-gated, callable any time rather than only at mint/reissue. Not
+    built: `intakes.relink`'s own docstring already names itself as the
+    studio's way to recover a link it lost or wants to resend, so a second,
+    non-mutating door onto the same secret would just be a second admin gate
+    to keep in sync with this one, for a need `relink` already answers.
+    """
+
+    link: str = ""
+
+
+def _issued(entry: intakes.Intake) -> IntakeIssued:
+    """Wrap a just-minted or just-reissued intake with its link. `entry`'s own
+    `token` never reaches `model_dump()` (`exclude=True`), so this cannot
+    accidentally leak it under its own name - only `link`, built from it by
+    hand, crosses the wire."""
+    return IntakeIssued(**entry.model_dump(), link=_client_link(entry.token))
+
+
+@app.post("/api/intakes", response_model=IntakeIssued, status_code=201, tags=["intakes"])
+async def create_intake(request: Request, body: IntakeRequest) -> IntakeIssued:
+    """Mint a client request from the studio's own PAD preset. Admin-only: an
+    intake is the start of a price, and issuing one is nearer to inviting
+    somebody than to drafting a quotation. This is deliberate rather than
+    incidental - the gate's member/admin split (`_gate`, main.py:311-319)
+    only blocks a member's POST to `/api/settings` and `/api/team`, so
+    without this call a member's POST here would go through unchecked.
+
+    Starts `issued` with a token already minted (`intakes.create` does both),
+    so the response can hand the studio a working link in the same call that
+    creates the record - there is no second step to reach it, and no window
+    where the intake exists but nothing points at it.
+    """
     _require_admin(request, "Only an admin of this workspace can record a client request.")
-    if not body.scope.strip():
-        raise HTTPException(status_code=422, detail="A request needs a scope.")
-    scope = _normalise_scope(body.scope)
-    budget_text = _normalise_budget_text(body.budget_text)
+    preset = dict(body.preset or {})
+    if "currency" in preset:
+        preset["currency"] = _normalise_currency(preset.get("currency", ""))
     try:
-        return intakes.create(
-            client_email=body.client_email,
-            client_phone=body.client_phone,
-            scope=scope,
-            budget_text=budget_text,
-            preset=body.preset,
+        entry = intakes.create(
+            client_email="",
+            client_phone="",
+            scope="",
+            budget_text="",
+            preset=preset,
             created_by=_who_email(request),
         )
     except intakes.IntakeError as exc:
@@ -2573,6 +2631,7 @@ async def create_intake(request: Request, body: IntakeRequest) -> intakes.Intake
         # full disk, a permissions problem). That is ours to report, not a
         # 409 implying the caller sent something to fix and retry.
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _issued(entry)
 
 
 @app.get("/api/intakes", response_model=List[intakes.Intake], tags=["intakes"])
@@ -2614,6 +2673,103 @@ async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
         return intakes.close(intake_id, _who_email(request))
     except intakes.IntakeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _quoted_bundle(entry: intakes.Intake, bundle_id: str) -> bool:
+    """Whether `bundle_id` is one this intake was actually quoted with -
+    membership in `entry.bundle_ids`, not existence in `storage`: the
+    question `send_intake` is asking is "did PRISM quote this for *this*
+    request", not "does a bundle with this id exist at all" - a real bundle
+    id that belongs to a different intake must be refused exactly like one
+    that was simply guessed. Its own name, rather than inlined into the
+    route, so the guard is one thing a test can disable on its own to prove
+    the route's refusal actually depends on it."""
+    return bundle_id in entry.bundle_ids
+
+
+class IntakeSendRequest(BaseModel):
+    """Which of a re-quotable intake's `bundle_ids` is the one being shown to
+    the client. Explicit rather than assumed (`bundle_ids[0]`, say): a second
+    Generate pass replaces `bundle_ids` wholesale (see `intakes.ALLOWED`'s own
+    docstring on `QUOTED: {PREPARING, ...}`), and by the time a studio is
+    ready to send, more than one candidate can be on file."""
+
+    bundle_id: str = ""
+
+
+@app.post("/api/intakes/{intake_id}/send", response_model=intakes.Intake, tags=["intakes"])
+async def send_intake(request: Request, intake_id: str, body: IntakeSendRequest) -> intakes.Intake:
+    """Hand a prepared quotation to the client: `quoted -> sent`, with
+    `sent_bundle_id` naming which bundle and `sent_at` stamping when.
+    Admin-only, the same side of the line as issuing and closing a request -
+    this is the call that starts the client's own clock (`clientview.of`
+    reads `sent_at`, never `bundle.created_at`, to tell them when they were
+    actually shown something), so a member should not be able to trigger it
+    alone.
+
+    `bundle_id` is required and must already be one of this intake's own
+    `bundle_ids` - checked by membership, not by re-reading `storage` for the
+    bundle itself, because the question here is "did PRISM quote this for
+    *this* request", not "does this id exist at all". A bundle id that is
+    real but belongs to a different intake, or was simply guessed, is
+    refused exactly like one that names nothing.
+    """
+    _require_admin(request, "Only an admin of this workspace can send a quotation to a client.")
+    bundle_id = (body.bundle_id or "").strip()
+    if not bundle_id:
+        raise HTTPException(status_code=400, detail="Say which bundle to send.")
+
+    entry = intakes.get(intake_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="That request does not exist.")
+    if not _quoted_bundle(entry, bundle_id):
+        raise HTTPException(
+            status_code=400,
+            detail="That bundle was not quoted for this request.",
+        )
+    try:
+        return intakes.advance(
+            intake_id,
+            intakes.SENT,
+            sent_bundle_id=bundle_id,
+            sent_at=storage.utc_now_iso(),
+        )
+    except intakes.IntakeWriteError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except intakes.IntakeError as exc:
+        # Not a brand-new record like `create_intake`'s catch above - this one
+        # already exists, so anything `advance` still refuses is a real state
+        # conflict (not `quoted`, most likely a second send) rather than a
+        # write failure, and 409 says that plainly instead of implying a 500.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/intakes/{intake_id}/relink", response_model=IntakeIssued, tags=["intakes"])
+async def relink_intake(request: Request, intake_id: str) -> IntakeIssued:
+    """Reissue a client's link, killing the one before it outright - a link a
+    client lost, or one a studio wants to resend once `intakes.LIFETIME_DAYS`
+    is getting close. Admin-only, the same side of the line as minting the
+    first link in the first place.
+
+    Existence is checked here, ahead of the call, for the same reason
+    `close_intake` checks it first: `intakes.relink` raises plain
+    `IntakeError` for "does not exist" and for "closed, nothing to reissue"
+    alike, and only the second of those is this route's business to report
+    once existence is no longer in question. `IntakeWriteError` - `_write`'s
+    own wrapped `OSError` - is caught ahead of that generic case for the same
+    reason `_client_advance` catches it first: a failed save is not a refusal
+    and must not be reported as one.
+    """
+    _require_admin(request, "Only an admin of this workspace can reissue a client's link.")
+    if intakes.get(intake_id) is None:
+        raise HTTPException(status_code=404, detail="That request does not exist.")
+    try:
+        reissued = intakes.relink(intake_id)
+    except intakes.IntakeWriteError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except intakes.IntakeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _issued(reissued)
 
 
 # --- The client's own door (Stage 2 Tasks 3-4) --------------------------------

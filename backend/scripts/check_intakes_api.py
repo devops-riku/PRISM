@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import config  # noqa: E402
 from app import intakes as intakes_module  # noqa: E402
+from app import main as main_module  # noqa: E402
 from app import workspaces  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -40,64 +41,103 @@ def ok(label: str, condition: bool) -> None:
         FAILURES.append(label)
 
 
+def _token_from_link(link: str) -> str:
+    return link.rsplit("/", 1)[-1]
+
+
+def _quoted(bundle_ids: list) -> intakes_module.Intake:
+    """An intake walked straight to `quoted`, with `bundle_ids` set exactly as
+    given - through the module, not the API, since there is no model here to
+    actually produce a quotation. Assumes the caller has already pointed
+    `workspaces` at the workspace this should live in."""
+    entry = intakes_module.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={}, created_by="",
+    )
+    intakes_module.advance(entry.id, intakes_module.SUBMITTED)
+    intakes_module.advance(entry.id, intakes_module.PREPARING, job_id="job-fixture")
+    return intakes_module.advance(entry.id, intakes_module.QUOTED, bundle_ids=list(bundle_ids))
+
+
 workspaces.ensure_ready()
 made = workspaces.create("Neptune Labs")
 client = TestClient(app)
 headers = {"X-Workspace": made.id}
 
+# --- Creation: a preset, no client words -------------------------------------
+
 created = client.post(
     "/api/intakes",
     headers=headers,
     json={
-        "client_email": "buyer@client.com",
-        "client_phone": "+63 917 000 0000",
-        "scope": "A booking site for two clinics.",
-        "budget_text": "around 300k",
-        "preset": {"kind": "software", "currency": "PHP"},
+        "preset": {
+            "kind": "software",
+            "currency": "php",
+            "market_region": "Philippines",
+            "tiers": "Basic, Standard",
+        }
     },
 )
 ok("creating an intake answers 201", created.status_code == 201)
 body = created.json()
-# Stage 2: `intakes.create` now starts every intake `issued`, with a link
-# already minted, rather than `submitted` - this route still collects the
-# client's words directly (that does not change until a later task rewires
-# it), but the record it produces is issued from the moment it exists.
-ok("it comes back issued, not submitted", body["state"] == "issued")
-# The token is a bearer credential, not a field: this route has no admin
-# check by its own design (any member may read the queue), so the link that
-# is about to gate an unauthenticated route (Task 3) must never reach a
-# response that carries an `Intake` straight onto the wire. `intakes.py`
-# marks the field `exclude=True` for exactly this; asserted here at the API
-# boundary rather than only on the model, since that is where it matters.
-ok("but the client link itself never reaches the wire", "token" not in body)
-ok("with the client's words", body["scope"] == "A booking site for two clinics.")
+ok("it comes back issued", body["state"] == "issued")
+ok("with the preset stored", body["preset"]["kind"] == "software")
+ok("currency in the preset is normalised the same way /api/proposals normalises it", body["preset"]["currency"] == "PHP")
+ok("no client words were ever collected - scope is empty", body["scope"] == "")
+ok("nor budget_text", body["budget_text"] == "")
 
-# A client's words are unbounded text reaching a prompt PRISM has always
-# trusted - `scope` and `budget_text` need the same ceiling `brief` has
-# always had (main.py's `_normalise_brief`), before any public route can
-# reach them. Rejected outright, not silently truncated, and neither creates
-# a row - the count check below still expects exactly one.
-over_scope = client.post(
+# The token is a bearer credential, not a field: `GET /api/intakes` and
+# `GET /api/intakes/{id}` have no admin check by design (any member may read
+# the queue), so the link that gates an unauthenticated route (Task 3) must
+# never reach a response that carries it under its own name. `intakes.py`
+# marks the field `exclude=True` for exactly this. `POST /api/intakes` is the
+# one call that is allowed to hand it back - Task 1's own ruling - and it does
+# so as a derived `link`, not as `token` itself.
+ok("the raw token never reaches the wire, even here", "token" not in body)
+ok("but a link is handed back instead", bool(body.get("link")))
+ok("built from this server's own origin", body["link"].startswith(config.APP_ORIGIN))
+
+created_token = _token_from_link(body["link"])
+ok(
+    "and the link actually works - the client door resolves it",
+    client.get(f"/api/client/{created_token}").status_code == 200,
+)
+
+# A studio can still send the client's own words in the body (an old caller,
+# a copy-pasted request) and they simply never land anywhere - `IntakeRequest`
+# has no field for them, so pydantic drops what it does not declare rather
+# than rejecting the call outright.
+ignored_words = client.post(
     "/api/intakes",
     headers=headers,
-    json={"scope": "x" * (config.MAX_BRIEF_CHARS + 1)},
+    json={
+        "scope": "A booking site for two clinics.",
+        "budget_text": "around 300k",
+        "client_email": "buyer@client.com",
+        "preset": {"kind": "software"},
+    },
 )
-ok("an over-length scope is refused, not truncated silently", over_scope.status_code == 400)
+ok("a body carrying old client fields still creates: 201", ignored_words.status_code == 201)
+ok("...but none of them took", ignored_words.json()["scope"] == "" and ignored_words.json()["client_email"] == "")
 
-over_budget = client.post(
+bad_currency = client.post(
     "/api/intakes",
     headers=headers,
-    json={"scope": "Fine.", "budget_text": "x" * (config.MAX_BRIEF_CHARS + 1)},
+    json={"preset": {"currency": "not-a-code"}},
 )
-ok("an over-length budget_text is refused the same way", over_budget.status_code == 400)
+ok(
+    "a bad currency in the preset is refused, not stored silently",
+    bad_currency.status_code == 400,
+)
 
 listed = client.get("/api/intakes", headers=headers)
-ok("the queue lists it", listed.status_code == 200 and len(listed.json()) == 1)
+ok("the queue lists it", listed.status_code == 200 and len(listed.json()) >= 1)
 ok("and the queue never carries a token either", "token" not in listed.json()[0])
+ok("nor a link - GET /api/intakes has no admin check by design", "link" not in listed.json()[0])
 
 read = client.get(f"/api/intakes/{body['id']}", headers=headers)
 ok("it reads back by id", read.status_code == 200 and read.json()["id"] == body["id"])
-ok("nor does reading it back by id", "token" not in read.json())
+ok("nor does reading it back by id carry the token", "token" not in read.json())
+ok("nor the link - same reasoning as the queue", "link" not in read.json())
 
 ok(
     "an unknown id is 404, not 500",
@@ -133,6 +173,127 @@ ok(
         f"/api/intakes/{body['id']}/close", headers={"X-Workspace": other.id}
     ).status_code
     == 404,
+)
+
+# --- Relink: a fresh link, the old one dead ----------------------------------
+
+relinkable = client.post("/api/intakes", headers=headers, json={"preset": {}})
+relinkable_id = relinkable.json()["id"]
+old_token = _token_from_link(relinkable.json()["link"])
+
+relinked = client.post(f"/api/intakes/{relinkable_id}/relink", headers=headers)
+ok("relinking answers 200", relinked.status_code == 200)
+relinked_body = relinked.json()
+ok("the raw token still never reaches the wire", "token" not in relinked_body)
+new_token = _token_from_link(relinked_body["link"])
+ok("relinking mints a genuinely different token", new_token != old_token)
+
+# Proven at the client's own door, not by reading `intakes_module.get(...)`
+# back - the point of `relink` is what a stranger holding the *old* link can
+# and cannot do, and this is the strongest evidence of that.
+ok("the old link is dead", client.get(f"/api/client/{old_token}").status_code == 404)
+ok("the new link works", client.get(f"/api/client/{new_token}").status_code == 200)
+
+ok(
+    "relinking an unknown id is 404",
+    client.post("/api/intakes/000000000000/relink", headers=headers).status_code == 404,
+)
+
+closed_for_relink = client.post("/api/intakes", headers=headers, json={"preset": {}})
+closed_for_relink_id = closed_for_relink.json()["id"]
+client.post(f"/api/intakes/{closed_for_relink_id}/close", headers=headers)
+ok(
+    "relinking a closed request is refused, not a silent no-op token",
+    client.post(f"/api/intakes/{closed_for_relink_id}/relink", headers=headers).status_code == 409,
+)
+
+# --- Send: bundle_id is required, checked, and stamps sent_at ---------------
+#
+# Task 2 added `Intake.sent_at` and nothing wrote it - every client would see
+# a blank sent date forever, and no assertion anywhere would fail, until this
+# route exists and is proven to stamp it.
+
+workspaces.use(made.id)
+send_target = _quoted(["aaaaaaaaaaaa", "bbbbbbbbbbbb"])
+
+missing_bundle = client.post(f"/api/intakes/{send_target.id}/send", headers=headers, json={})
+ok("sending with no bundle_id is refused: 400", missing_bundle.status_code == 400)
+
+wrong_bundle = client.post(
+    f"/api/intakes/{send_target.id}/send",
+    headers=headers,
+    json={"bundle_id": "cccccccccccc"},
+)
+ok(
+    "a bundle_id that was not quoted for this request is refused: 400",
+    wrong_bundle.status_code == 400,
+)
+ok(
+    "...and the intake was not moved by the refused attempt",
+    intakes_module.get(send_target.id).state == intakes_module.QUOTED,
+)
+
+sent = client.post(
+    f"/api/intakes/{send_target.id}/send",
+    headers=headers,
+    json={"bundle_id": "bbbbbbbbbbbb"},
+)
+ok("sending a bundle that was actually quoted answers 200", sent.status_code == 200)
+sent_body = sent.json()
+ok("the state moves quoted -> sent", sent_body["state"] == "sent")
+ok("sent_bundle_id names the one actually sent, not bundle_ids[0]", sent_body["sent_bundle_id"] == "bbbbbbbbbbbb")
+ok("sent_at is stamped - this is the gap Task 2 left open", bool(sent_body.get("sent_at")))
+
+ok(
+    "sending an already-sent request is refused: 409, not a silent re-send",
+    client.post(
+        f"/api/intakes/{send_target.id}/send",
+        headers=headers,
+        json={"bundle_id": "aaaaaaaaaaaa"},
+    ).status_code
+    == 409,
+)
+ok(
+    "sending an unknown id is 404",
+    client.post(
+        "/api/intakes/000000000000/send", headers=headers, json={"bundle_id": "aaaaaaaaaaaa"}
+    ).status_code
+    == 404,
+)
+
+# --- Mutation proof: the bundle-membership guard actually gates the route ---
+#
+# A 400 above is only evidence the check works if disabling the check would
+# make the assertion fail. Proven by breaking `main_module._quoted_bundle` -
+# the one function `send_intake` calls to decide membership - and watching a
+# bundle id that was never quoted get accepted anyway.
+
+mutation_target = _quoted(["dddddddddddd"])
+_real_quoted_bundle = main_module._quoted_bundle
+
+
+def _always_quoted(*_args, **_kwargs) -> bool:
+    return True
+
+
+try:
+    main_module._quoted_bundle = _always_quoted
+    mutated = client.post(
+        f"/api/intakes/{mutation_target.id}/send",
+        headers=headers,
+        json={"bundle_id": "cccccccccccc"},  # not in mutation_target's own bundle_ids
+    )
+finally:
+    main_module._quoted_bundle = _real_quoted_bundle
+
+ok(
+    "mutation: with the membership guard disabled, an unquoted bundle id is accepted - "
+    "proving the 400 above depends on the real check, not on something else refusing it",
+    mutated.status_code == 200,
+)
+ok(
+    "...and it would have recorded exactly the wrong bundle, which is the bug the guard exists to prevent",
+    mutated.json().get("sent_bundle_id") == "cccccccccccc",
 )
 
 # --- The permission model - the thing this task actually adds --------------
@@ -198,13 +359,13 @@ no_token_headers = {"X-Workspace": secured.id}  # workspace named, nobody signed
 ok(
     "a member cannot create an intake: 403",
     client.post(
-        "/api/intakes", headers=member_headers, json={"scope": "A member's attempt."}
+        "/api/intakes", headers=member_headers, json={"preset": {"kind": "software"}}
     ).status_code
     == 403,
 )
 
 admin_created = client.post(
-    "/api/intakes", headers=admin_headers, json={"scope": "An admin's request."}
+    "/api/intakes", headers=admin_headers, json={"preset": {"kind": "software"}}
 )
 ok("an admin can create one: 201", admin_created.status_code == 201)
 secured_id = admin_created.json()["id"]
@@ -218,7 +379,8 @@ ok(
     client.post(f"/api/intakes/{secured_id}/close", headers=admin_headers).status_code == 200,
 )
 
-# Reading isn't gated - only issuing and closing are - so a member sees both.
+# Reading isn't gated - only issuing, closing, sending and relinking are - so
+# a member sees both.
 ok(
     "a member can list the queue: 200",
     client.get("/api/intakes", headers=member_headers).status_code == 200,
@@ -228,12 +390,47 @@ ok(
     client.get(f"/api/intakes/{secured_id}", headers=member_headers).status_code == 200,
 )
 
+# `secured_id` is closed by this point, so relink/send need fixtures of their
+# own - a closed intake refuses both for reasons that have nothing to do with
+# the permission model this section exists to test.
+relink_target = client.post(
+    "/api/intakes", headers=admin_headers, json={"preset": {}}
+).json()
+
+ok(
+    "a member cannot relink an intake: 403",
+    client.post(f"/api/intakes/{relink_target['id']}/relink", headers=member_headers).status_code
+    == 403,
+)
+admin_relinked = client.post(f"/api/intakes/{relink_target['id']}/relink", headers=admin_headers)
+ok("an admin can relink the same one: 200", admin_relinked.status_code == 200)
+ok("...and gets a working link back, not a bare state change", bool(admin_relinked.json().get("link")))
+
+workspaces.use(secured.id)
+secured_quoted = _quoted(["eeeeeeeeeeee"])
+
+ok(
+    "a member cannot send a quotation: 403",
+    client.post(
+        f"/api/intakes/{secured_quoted.id}/send",
+        headers=member_headers,
+        json={"bundle_id": "eeeeeeeeeeee"},
+    ).status_code
+    == 403,
+)
+admin_sent = client.post(
+    f"/api/intakes/{secured_quoted.id}/send",
+    headers=admin_headers,
+    json={"bundle_id": "eeeeeeeeeeee"},
+)
+ok("an admin can send the same one: 200", admin_sent.status_code == 200)
+
 # No token at all is refused by the gate before any route runs - true for
 # routes a member may call as much as ones only an admin may.
 ok(
     "no Authorization header: creating is 401",
     client.post(
-        "/api/intakes", headers=no_token_headers, json={"scope": "No token."}
+        "/api/intakes", headers=no_token_headers, json={"preset": {}}
     ).status_code
     == 401,
 )
@@ -248,6 +445,20 @@ ok(
 ok(
     "no Authorization header: closing is 401",
     client.post(f"/api/intakes/{secured_id}/close", headers=no_token_headers).status_code
+    == 401,
+)
+ok(
+    "no Authorization header: relinking is 401",
+    client.post(f"/api/intakes/{relink_target['id']}/relink", headers=no_token_headers).status_code
+    == 401,
+)
+ok(
+    "no Authorization header: sending is 401",
+    client.post(
+        f"/api/intakes/{secured_quoted.id}/send",
+        headers=no_token_headers,
+        json={"bundle_id": "eeeeeeeeeeee"},
+    ).status_code
     == 401,
 )
 
@@ -284,7 +495,7 @@ ok(
 try:
     intakes_module.create = _boom_create
     broken_create = client.post(
-        "/api/intakes", headers=admin_headers, json={"scope": "Also a regression fixture."}
+        "/api/intakes", headers=admin_headers, json={"preset": {}}
     )
 finally:
     intakes_module.create = _real_create
