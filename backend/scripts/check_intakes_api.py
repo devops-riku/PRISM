@@ -58,7 +58,12 @@ created = client.post(
 )
 ok("creating an intake answers 201", created.status_code == 201)
 body = created.json()
-ok("it comes back submitted", body["state"] == "submitted")
+# Stage 2: `intakes.create` now starts every intake `issued`, with a link
+# already minted, rather than `submitted` - this route still collects the
+# client's words directly (that does not change until a later task rewires
+# it), but the record it produces is issued from the moment it exists.
+ok("it comes back issued, not submitted", body["state"] == "issued")
+ok("and carries a client link already", bool(body.get("token")))
 ok("with the client's words", body["scope"] == "A booking site for two clinics.")
 
 # A client's words are unbounded text reaching a prompt PRISM has always

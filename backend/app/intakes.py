@@ -20,30 +20,42 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app import storage, workspaces
+from app import storage, tokens, workspaces
 
 logger = logging.getLogger("prism.intakes")
 
 DIRNAME = "_intakes"
 
-#: Reachable in Stage 1.
+#: How long a client's link is good for. Longer than `members.INVITE_DAYS`
+#: (14 days, for a teammate accepting a place already offered to them) on
+#: purpose: a client deciding whether to commission a studio at all is on a
+#: slower clock, and a link that expired mid-decision would read as the
+#: studio changing its mind rather than as a courtesy about stale mail.
+LIFETIME_DAYS = 60
+
+#: The lifecycle, in the order a request normally moves through it. Stage 1
+#: built the machine and reached `submitted` through `quote_failed`; every
+#: name below has existed since Stage 1 (see `ALLOWED`'s history) but
+#: `issued`, `sent`, `revision_requested` and `finalized` were refused until
+#: Stage 2 opened them.
+ISSUED = "issued"
 SUBMITTED = "submitted"
 PREPARING = "preparing"
 QUOTED = "quoted"
 QUOTE_FAILED = "quote_failed"
-CLOSED = "closed"
-
-#: Written now, refused until Stage 2 wires the actor that can reach them. The
-#: machine is defined once; a later stage turns these on rather than adding them.
-ISSUED = "issued"
 SENT = "sent"
 REVISION_REQUESTED = "revision_requested"
 FINALIZED = "finalized"
+#: Written since Stage 1, present in the table below, and still not
+#: reachable: nothing calls `advance(..., PROPOSAL_SENT)` until Stage 3
+#: builds the actor that sends a finalized proposal onward.
 PROPOSAL_SENT = "proposal_sent"
+CLOSED = "closed"
 
 #: What may follow what. A move not listed here is refused, which is what makes
 #: this a state machine rather than a string field somebody assigns to.
@@ -64,23 +76,45 @@ PROPOSAL_SENT = "proposal_sent"
 #: record answers "what is this request currently quoted at", not "everything
 #: it has ever been quoted at" - a Stage 2 reader deciding which bundle the
 #: client sees needs the latest, not a history, and a history is what
-#: appending would have built by accident.
+#: appending would have built by accident. `REVISION_REQUESTED: {PREPARING,
+#: ...}` follows the same rule for the same reason: a re-quote after a client
+#: asks for a change replaces the quotation exactly as a second Generate
+#: always has. `revisions` (below) is the log `bundle_ids` deliberately is
+#: not - every round the client asks for is appended there, never
+#: overwritten, because "what has this client asked for, in order" is a
+#: history and pretending otherwise is what would lose it.
 ALLOWED: dict = {
+    ISSUED: {SUBMITTED, CLOSED},
     SUBMITTED: {PREPARING, CLOSED},
     PREPARING: {QUOTED, QUOTE_FAILED, CLOSED},
-    QUOTED: {PREPARING, CLOSED},
+    QUOTED: {PREPARING, SENT, CLOSED},
     QUOTE_FAILED: {PREPARING, CLOSED},
+    SENT: {REVISION_REQUESTED, FINALIZED, CLOSED},
+    REVISION_REQUESTED: {PREPARING, CLOSED},
+    FINALIZED: {PROPOSAL_SENT, CLOSED},
+    PROPOSAL_SENT: {CLOSED},
     CLOSED: set(),
 }
-
-#: Defined, and deliberately unreachable until Stage 2.
-STAGE_TWO = {ISSUED, SENT, REVISION_REQUESTED, FINALIZED, PROPOSAL_SENT}
 
 #: The only fields a transition may write. `id`, `state`, `created_at` and every
 #: other bookkeeping field are deliberately absent, so a caller can never fork a
 #: record onto a new id or overwrite a pydantic method by passing its name as a
 #: keyword - both were reachable through the `hasattr` check this replaces.
-ADVANCE_FIELDS = {"job_id", "bundle_ids", "document_id", "priced_scope", "priced_budget", "error"}
+#:
+#: `revisions` and `sent_bundle_id` are Stage 2's additions: the first is the
+#: log `REVISION_REQUESTED` appends to, the second is which bundle among
+#: `bundle_ids` a `send` call actually sent - named explicitly rather than
+#: assumed, since a re-quoted intake can have more than one candidate on file.
+ADVANCE_FIELDS = {
+    "job_id",
+    "bundle_ids",
+    "document_id",
+    "priced_scope",
+    "priced_budget",
+    "error",
+    "revisions",
+    "sent_bundle_id",
+}
 
 
 class IntakeError(Exception):
@@ -91,9 +125,17 @@ class Intake(BaseModel):
     """One client request and everything that has happened to it."""
 
     id: str = ""
-    state: str = SUBMITTED
+    state: str = ISSUED
     created_at: str = ""
     created_by: str = ""
+
+    #: The client's own link, as a bare token - `intakes.get` resolves it to
+    #: this record, so nothing else needs to know an intake id exists.
+    #: Minted at `create`, replaced wholesale by `relink`, never edited in
+    #: place: a copy of an old link a client bookmarked has to stop meaning
+    #: anything the moment a new one is issued.
+    token: str = ""
+    token_expires_at: str = ""
 
     # What the client said. Kept verbatim, never rewritten.
     client_email: str = ""
@@ -114,6 +156,17 @@ class Intake(BaseModel):
     priced_scope: str = ""
     priced_budget: str = ""
     error: str = ""
+
+    #: What the client asked to change, in the order they asked it - a log,
+    #: unlike `priced_scope`, because "what has this client asked for" is a
+    #: history a studio needs whole, not just its latest line. Each entry is
+    #: `{"asked": ..., "at": ...}`.
+    revisions: List[dict] = Field(default_factory=list)
+    #: Which of `bundle_ids` was actually sent to the client. A re-quoted
+    #: intake can have produced more than one candidate bundle by the time
+    #: `send` runs, so this says which one the client saw rather than
+    #: leaving a reader to guess `bundle_ids[0]`.
+    sent_bundle_id: str = ""
 
     closed_at: str = ""
     closed_by: str = ""
@@ -150,6 +203,14 @@ def _write(entry: Intake) -> Intake:
     return entry
 
 
+def _later(days: int) -> str:
+    """`days` from now, in the same ISO-8601-with-`Z` shape `storage.utc_now_iso`
+    produces - `token_expires_at` has to compare against that shape the same
+    way `members._expired` already relies on for invitations."""
+    when = datetime.now(timezone.utc) + timedelta(days=days)
+    return when.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def create(
     *,
     client_email: str,
@@ -159,12 +220,20 @@ def create(
     preset: dict,
     created_by: str,
 ) -> Intake:
-    """Record a request. Starts at `submitted`: in Stage 1 the studio types in
-    what the client told them, so there is no link to issue and nothing to wait
-    for."""
+    """Record a request, and mint the link the client will use to see it.
+
+    Starts at `issued`, not `submitted`: Stage 2 gives every intake a link
+    from the moment it exists, whether the studio typed the client's words in
+    directly - the only way this route works today - or, once a later task
+    rewires it, collected nothing but a PAD preset and left the client to
+    supply the rest through that link. Either way there is now something to
+    wait for - the client opening it - which `submitted` never had to
+    describe.
+    """
+    token = tokens.mint()
     entry = Intake(
         id=storage.new_id(),
-        state=SUBMITTED,
+        state=ISSUED,
         created_at=storage.utc_now_iso(),
         created_by=created_by,
         client_email=client_email.strip(),
@@ -172,9 +241,48 @@ def create(
         scope=scope.strip(),
         budget_text=budget_text.strip(),
         preset=dict(preset or {}),
+        token=token,
+        token_expires_at=_later(LIFETIME_DAYS),
     )
     with _lock:
-        return _write(entry)
+        written = _write(entry)
+    # Outside the lock: `remember` takes its own, and holding two locks
+    # across a call into another module invites a deadlock the moment
+    # either one's locking order changes. The gap this opens - written to
+    # disk but not yet in the index - is harmless either way it closes: in
+    # this process, `remember` runs a moment later; if the process dies in
+    # between, the token is simply one `tokens.resolve` hasn't seen yet, and
+    # the next miss triggers the lazy walk that finds it on disk regardless.
+    tokens.remember(token, workspaces.current(), written.id)
+    return written
+
+
+def relink(intake_id: str) -> Intake:
+    """Issue a fresh link for an intake, killing the one before it outright.
+
+    Not a state change - a link a client lost, or one a studio wants to
+    resend after `LIFETIME_DAYS`, has nothing to do with how far the
+    conversation has actually got. `token_expires_at` is reset from now
+    rather than extended from whatever was left of the original, so a relink
+    genuinely buys another `LIFETIME_DAYS`, not just what remained of the
+    first one.
+    """
+    with _lock:
+        entry = get(intake_id)
+        if entry is None:
+            raise IntakeError("That request does not exist.")
+        old_token = entry.token
+        entry.token = tokens.mint()
+        entry.token_expires_at = _later(LIFETIME_DAYS)
+        written = _write(entry)
+
+    # Outside the lock, for the same reason `create` does it - and the same
+    # gap if the process dies here: the file on disk already has the new
+    # token and no longer has the old one, so the next miss's lazy walk
+    # lands on the correct, current state either way.
+    tokens.forget_token(old_token)
+    tokens.remember(written.token, workspaces.current(), written.id)
+    return written
 
 
 def get(intake_id: str) -> Intake | None:
@@ -209,8 +317,6 @@ def advance(intake_id: str, to: str, **fields) -> Intake:
         entry = get(intake_id)
         if entry is None:
             raise IntakeError("That request does not exist.")
-        if to in STAGE_TWO:
-            raise IntakeError(f"{to} is not reachable until the client link ships.")
         if to not in ALLOWED:
             raise IntakeError(f"{to} is not a state.")
         if to not in ALLOWED.get(entry.state, set()):
@@ -255,7 +361,11 @@ def close(intake_id: str, by: str) -> Intake:
 def forget(workspace_id: str) -> None:
     """Called when a workspace is deleted. Workspace ids are reusable, so an
     intake that outlived its workspace would surface inside somebody else's."""
-    # Nothing is cached in memory, and `workspaces.delete` has already removed
-    # the folder these live in. This exists so the call site reads completely
-    # and so a future cache cannot be added without a place to clear it.
+    # Nothing about an intake's own record is cached in memory here, and
+    # `workspaces.delete` has already removed the folder these live in. This
+    # exists so the call site reads completely and so a future cache on this
+    # module cannot be added without a place to clear it - `tokens._index` is
+    # exactly that cache for intake *tokens*, which is why `workspaces.delete`
+    # calls `tokens.forget_workspace` as its own separate step rather than
+    # folding it in here.
     logger.info("Intakes forgotten with workspace %s", workspace_id)

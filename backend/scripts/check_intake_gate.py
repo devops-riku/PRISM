@@ -152,6 +152,13 @@ entry = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+# Stage 1 built this pipeline against intakes that started `submitted`.
+# Stage 2's `intakes.create` now starts every intake `issued` instead - the
+# client's own submit route is what performs this hop for real once it
+# ships, and until `/api/intakes` stops taking client words at all, this
+# fixture stands in for it. Every intake below that goes through
+# `/api/proposals` needs the same hop, for the same reason.
+intakes.advance(entry.id, intakes.SUBMITTED)
 
 main.generate_estimate = stub_estimate
 response = client.post(
@@ -214,6 +221,7 @@ tiered = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+intakes.advance(tiered.id, intakes.SUBMITTED)  # see the comment above `entry`
 main.generate_estimate = stub_estimate
 client.post(
     "/api/proposals",
@@ -243,6 +251,7 @@ second = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+intakes.advance(second.id, intakes.SUBMITTED)  # see the comment above `entry`
 main.generate_estimate = stub_failure
 client.post(
     "/api/proposals",
@@ -268,6 +277,7 @@ config_broken = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+intakes.advance(config_broken.id, intakes.SUBMITTED)  # see the comment above `entry`
 main.generate_estimate = stub_config_error
 client.post(
     "/api/proposals",
@@ -293,6 +303,7 @@ response_broken = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+intakes.advance(response_broken.id, intakes.SUBMITTED)  # see the comment above `entry`
 main.generate_estimate = stub_response_error
 client.post(
     "/api/proposals",
@@ -321,6 +332,7 @@ target_broken = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+intakes.advance(target_broken.id, intakes.SUBMITTED)  # see the comment above `entry`
 main.generate_estimate = stub_estimate
 client.post(
     "/api/proposals",
@@ -376,6 +388,11 @@ broken_stamp = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+# Advanced for real, before `intakes.advance` gets monkeypatched below - the
+# assertion after this block expects the intake to still be `submitted`
+# because the stamp genuinely never landed, and that is only true if it
+# reached `submitted` before the patch was in place to swallow it.
+intakes.advance(broken_stamp.id, intakes.SUBMITTED)
 main.generate_estimate = stub_estimate
 try:
     intakes.advance = _boom_advance

@@ -5,7 +5,9 @@ Runs offline against a scratch `generated/` directory:
     cd backend
     .venv/Scripts/python.exe scripts/check_intakes.py
 
-Exit code 0 means the state machine only allows what Stage 1 allows.
+Exit code 0 means the state machine only allows what this table allows -
+Stage 1's states, plus `issued`, `sent`, `revision_requested`, `finalized`
+and `proposal_sent`, now open.
 """
 
 from __future__ import annotations
@@ -52,12 +54,14 @@ entry = intakes.create(
     created_by="riku@neptune.ph",
 )
 
-ok("an intake starts at submitted", entry.state == intakes.SUBMITTED)
+ok("an intake starts at issued, not submitted", entry.state == intakes.ISSUED)
 ok("it carries the client's words verbatim", entry.scope == "A booking site for two clinics.")
 ok("and their budget as text, not a number", entry.budget_text == "around 300k")
 ok("it has a 12-character id", len(entry.id) == 12)
 ok("it is readable again", intakes.get(entry.id) is not None)
 ok("and it is in the listing", [row.id for row in intakes.listing()] == [entry.id])
+ok("it is minted with a client link", bool(entry.token))
+ok("and an expiry for that link", bool(entry.token_expires_at))
 
 # An id is a caller-supplied string before it is anything else. Planted three
 # directories above `_intakes/` - exactly where `../../../secret` and its
@@ -83,7 +87,13 @@ ok(
 )
 ok("a 12-character id that is not hex is refused", intakes.get("zzzzzzzzzzzz") is None)
 
-# The Stage 1 path.
+# `issued -> submitted` is the hop Stage 2 put in front of Stage 1's path.
+# The client's own submit route performs it for real once it ships; here it
+# stands in for a studio that already has everything it needs to move on,
+# exactly as Stage 1's flow always did the moment an intake was created.
+intakes.advance(entry.id, intakes.SUBMITTED)
+ok("issued -> submitted", intakes.get(entry.id).state == intakes.SUBMITTED)
+
 intakes.advance(entry.id, intakes.PREPARING, job_id="j1")
 ok("submitted -> preparing", intakes.get(entry.id).state == intakes.PREPARING)
 
@@ -98,13 +108,6 @@ quoted = intakes.get(entry.id)
 ok("preparing -> quoted", quoted.state == intakes.QUOTED)
 ok("the bundle is recorded", quoted.bundle_ids == ["abc123def456"])
 ok("what was actually priced is kept apart from what was asked", quoted.priced_scope != quoted.scope)
-
-# The states Stage 2 turns on are refused now.
-refuses("quoted -> sent is refused in stage 1", lambda: intakes.advance(entry.id, intakes.SENT))
-refuses(
-    "quoted -> finalized is refused in stage 1",
-    lambda: intakes.advance(entry.id, intakes.FINALIZED),
-)
 
 # A second Generate on an already-quoted intake is reachable in the shipped
 # UI (Price this -> pad -> Generate -> browser Back -> Generate again), so
@@ -122,6 +125,104 @@ ok("anything -> closed", closed.state == intakes.CLOSED)
 ok("closed records who", closed.closed_by == "riku@neptune.ph")
 refuses("closed is terminal", lambda: intakes.advance(entry.id, intakes.PREPARING))
 
+# --- The states Stage 2 opens: written since Stage 1, refused until now. A
+#     fresh intake, walked start to finish, so a wrong ALLOWED entry shows up
+#     as a state the record could not reach, not as a refusal nobody
+#     expected to see refused. ------------------------------------------
+
+opened = intakes.create(
+    client_email="opened@client.com",
+    client_phone="",
+    scope="A full walk through the states Stage 2 opens.",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+intakes.advance(opened.id, intakes.SUBMITTED)
+intakes.advance(opened.id, intakes.PREPARING, job_id="jo1")
+intakes.advance(
+    opened.id, intakes.QUOTED, bundle_ids=["aaaaaaaaaaaa"], priced_scope="x", priced_budget="y"
+)
+
+sent = intakes.advance(opened.id, intakes.SENT, sent_bundle_id="aaaaaaaaaaaa")
+ok("quoted -> sent is reachable now the client link ships", sent.state == intakes.SENT)
+ok("and records which bundle was actually sent", sent.sent_bundle_id == "aaaaaaaaaaaa")
+
+revised = intakes.advance(
+    opened.id,
+    intakes.REVISION_REQUESTED,
+    revisions=[{"asked": "Please add a second location.", "at": "2026-08-03T00:00:00Z"}],
+)
+ok("sent -> revision_requested is reachable", revised.state == intakes.REVISION_REQUESTED)
+ok(
+    "and keeps what the client asked for, not just that they asked",
+    revised.revisions[-1]["asked"] == "Please add a second location.",
+)
+
+intakes.advance(opened.id, intakes.PREPARING, job_id="jo2")
+ok("revision_requested -> preparing is reachable", intakes.get(opened.id).state == intakes.PREPARING)
+intakes.advance(
+    opened.id, intakes.QUOTED, bundle_ids=["bbbbbbbbbbbb"], priced_scope="x2", priced_budget="y2"
+)
+intakes.advance(opened.id, intakes.SENT, sent_bundle_id="bbbbbbbbbbbb")
+finalized = intakes.advance(opened.id, intakes.FINALIZED)
+ok("sent -> finalized is reachable", finalized.state == intakes.FINALIZED)
+
+proposal_sent = intakes.advance(opened.id, intakes.PROPOSAL_SENT)
+ok("finalized -> proposal_sent is reachable", proposal_sent.state == intakes.PROPOSAL_SENT)
+
+refuses(
+    "proposal_sent only goes forward to closed",
+    lambda: intakes.advance(opened.id, intakes.SUBMITTED),
+)
+intakes.advance(opened.id, intakes.CLOSED)
+ok("proposal_sent -> closed still works", intakes.get(opened.id).state == intakes.CLOSED)
+refuses(
+    "closed is terminal here too, reached the long way round",
+    lambda: intakes.advance(opened.id, intakes.PREPARING),
+)
+
+# proposal_sent is reachable only from finalized - not straight from quoted
+# and not straight from sent. Separate, fresh intakes for each: a refusal is
+# a no-op, but sharing one fixture across two refusal checks would make the
+# second one prove nothing if the first move had silently gone through.
+from_quoted = intakes.create(
+    client_email="from-quoted@client.com",
+    client_phone="",
+    scope="Reaches quoted and stops.",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+intakes.advance(from_quoted.id, intakes.SUBMITTED)
+intakes.advance(from_quoted.id, intakes.PREPARING, job_id="jq")
+intakes.advance(
+    from_quoted.id, intakes.QUOTED, bundle_ids=["cccccccccccc"], priced_scope="x", priced_budget="y"
+)
+refuses(
+    "proposal_sent is reachable only from finalized, not straight from quoted",
+    lambda: intakes.advance(from_quoted.id, intakes.PROPOSAL_SENT),
+)
+
+from_sent = intakes.create(
+    client_email="from-sent@client.com",
+    client_phone="",
+    scope="Reaches sent and stops.",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+intakes.advance(from_sent.id, intakes.SUBMITTED)
+intakes.advance(from_sent.id, intakes.PREPARING, job_id="js")
+intakes.advance(
+    from_sent.id, intakes.QUOTED, bundle_ids=["dddddddddddd"], priced_scope="x", priced_budget="y"
+)
+intakes.advance(from_sent.id, intakes.SENT, sent_bundle_id="dddddddddddd")
+refuses(
+    "proposal_sent is reachable only from finalized, not straight from sent",
+    lambda: intakes.advance(from_sent.id, intakes.PROPOSAL_SENT),
+)
+
 # A failure has somewhere to go.
 second = intakes.create(
     client_email="two@client.com",
@@ -131,6 +232,7 @@ second = intakes.create(
     preset={},
     created_by="riku@neptune.ph",
 )
+intakes.advance(second.id, intakes.SUBMITTED)
 intakes.advance(second.id, intakes.PREPARING, job_id="j2")
 intakes.advance(second.id, intakes.QUOTE_FAILED, error="Gemini answered with no usable estimate.")
 ok("preparing -> quote_failed", intakes.get(second.id).state == intakes.QUOTE_FAILED)
@@ -155,11 +257,12 @@ refuses(
     lambda: intakes.advance(third.id, intakes.PREPARING, id=STOLEN_ID),
 )
 ok("the forking attempt created no new intake", len(intakes.listing()) == before_fork)
-ok("and the original is untouched", intakes.get(third.id).state == intakes.SUBMITTED)
+ok("and the original is untouched", intakes.get(third.id).state == intakes.ISSUED)
 ok("the id it tried to steal was never written", intakes.get(STOLEN_ID) is None)
 
 # A wrong-shaped field must be refused outright, not accepted and left to
 # corrupt the record on the next read.
+intakes.advance(third.id, intakes.SUBMITTED)
 intakes.advance(third.id, intakes.PREPARING, job_id="j-third")
 refuses(
     "a wrong-shaped field is refused rather than corrupting the record",
@@ -172,7 +275,9 @@ ok(
 )
 
 # Every state's -> CLOSED edge is in the table, but only close() exercised it
-# before - advance() has to honour the same column.
+# before - advance() has to honour the same column. `fourth` is left at
+# `issued` on purpose: `issued -> closed` is the edge this now proves - a
+# client link can be withdrawn before anybody has ever opened it.
 fourth = intakes.create(
     client_email="four@client.com",
     client_phone="",
@@ -183,7 +288,7 @@ fourth = intakes.create(
 )
 intakes.advance(fourth.id, intakes.CLOSED)
 ok(
-    "submitted -> closed works through advance(), not just close()",
+    "issued -> closed works through advance(), not just close()",
     intakes.get(fourth.id).state == intakes.CLOSED,
 )
 

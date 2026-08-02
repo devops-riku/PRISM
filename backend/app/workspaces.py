@@ -255,6 +255,14 @@ def delete(workspace_id: str) -> bool:
     from app import intakes
 
     intakes.forget(key)
+    # Imported here for the same reason: `tokens` imports this module too,
+    # and a top-level import here would be the same cycle from the other
+    # side. Workspace ids are reusable, so a token left in the index would
+    # otherwise resolve into whichever new workspace is later made with the
+    # same id.
+    from app import tokens
+
+    tokens.forget_workspace(key)
 
     logger.info("Workspace %s deleted with everything in it", key)
     return True
