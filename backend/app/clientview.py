@@ -46,6 +46,17 @@ from app.schemas import ProposalBundle
 #: of the four it actually is.
 _WAITING = {SUBMITTED, PREPARING, QUOTED, QUOTE_FAILED}
 
+#: The `state` value shown for every member of `_WAITING`. Not one of
+#: `intake.state`'s own values, and deliberately not `intake.state` passed
+#: through: reusing the raw lifecycle token would make the four states
+#: byte-distinguishable from each other again by the one field a "same shape"
+#: dict literal cannot hide - `preparing` says a model is running right now,
+#: `quote_failed` says one already failed, and `quoted` says a quotation
+#: exists before the studio chose to send it. Collapsing all four to one
+#: label is what actually delivers the "one identical face" this module
+#: promises, rather than merely a face with identically-named fields.
+_WAITING_LABEL = "waiting"
+
 #: States in which there is a quotation to show. `sent`, `revision_requested`
 #: and `finalized` all read the *current* quotation - `bundle_ids` replaces
 #: rather than appends on a second Generate, so there is only ever one to show
@@ -96,10 +107,12 @@ def of(intake: Intake, bundle: Optional[ProposalBundle] = None) -> dict:
         # One honest sentence's worth of material: who has it, when they sent
         # it, their own address (masked), and how much they wrote. Never the
         # budget, and never anything that would tell a client a model is
-        # running right now or that a pass already failed - `preparing` and
-        # `quote_failed` read exactly like `submitted` and `quoted` from here.
+        # running right now or that a pass already failed - `state` itself is
+        # normalised to `_WAITING_LABEL` for exactly that reason, not left as
+        # `intake.state`, so `preparing` and `quote_failed` produce the exact
+        # same bytes as `submitted` and `quoted`, not merely the same shape.
         return {
-            "state": intake.state,
+            "state": _WAITING_LABEL,
             "studio_name": settings.load().studio_name,
             "sent_at": intake.created_at,
             "email": _masked(intake.client_email),
@@ -150,6 +163,22 @@ def of(intake: Intake, bundle: Optional[ProposalBundle] = None) -> dict:
             # The client-facing markdown that already exists on the bundle -
             # the requirements sheet (the developer spec) is never referenced
             # anywhere in this module.
+            #
+            # This is also why the bundle-level fields a client must never see
+            # - `target_note`, `tier_cap_note`, `tier_siblings`, the rate-card
+            # fields, `hit_target`, `target_total`, `revision_instruction`,
+            # `files`, `bundle.id` - cannot reach a client through this line
+            # even by accident: `render_client_proposal`, in
+            # `app/renderers/markdown.py`, is the only thing that ever
+            # produced this string, and its signature takes an `Estimate`,
+            # never a `ProposalBundle`. Those fields are not filtered out of
+            # the narrative here - they are structurally absent from
+            # whatever could have produced it. That argument breaks the day
+            # someone changes that renderer to also read `ProposalBundle`
+            # fields (a rate-card note in the investment section, say); this
+            # comment is the trip-wire for a reviewer to re-check the claim
+            # when that happens, not a fact this module can keep proving on
+            # its own from in here.
             "narrative": storage.markdown_for(bundle, "proposal") or "",
             "sent_at": intake.sent_at,
             "revisions": revisions,

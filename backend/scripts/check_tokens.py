@@ -540,9 +540,39 @@ if cv_bundle is None:
 # small (no rate card configured, no target, a single tier) - an empty field
 # proves nothing about whether `clientview.of` would have let a *populated*
 # one through.
+#
+# These four sentinels can only ever appear in the *non-narrative* part of the
+# view - `rate_card_removed`, `target_note`, `tier_cap_note` and
+# `tier_siblings` are `ProposalBundle` fields, and `render_client_proposal`
+# (app/renderers/markdown.py), the only thing that ever wrote `files[0]
+# .markdown`, takes an `Estimate` and never sees a `ProposalBundle` at all -
+# so sweeping them against the narrative would be a check that always passes
+# and proves nothing. The narrative's own leak path is different and is
+# exercised separately, right below: not "does a bundle-level secret reach
+# it" (it structurally cannot) but "does `clientview.of` forward the stored
+# file's actual bytes, rather than silently reconstructing something that
+# merely looks the same".
 CV_SENTINELS = ["RATECARDLEAK", "TARGETNOTELEAK", "TIERCAPLEAK", "TIERSIBLINGLEAK"]
+
+# Planted straight into the stored "proposal" file's markdown, diverging it
+# from whatever a fresh `render_client_proposal(cv_bundle.estimate)` would
+# produce. Without this, `narrative == storage.markdown_for(cv_poisoned,
+# "proposal")` would pass even if `clientview.of` re-rendered the estimate
+# itself instead of reading the stored file - for an untouched bundle the two
+# happen to produce identical bytes, so the identity check alone would not
+# have caught that bug. With the stored file poisoned, the two diverge, and
+# the check below only passes if `clientview.of` genuinely forwarded what was
+# actually on disk.
+CV_NARRATIVE_FLOWTHROUGH_MARKER = "NARRATIVEFLOWTHROUGH-marker-not-a-fresh-render"
+cv_poisoned_files = [
+    generated.model_copy(update={"markdown": generated.markdown + f"\n\n{CV_NARRATIVE_FLOWTHROUGH_MARKER}"})
+    if generated.kind == "proposal"
+    else generated
+    for generated in cv_bundle.files
+]
 cv_poisoned = cv_bundle.model_copy(
     update={
+        "files": cv_poisoned_files,
         "rate_card_bound": 4,
         "rate_card_removed": ["RATECARDLEAK-role-not-covered"],
         "rate_card_removed_value": 4321.0,
@@ -574,12 +604,66 @@ ok("issued: exactly state and studio_name", set(cv_issued_view) == {"state", "st
 ok("issued: state is carried through", cv_issued_view["state"] == intakes.ISSUED)
 ok("issued: studio name is carried through", cv_issued_view["studio_name"] == "Neptune Labs")
 
+# --- the forbidden-substring sweep, defined here so both the waiting face
+#     and the quotation face below can use it -------------------------------
+
+CV_FORBIDDEN = [
+    "line_items",
+    "rate_card_bound",
+    "rate_card_removed",
+    "target_note",
+    "tier_cap_note",
+    "tier_siblings",
+    "files",
+    "id",
+    "estimate",
+    "priced_scope",
+    "priced_budget",
+    "client_email",
+    "client_phone",
+    "job_id",
+    "bundle_ids",
+    "target_total",
+    "hit_target",
+    "tier_cap",
+    "tier_group_id",
+    "revision_instruction",
+    "created_by",
+    "token",
+]
+
+
+def _cv_forbidden_present(term: str, haystack: str) -> bool:
+    """A bare substring search for every forbidden name except `id`.
+
+    `id` also occurs harmlessly inside `validity` ("val-id-ity") - the one
+    legitimate key in this view that happens to spell it - so a bare search
+    for `id` can never pass once `validity` is a key, regardless of what
+    `clientview.of` actually does. Searched for as a JSON key instead
+    (`"id":`), which is the actual shape a leaked `bundle.id` or `intake.id`
+    would take, nested or not, without also flagging the word it sits inside.
+    """
+    if term == "id":
+        return '"id":' in haystack
+    return term in haystack
+
+
 # --- the four waiting states: one identical face ----------------------------
 #
 # submitted, preparing, quoted and quote_failed must be indistinguishable to
 # the client - never a hint that a model is currently running, or that a pass
 # already failed once - and never the budget, only the studio's name, when the
 # request came in, their own masked address, and how much they wrote.
+#
+# "Indistinguishable" is asserted literally: four intakes built to differ in
+# every way a leak could ride on (different state, only one carrying an
+# `error`) are each turned into a view, and the four views must serialise to
+# exactly one distinct JSON string. A same-*shape* check (matching keys, or a
+# substring sweep for words like "gemini") cannot catch `"state": "quoted"`
+# leaking the raw lifecycle token through the one field such a check never
+# looks at - which is exactly the bug an earlier version of this test missed,
+# because its substring sweep was written against `intake.error`'s contents
+# and never against `state` itself.
 
 CV_WAITING_KEYS = {"state", "studio_name", "sent_at", "email", "scope_length"}
 
@@ -596,6 +680,7 @@ def _reference_masked(email: str) -> str:
     return f"{head}{dots}@{domain}"
 
 
+CV_WAITING_VIEWS = []
 for cv_state in (intakes.SUBMITTED, intakes.PREPARING, intakes.QUOTED, intakes.QUOTE_FAILED):
     cv_waiting = intakes.Intake(
         id="1" * 12,
@@ -608,31 +693,47 @@ for cv_state in (intakes.SUBMITTED, intakes.PREPARING, intakes.QUOTED, intakes.Q
         budget_text="BUDGETLEAK-777k",
         error="Gemini answered with no usable JSON." if cv_state == intakes.QUOTE_FAILED else "",
     )
-    cv_waiting_view = clientview.of(cv_waiting)
-    ok(f"{cv_state}: exactly the waiting keys", set(cv_waiting_view) == CV_WAITING_KEYS)
-    ok(f"{cv_state}: state is carried through", cv_waiting_view["state"] == cv_state)
-    ok(f"{cv_state}: studio name is carried through", cv_waiting_view["studio_name"] == "Neptune Labs")
+    CV_WAITING_VIEWS.append(clientview.of(cv_waiting))
+
+ok(
+    "the four waiting states serialise to exactly one distinct payload, not four",
+    len({json.dumps(view, sort_keys=True) for view in CV_WAITING_VIEWS}) == 1,
+)
+
+cv_waiting_view = CV_WAITING_VIEWS[0]
+ok("waiting: exactly the waiting keys", set(cv_waiting_view) == CV_WAITING_KEYS)
+ok(
+    "waiting: state is the single shared label, not the studio's own lifecycle token",
+    cv_waiting_view["state"] == "waiting",
+)
+ok("waiting: studio name is carried through", cv_waiting_view["studio_name"] == "Neptune Labs")
+ok(
+    "waiting: sent_at reads when the request came in, not blank",
+    cv_waiting_view["sent_at"] == "2026-02-03T04:05:06Z",
+)
+ok(
+    "waiting: email is masked the way InviteScreen.tsx masks it",
+    cv_waiting_view["email"] == _reference_masked("waiting@client.com"),
+)
+ok("waiting: scope_length matches what they wrote", cv_waiting_view["scope_length"] == 137)
+
+cv_waiting_dumped = json.dumps(cv_waiting_view)
+ok(
+    "waiting: never the budget",
+    "BUDGETLEAK" not in cv_waiting_dumped and "budget" not in cv_waiting_dumped.lower(),
+)
+ok(
+    "waiting: never a hint that a model is running or a pass already failed",
+    "gemini" not in cv_waiting_dumped.lower()
+    and "error" not in cv_waiting_dumped.lower()
+    and "json" not in cv_waiting_dumped.lower(),
+)
+ok("waiting: never the client's phone number", "0917-000-0000" not in cv_waiting_dumped)
+for cv_term in CV_FORBIDDEN:
     ok(
-        f"{cv_state}: sent_at reads when the request came in, not blank",
-        cv_waiting_view["sent_at"] == "2026-02-03T04:05:06Z",
+        f"waiting: never leaks {cv_term!r}",
+        not _cv_forbidden_present(cv_term, cv_waiting_dumped),
     )
-    ok(
-        f"{cv_state}: email is masked the way InviteScreen.tsx masks it",
-        cv_waiting_view["email"] == _reference_masked("waiting@client.com"),
-    )
-    ok(f"{cv_state}: scope_length matches what they wrote", cv_waiting_view["scope_length"] == 137)
-    cv_waiting_dumped = json.dumps(cv_waiting_view)
-    ok(
-        f"{cv_state}: never the budget",
-        "BUDGETLEAK" not in cv_waiting_dumped and "budget" not in cv_waiting_dumped.lower(),
-    )
-    ok(
-        f"{cv_state}: never a hint that a model is running or a pass already failed",
-        "gemini" not in cv_waiting_dumped.lower()
-        and "error" not in cv_waiting_dumped.lower()
-        and "json" not in cv_waiting_dumped.lower(),
-    )
-    ok(f"{cv_state}: never the client's phone number", "0917-000-0000" not in cv_waiting_dumped)
 
 # --- closed: nothing but the state ------------------------------------------
 
@@ -694,40 +795,6 @@ cv_finalized = cv_sent.model_copy(
     }
 )
 
-CV_FORBIDDEN = [
-    "line_items",
-    "rate_card_bound",
-    "rate_card_removed",
-    "target_note",
-    "tier_cap_note",
-    "tier_siblings",
-    "files",
-    "id",
-    "estimate",
-    "priced_scope",
-    "priced_budget",
-    "client_email",
-    "client_phone",
-    "job_id",
-    "bundle_ids",
-]
-
-
-def _cv_forbidden_present(term: str, haystack: str) -> bool:
-    """A bare substring search for every forbidden name except `id`.
-
-    `id` also occurs harmlessly inside `validity` ("val-id-ity") - the one
-    legitimate key in this view that happens to spell it - so a bare search
-    for `id` can never pass once `validity` is a key, regardless of what
-    `clientview.of` actually does. Searched for as a JSON key instead
-    (`"id":`), which is the actual shape a leaked `bundle.id` or `intake.id`
-    would take, nested or not, without also flagging the word it sits inside.
-    """
-    if term == "id":
-        return '"id":' in haystack
-    return term in haystack
-
-
 cv_sent_view = clientview.of(cv_sent, cv_poisoned)
 cv_revreq_view = clientview.of(cv_revreq, cv_poisoned)
 cv_finalized_view = clientview.of(cv_finalized, cv_poisoned)
@@ -753,6 +820,15 @@ for cv_label, cv_view, cv_state_const in (
         f"{cv_label}: narrative is exactly the client markdown already on the bundle",
         cv_view["narrative"] == storage.markdown_for(cv_poisoned, "proposal"),
     )
+    # Proves the identity check above is exercised, not vacuously true: the
+    # stored file was poisoned with a marker no fresh render of the estimate
+    # would produce, so this only passes if `clientview.of` genuinely read
+    # `files[0].markdown` off the bundle rather than reconstructing something
+    # that happens to look the same for an untouched fixture.
+    ok(
+        f"{cv_label}: narrative genuinely forwards the stored file's bytes, not a fresh re-render",
+        CV_NARRATIVE_FLOWTHROUGH_MARKER in cv_view["narrative"],
+    )
     ok(
         f"{cv_label}: sent_at is the intake's own timestamp, not the bundle's created_at",
         cv_view["sent_at"] == "2026-03-04T05:06:07Z" and cv_view["sent_at"] != cv_poisoned.created_at,
@@ -772,13 +848,16 @@ for cv_label, cv_view, cv_state_const in (
             f"{cv_label}: never leaks {cv_term!r} outside the narrative",
             not _cv_forbidden_present(cv_term, cv_without_narrative),
         )
-    # The sentinel sweep runs over the *whole* dump, narrative included: these
-    # strings are distinctive enough that no legitimate markdown, reference or
-    # label would ever contain one by coincidence, so this is the check that
-    # would actually catch a nested leak inside the narrative too.
-    cv_full_dump = json.dumps(cv_view)
+    # The sentinel sweep also runs on the view *without* `narrative`: these
+    # four sentinels live only in `ProposalBundle` fields that
+    # `render_client_proposal` (app/renderers/markdown.py) never reads - its
+    # signature takes an `Estimate`, not a `ProposalBundle` - so they cannot
+    # reach the narrative regardless of what `clientview.of` does, and
+    # sweeping them against it would prove nothing. The narrative's own
+    # forwarding is exercised above, directly, with a marker planted in the
+    # stored file itself.
     for cv_sentinel in CV_SENTINELS:
-        ok(f"{cv_label}: never leaks the sentinel {cv_sentinel!r}, narrative included", cv_sentinel not in cv_full_dump)
+        ok(f"{cv_label}: never leaks the sentinel {cv_sentinel!r}", cv_sentinel not in cv_without_narrative)
 
 ok(
     "can_revise and can_finalize are true only in sent",
