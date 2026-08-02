@@ -258,16 +258,27 @@ export default function App() {
   // Three screens, one hash router: the pad you work in, the quotations already
   // sent, and the settings behind both.
   const [route, setRoute] = useState(() => routeFor(window.location.hash))
+  // The raw hash, kept as its own piece of state rather than re-read from
+  // `window.location.hash` during render. `route` is a *category* -
+  // `#/pad/A -> #/pad/B` is the same category, `'pad'`, both times - so
+  // `setRoute('pad')` is a same-value update and React 18 bails out of
+  // re-rendering on account of it. `hash` genuinely changes on every one of
+  // those transitions, so it is what makes `padIntakeId` below actually
+  // reactive instead of frozen at whichever id first opened the pad. Updated
+  // in the same `followRoute` that already runs on mount and on `hashchange`.
+  const [hash, setHash] = useState(() => window.location.hash || '')
   // Studio defaults prefill the brief form. They arrive after first paint, so
   // the form mounts once they are known rather than resetting under the user.
   // Partial, because the catch below opens the form on nothing at all.
   const [defaults, setDefaults] = useState<Partial<StudioDefaults> | null>(null)
-  // Which client request the pad was opened from, read straight off the hash
-  // the way `#/invite/<token>` and `#/p/<id>` already are elsewhere in this
-  // file. Gated on `route === 'pad'` so a hash that merely starts with
-  // something else (`#/intakes`, `#/q/<id>`) never reads as a stray id and
-  // fires a lookup for a request that was never asked for.
-  const padIntakeId = route === 'pad' ? (window.location.hash || '').replace(/^#\/pad\/?/, '') : ''
+  // Which client request the pad was opened from. Derived from the reactive
+  // `hash` state above, not `window.location.hash` directly, and gated by
+  // recomputing the route from that same `hash` rather than trusting the
+  // `route` state variable - so this is correct even in the one render where
+  // `route`'s own update bailed out. Covers `#/pad/A -> #/pad`,
+  // `#/pad/A -> #/pad/B` and `#/pad/A -> #/pad/`, all reachable in-app via the
+  // command bar's Create PAD entry while a prefilled pad is already open.
+  const padIntakeId = routeFor(hash) === 'pad' ? hash.replace(/^#\/pad\/?/, '') : ''
   // The request the pad is prefilled from, once it has been fetched. A stale
   // or unknown id is not a reason to refuse the pad — it opens empty, which is
   // the screen the studio would otherwise have gone to anyway.
@@ -328,6 +339,7 @@ export default function App() {
 
     const followRoute = () => {
       setRoute(routeFor(window.location.hash))
+      setHash(window.location.hash || '')
       restore()
     }
 
@@ -412,10 +424,12 @@ export default function App() {
   // route below, means it only ever runs once per id — not once per render of
   // a screen that re-renders on every keystroke.
   useEffect(() => {
-    if (!padIntakeId) {
-      setIntake(null)
-      return
-    }
+    // Cleared the moment the id changes, not just when it disappears - moving
+    // from one prefilled pad straight to another (`#/pad/A -> #/pad/B`) must
+    // not leave A's record sitting in state, associated with B's id, for the
+    // moment it takes the new fetch to land.
+    setIntake(null)
+    if (!padIntakeId) return
     let live = true
     fetchIntake(padIntakeId)
       .then((found) => live && setIntake(found))
@@ -734,6 +748,15 @@ export default function App() {
           />
           {defaults ? (
             <BriefForm
+              // Remounts whenever the underlying request changes identity -
+              // including the transition into and out of "no request at
+              // all" - so a second `#/pad/<id>` (or a plain `#/pad`) reached
+              // while the pad is already open gets a genuinely fresh form,
+              // not the previous one's fields with a new id spliced in. This
+              // is also what lets the `seeded` latch in BriefForm re-arm for
+              // a second request: the latch never resets on its own, a fresh
+              // mount is a fresh ref.
+              key={intake ? intake.id : 'blank'}
               defaults={defaults}
               pending={pending}
               job={creation.job}
@@ -741,7 +764,16 @@ export default function App() {
               intakeId={intake ? intake.id : ''}
               prefill={
                 intake
-                  ? { scope: intake.scope, budget: intake.budget_text, clientName: intake.client_email }
+                  ? {
+                      // Coerced rather than trusted: `fetchIntake` only checks
+                      // that `id` is a string, so a server answer with `scope`
+                      // or the others coming back `null` must not hand
+                      // `BriefForm` anything but a string to seed a text field
+                      // with.
+                      scope: String(intake.scope ?? ''),
+                      budget: String(intake.budget_text ?? ''),
+                      clientName: String(intake.client_email ?? ''),
+                    }
                   : undefined
               }
             />
