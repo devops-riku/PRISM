@@ -40,6 +40,7 @@ from starlette.datastructures import UploadFile as BaseUploadFile
 from app import (
     attachments as attachments_module,
     auth,
+    clientview,
     config,
     hub,
     inbox,
@@ -58,6 +59,7 @@ from app import (
     template,
     settings,
     storage,
+    tokens,
     workspaces,
 )
 from app.costing import (
@@ -250,10 +252,29 @@ async def _gate(request, call_next):
     # secret: somebody deciding whether to make an account should be able to see
     # what they are being asked to join first. Accepting it is not - that needs
     # to know who is joining.
+    #
+    # `/api/client/` is open on every method, not just GET - the only prefix in
+    # this expression for which that is true, and so the only one able to admit
+    # a POST without a token at all. Stage 2 Task 3 adds the GET beneath it;
+    # Task 4 adds POSTs beside it (`/submit`, `/revise`, `/finalize`). None of
+    # them carry a studio sign-in, by design: the person on the other end of
+    # this link was never asked to make an account. What makes that safe rather
+    # than merely convenient is three things, not one: the token itself is the
+    # credential - unguessable, minted one per intake, living nowhere but the
+    # link the studio sent - and `tokens.resolve` treats an unknown, expired,
+    # relinked-away or closed one identically, so a stranger probing this
+    # prefix cannot even learn which guesses ever meant anything; the handler
+    # behind each route re-checks the intake's own state before acting, so a
+    # token that is real but wrong for the write attempted is refused, not
+    # merely authenticated; and Task 4 adds a per-IP rate limit on the write
+    # routes on top of both - a courtesy control against a script trying every
+    # token it can generate, not a defence against a determined attacker, and
+    # said as plainly there as it is said here.
     open_path = (
         path in auth.OPEN_PATHS
         or not path.startswith("/api/")
         or (request.method == "GET" and path.startswith("/api/invites/"))
+        or path.startswith("/api/client/")
     )
 
     if auth.required() and not open_path:
@@ -2469,6 +2490,77 @@ async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
         return intakes.close(intake_id, _who_email(request))
     except intakes.IntakeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# --- The client's own door (Stage 2 Task 3) -----------------------------------
+#
+# Everything below this line, until the next section, is reachable with no
+# `Authorization` header at all - see the `open_path` comment in `_gate` for
+# what makes that safe. Nothing above this line changes: every route already
+# defined still runs behind the gate exactly as it did before this file grew
+# a second kind of caller.
+
+#: What `/api/client/{token}` answers when the token does not currently work -
+#: never minted, expired, relinked away, or naming an intake that is now
+#: `closed`. One literal, reused for all four, because they are supposed to be
+#: indistinguishable to whoever is holding the link: see `tokens.resolve`'s and
+#: `clientview.of`'s own docstrings for why a stranger must not be able to tell
+#: "never existed" from "used to work" by the wording of the answer.
+_CLIENT_LINK_GONE = "That link is not valid, or has expired."
+
+
+@app.get("/api/client/{token}", tags=["client"])
+async def read_client_view(token: str) -> dict:
+    """What a client sees of their own request - answered to whoever holds the
+    link, which is the point, exactly as `read_invite` answers to whoever
+    holds an invitation.
+
+    No `response_model`: what `clientview.of` returns depends on the intake's
+    state - `issued` carries two fields, a sent quotation carries a dozen -
+    and `app/schemas.py` is deliberately not extended to describe a client's
+    view (see `clientview.py`'s own docstring). The dict it builds is
+    returned exactly as built, nothing added or stripped going out the door.
+
+    `X-Workspace` is never read here. `tokens.resolve` is the only thing
+    that says which workspace a link belongs to; trusting a header instead
+    would let anybody hand in a token of their own alongside a workspace id
+    that is not theirs and read whichever one they named.
+    """
+    found = tokens.resolve(token)
+    if found is None:
+        raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+
+    workspace_id, intake_id = found
+    borrowed = workspaces.borrow(workspace_id)
+    try:
+        entry = intakes.get(intake_id)
+        if entry is None:
+            # `tokens.resolve` already re-read the intake once before handing
+            # this back, so reaching `None` here is the same transient-read
+            # race its own docstring describes, not a case it failed to rule
+            # out - and it answers exactly as an unknown token would either
+            # way.
+            raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE)
+        bundle = storage.get(entry.sent_bundle_id) if entry.sent_bundle_id else None
+        # `clientview.of` runs inside this `try`, still borrowed - not after
+        # `give_back` - because it calls `settings.load()`, which reads
+        # `workspaces.current()`. Built outside the borrow, this would render
+        # with whatever workspace `_gate`'s own `workspaces.use(X-Workspace)`
+        # left the context pointed at, not the one the token actually names.
+        try:
+            return clientview.of(entry, bundle)
+        except ValueError:
+            # `clientview.of` raises rather than show a state it does not
+            # recognise (`proposal_sent`, today - unreachable until Stage 3)
+            # or a quoted-face state with no bundle attached. That is a bug on
+            # this server's side of the line, not a client's business to see
+            # the traceback of: it still answers with the one body a bad
+            # token gets, not a 500 that would at least confirm the token
+            # named something real.
+            logger.exception("clientview.of could not show intake %s", intake_id)
+            raise HTTPException(status_code=404, detail=_CLIENT_LINK_GONE) from None
+    finally:
+        workspaces.give_back(borrowed)
 
 
 class AuthConfig(BaseModel):

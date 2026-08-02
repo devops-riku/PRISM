@@ -48,6 +48,14 @@ __all__ = ["User", "verify", "required", "describe", "AuthError"]
 #: needing a session to ask would make a monitoring check a login problem. The
 #: auth config endpoint has to be readable before sign-in, since it is what tells
 #: the client whether to ask for one.
+#:
+#: This is not the whole open surface. Two more are shaped as a path *prefix*
+#: rather than one exact path - `GET /api/invites/<token>`, and since Stage 2
+#: Task 3, `/api/client/<token>` on every method - so they live in `_gate`'s
+#: `open_path` expression in `main.py`, beside this set, rather than in it: a
+#: frozenset of exact paths has no way to say "this path, and everything under
+#: it" without becoming a different kind of thing entirely. See the comment on
+#: that expression for what makes the `/api/client/` prefix safe to leave open.
 OPEN_PATHS = frozenset(
     {
         "/api/health",
