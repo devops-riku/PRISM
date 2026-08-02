@@ -299,7 +299,7 @@ Finalize's notification reuses `inbox.notify` with an explicit recipient list, e
 - [ ] **Step 1: Write the failing test**
 
 - `POST /api/intakes` now takes a **preset** (kind, currency, market region, tax basis, payment terms, tiers) and no client words, returns the intake with a token, and the intake starts `issued`.
-- `POST /api/intakes/{id}/send` requires an explicit `bundle_id`, refuses a bundle that is not in `bundle_ids`, moves `quoted → sent`, and records `sent_bundle_id`.
+- `POST /api/intakes/{id}/send` requires an explicit `bundle_id`, refuses a bundle that is not in `bundle_ids`, moves `quoted → sent`, and records **both `sent_bundle_id` and `sent_at`**. Task 2 added `Intake.sent_at` and nothing writes it — until this route does, every client sees a blank sent date and no test fails.
 - `POST /api/intakes/{id}/relink` issues a new token and kills the old.
 - All three are admin-only; a member gets 403 under real auth.
 
