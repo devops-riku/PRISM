@@ -15,6 +15,7 @@ intake on disk.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import re
 import sys
@@ -293,6 +294,76 @@ ok(
     walk_attempts["n"] == 1,
 )
 ok("and _built is set regardless, so a working walk is not retried either", tokens._built)
+
+# --- close() and relink() must survive a process restart -------------------
+#
+# `forget_token`/`forget_workspace` only clear the *in-memory* index. A real
+# process boot starts with an empty index and `_built` false, and rebuilds
+# by walking every intake's own `token` field off disk - with no state
+# check, by `tokens.py`'s own deliberate design. So the only thing that
+# actually keeps a withdrawn token withdrawn is whether the *file* still
+# carries it, not whether the index happens to remember forgetting it. The
+# earlier close() test above never catches this: `_built` was already `True`
+# by then (from "an unknown token resolves to nothing", several sections up),
+# so the walk that would rediscover a stale token on disk never fires.
+# Clearing `_index` and resetting `_built` here is exactly what a real
+# restart does to these two module globals - not a proxy for it.
+
+restart_ws = workspaces.create("Restart Proof")
+
+closed_fixture = make(restart_ws.id, "closed-fixture")
+closed_fixture_token = closed_fixture.token
+intakes.close(closed_fixture.id, "riku@neptune.ph")
+
+relinked_fixture = make(restart_ws.id, "relinked-fixture")
+relinked_old_token = relinked_fixture.token
+relinked_new = intakes.relink(relinked_fixture.id)
+
+tokens._index.clear()  # noqa: SLF001 - simulating a fresh process's empty index
+tokens._built = False  # noqa: SLF001 - simulating a fresh process: walk not yet run
+
+workspaces.use(elsewhere.id)
+ok(
+    "a closed intake's token does not come back after a simulated restart",
+    tokens.resolve(closed_fixture_token) is None,
+)
+ok(
+    "a relinked-away token does not come back either - the contrast",
+    tokens.resolve(relinked_old_token) is None,
+)
+ok(
+    "but the current, live token from that same relink still resolves",
+    tokens.resolve(relinked_new.token) == (restart_ws.id, relinked_fixture.id),
+)
+
+# --- the token must actually survive on disk through create, advance, relink
+#
+# `exclude=True` makes any `.model_dump()` on an `Intake` drop `token`
+# silently. `_write` and `advance` both restore it by hand today - this
+# reads the raw JSON file, past `intakes.get()`'s own deserialization, which
+# is the check that would actually fail the day a third dump site is added
+# without the same care: `get()` would keep reporting a token correctly even
+# if the file no longer had one, because pydantic fills a missing field from
+# its default (`""`) without complaint.
+
+
+def _on_disk_token(intake_id: str) -> str:
+    path = intakes._path(intake_id)  # noqa: SLF001 - reading the raw file directly
+    return json.loads(path.read_text(encoding="utf-8")).get("token", "")
+
+
+durability_ws = workspaces.create("Token Durability")
+durable = make(durability_ws.id, "durable")
+ok("the token is on disk right after create()", bool(_on_disk_token(durable.id)))
+
+intakes.advance(durable.id, intakes.SUBMITTED)
+ok("and survives a plain advance() call", bool(_on_disk_token(durable.id)))
+
+durable_relinked = intakes.relink(durable.id)
+ok(
+    "and the new token lands on disk after relink(), matching the return value",
+    _on_disk_token(durable.id) == durable_relinked.token,
+)
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")

@@ -387,15 +387,24 @@ def close(intake_id: str, by: str) -> Intake:
             raise IntakeError("That request does not exist.")
         if entry.state == CLOSED:
             return entry
+        old_token = entry.token
         entry.state = CLOSED
         entry.closed_at = storage.utc_now_iso()
         entry.closed_by = by
+        # Blanked on the record itself, not just forgotten from the
+        # in-memory index - `tokens._build_locked`'s walk re-indexes *any*
+        # intake with a non-empty `token`, with no state check, by design
+        # (`tokens.py` is deliberately state-agnostic; teaching it about
+        # `CLOSED` would be the wrong fix). Leaving the field populated on
+        # disk would let a revoked link come back the moment a process
+        # restart - or even just the next miss, before `_built` first flips
+        # - re-walks the workspace and finds it still sitting there.
+        # `relink` already does exactly this to the token it replaces.
+        entry.token = ""
         written = _write(entry)
-    # A closed request is withdrawn - its link has to stop meaning anything
-    # to the anonymous route Task 3 hangs off `tokens.resolve`, the same way
-    # an expired one already does. Outside the lock, for the same reason
-    # `create` and `relink` call into `tokens` outside theirs.
-    tokens.forget_token(written.token)
+    # Outside the lock, for the same reason `create` and `relink` call into
+    # `tokens` outside theirs.
+    tokens.forget_token(old_token)
     return written
 
 
