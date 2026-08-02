@@ -209,6 +209,19 @@ def _write(entry: Intake) -> Intake:
     path = _path(entry.id)
     if path is None:
         raise IntakeError(f"{entry.id!r} is not a usable intake id.")
+    if entry.state == CLOSED:
+        # A closed request is withdrawn, through whichever of the two doors
+        # got it there - `close()`, or `advance(id, CLOSED)`, which is a
+        # legal move from every state in `ALLOWED`. Blanked here, in the one
+        # place both doors write through, rather than in each caller
+        # separately: that is exactly what let `advance(..., CLOSED)`
+        # restore the token `close()` had learned to blank - two places
+        # implementing one invariant, and only one of them kept up to date.
+        # `tokens._build_locked`'s walk re-indexes any intake with a
+        # non-empty `token` with no state check, by design, so this is the
+        # only place that can reliably keep a withdrawn link withdrawn -
+        # `tokens.py` itself still learns nothing about state.
+        entry.token = ""
     # `token`'s `exclude=True` keeps it off the wire, and `model_dump_json`
     # would honour that here too and quietly drop it from the file - the one
     # place that setting must not reach, since disk is the only copy there
@@ -286,11 +299,19 @@ def relink(intake_id: str) -> Intake:
     rather than extended from whatever was left of the original, so a relink
     genuinely buys another `LIFETIME_DAYS`, not just what remained of the
     first one.
+
+    Refused outright for a `CLOSED` intake, rather than letting it degrade
+    silently: `_write` blanks the token of anything `CLOSED` the moment it
+    is written, so minting a new one here and writing it through would erase
+    it again immediately - a no-op that looks like success and hands back an
+    `Intake` whose `token` does not match what is actually on disk.
     """
     with _lock:
         entry = get(intake_id)
         if entry is None:
             raise IntakeError("That request does not exist.")
+        if entry.state == CLOSED:
+            raise IntakeError("A closed request has no link to reissue.")
         old_token = entry.token
         entry.token = tokens.mint()
         entry.token_expires_at = _later(LIFETIME_DAYS)
@@ -387,20 +408,15 @@ def close(intake_id: str, by: str) -> Intake:
             raise IntakeError("That request does not exist.")
         if entry.state == CLOSED:
             return entry
+        # Captured before `_write` blanks it - `advance(id, CLOSED)` is the
+        # other, equally legal door to this same state, so the blanking
+        # itself lives once in `_write`, keyed on `entry.state`, rather than
+        # here: two places restoring or clearing the same field is exactly
+        # how `advance` and `close` drifted apart the first time.
         old_token = entry.token
         entry.state = CLOSED
         entry.closed_at = storage.utc_now_iso()
         entry.closed_by = by
-        # Blanked on the record itself, not just forgotten from the
-        # in-memory index - `tokens._build_locked`'s walk re-indexes *any*
-        # intake with a non-empty `token`, with no state check, by design
-        # (`tokens.py` is deliberately state-agnostic; teaching it about
-        # `CLOSED` would be the wrong fix). Leaving the field populated on
-        # disk would let a revoked link come back the moment a process
-        # restart - or even just the next miss, before `_built` first flips
-        # - re-walks the workspace and finds it still sitting there.
-        # `relink` already does exactly this to the token it replaces.
-        entry.token = ""
         written = _write(entry)
     # Outside the lock, for the same reason `create` and `relink` call into
     # `tokens` outside theirs.

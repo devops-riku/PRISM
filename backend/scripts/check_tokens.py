@@ -365,6 +365,52 @@ ok(
     _on_disk_token(durable.id) == durable_relinked.token,
 )
 
+# --- advance(id, CLOSED) is the second door to the same state, and must ---
+#     blank the token exactly the way close() does --------------------------
+#
+# Every state's entry in `ALLOWED` includes `CLOSED`, so `advance(id,
+# CLOSED)` is just as legal a way to withdraw a request as calling
+# `close()` directly - and before `_write` centralised the blanking,
+# `advance` unconditionally restored the token it had just read (needed for
+# every *other* transition), leaving the file - and so a rebuilt index -
+# with a live link for a request nothing else marks as withdrawn.
+
+advance_closed_ws = workspaces.create("Advance Closes Too")
+advance_closed = make(advance_closed_ws.id, "advance-closed")
+advance_closed_token = advance_closed.token
+intakes.advance(advance_closed.id, intakes.CLOSED)
+
+ok(
+    "advance(id, CLOSED) blanks the token on disk, same as close()",
+    _on_disk_token(advance_closed.id) == "",
+)
+
+tokens._index.clear()  # noqa: SLF001 - simulating a fresh process's empty index
+tokens._built = False  # noqa: SLF001 - simulating a fresh process: walk not yet run
+
+workspaces.use(elsewhere.id)
+ok(
+    "and it does not resolve after a simulated restart either",
+    tokens.resolve(advance_closed_token) is None,
+)
+
+# --- relink refuses a closed intake outright, rather than degrading -------
+#
+# Without the refusal, relink would mint a token, write it, and `_write`
+# would blank it right back the instant it saw `state == CLOSED` - a silent
+# no-op that hands back an `Intake` whose `.token` does not match what is
+# actually on disk. An explicit `IntakeError` instead.
+
+relink_closed_ws = workspaces.create("Relink Refuses Closed")
+relink_closed = make(relink_closed_ws.id, "relink-closed")
+intakes.close(relink_closed.id, "riku@neptune.ph")
+
+try:
+    intakes.relink(relink_closed.id)
+    ok("relink refuses a closed intake", False)
+except intakes.IntakeError:
+    ok("relink refuses a closed intake", True)
+
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")
 sys.exit(1 if FAILURES else 0)
