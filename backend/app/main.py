@@ -27,7 +27,7 @@ import math
 import re
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
 from typing import List, Union
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -115,6 +115,18 @@ logger = logging.getLogger("prism.api")
 KINDS = ("proposal", "requirements")
 _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 _SLUG_STRIP = re.compile(r"[^A-Za-z0-9]+")
+#: The full C0 control range plus DEL - deliberately including the tab,
+#: line-feed and carriage-return that `.strip()` alone only ever catches at
+#: the two ends of a string, not in the middle. None of the seven are
+#: legitimate inside an email address or a phone number - unlike `scope` or
+#: `budget_text`, free text where a line break is exactly the point, these
+#: two fields have no shape a stray newline could ever be part of - and
+#: otherwise ride along verbatim into a studio's own screens
+#: (`GET /api/intakes`) and, for the email, into `clientview._masked`, which
+#: returns a string with no `@` in it back unmasked. Stripped rather than
+#: rejected outright: a stray control character pasted in from somewhere is
+#: a nuisance to clean up, not intent worth a 400 for.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 app = FastAPI(
@@ -262,6 +274,48 @@ async def _gate(request, call_next):
         return await call_next(request)
 
     path = request.url.path.rstrip("/") or "/"
+
+    # The client's three write routes are rate-limited, and body-capped,
+    # right here - ahead of everything else in this function, including
+    # whether an `Authorization` header exists, since these routes need
+    # none. This is the earliest hook this app's own code has into a
+    # request's life: by the time a route function runs, FastAPI has already
+    # read the whole body and validated it against the declared Pydantic
+    # model, so a check placed inside the handler - where `_enforce_rate_limit`
+    # first lived - is never truly first. Every caller, spammer or not, has
+    # already paid for that buffering and parsing by then. See
+    # `_enforce_rate_limit`'s and `_MAX_CLIENT_BODY_BYTES`'s own comments
+    # (beside the three routes, below) for what each check is and is not.
+    if request.method == "POST" and path.startswith("/api/client/"):
+        write_route = path.rsplit("/", 1)[-1]
+        if write_route in _CLIENT_WRITE_ROUTES:
+            # `Content-Length` is what every JSON client this app actually
+            # talks to sends (`fetch`, `axios`, `httpx`, this test suite's
+            # own `TestClient`) for a body this small - and it is the
+            # cheapest possible refusal for an oversized one: rejected
+            # before a single byte of the body is read, not after it has
+            # already been buffered and hits a validator deep inside a
+            # Pydantic model. It is not proof of anything, honestly stated:
+            # a caller can lie about it, or use chunked transfer-encoding to
+            # omit it entirely, and nothing here bounds a body it cannot see
+            # the declared length of - a header that is absent or not a
+            # plain integer is let through undetermined rather than
+            # rejected. Streaming-body enforcement that catches a lying or
+            # chunked caller too would need to wrap the ASGI `receive`
+            # callable itself, which is a larger change than this fix; the
+            # honest backstop for that case in a real deployment is a
+            # reverse proxy (nginx, Cloudflare, ...) in front of this
+            # process, which is where body-size limits normally belong.
+            declared_length = request.headers.get("content-length", "")
+            if declared_length.isdigit() and int(declared_length) > _MAX_CLIENT_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413, content={"detail": "That request is too large."}
+                )
+            try:
+                _enforce_rate_limit(request, write_route)
+            except HTTPException as exc:
+                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
     # Reading an invitation is open, because the token in the link is the
     # secret: somebody deciding whether to make an account should be able to see
     # what they are being asked to join first. Accepting it is not - that needs
@@ -279,14 +333,13 @@ async def _gate(request, call_next):
     # anything; the handler behind each write route re-checks the intake's own
     # state before acting (via `intakes.advance`'s own transition table), so a
     # token that is real but wrong for the write attempted is refused, not
-    # merely authenticated; and, since Task 4, a per-IP-and-route rate limit
-    # (`_enforce_rate_limit`, beside the three write routes below) on the
-    # write routes - a courtesy control against a script trying every token it
-    # can generate or double-submitting by accident, not a defence against a
-    # determined or distributed attacker. Say that last part plainly, because
-    # it is the one of the three that is not actually load-bearing security:
-    # anyone who can send from more than one address, or who simply waits out
-    # the window, is unaffected by it.
+    # merely authenticated; and a per-IP-and-route rate limit and body-size cap,
+    # just above this comment - a courtesy control against a script trying
+    # every token it can generate or double-submitting by accident, not a
+    # defence against a determined or distributed attacker. Say that last part
+    # plainly, because it is the one of the three that is not actually
+    # load-bearing security: anyone who can send from more than one address,
+    # or who simply waits out the window, is unaffected by it.
     #
     # `path == "/api/client"` (no trailing token at all, with or without a
     # trailing slash - `path` above is already `rstrip("/")`-normalised) is
@@ -699,6 +752,51 @@ def _normalise_budget_text(raw: str) -> str:
             ),
         )
     return text
+
+
+#: `scope` and `budget_text` reach a prompt and so inherited `MAX_BRIEF_CHARS`
+#: as their ceiling; an address and a phone number never do; 254 is the
+#: practical maximum length of an email address (RFC 5321 §4.5.3.1.3) and
+#: comfortably covers a phone number with a country code, extension and
+#: punctuation besides.
+_MAX_CONTACT_CHARS = 254
+
+
+def _normalise_client_email(raw: str) -> str:
+    """The client's own address, from `/api/client/{token}/submit` - the
+    first anonymous write in this codebase, where every other field on the
+    same request is length-checked and this one, before this function
+    existed, was not. Scrubbed of control characters and bounded the same
+    way `scope`/`budget_text` are, not validated as an actual email address:
+    `create_intake` (the studio's own route) does not validate the shape
+    either, and this function's job is only to make the value safe to store
+    and later render on the studio's own screens, not to police what counts
+    as an address."""
+    email = _CONTROL_CHARS.sub("", raw or "").strip()
+    if len(email) > _MAX_CONTACT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"That email address is {len(email):,} characters. The limit is "
+                f"{_MAX_CONTACT_CHARS}."
+            ),
+        )
+    return email
+
+
+def _normalise_client_phone(raw: str) -> str:
+    """The client's own phone number - see `_normalise_client_email`, which
+    this mirrors exactly."""
+    phone = _CONTROL_CHARS.sub("", raw or "").strip()
+    if len(phone) > _MAX_CONTACT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"That phone number is {len(phone):,} characters. The limit is "
+                f"{_MAX_CONTACT_CHARS}."
+            ),
+        )
+    return phone
 
 
 def _apply_ceiling(estimate: Estimate, ceiling: float) -> tuple[Estimate, bool, str]:
@@ -2625,9 +2723,33 @@ async def read_client_view(token: str) -> dict:
 # handler below enforces its own state check rather than trusting the gate,
 # which admits every method under this prefix and could not tell a legal
 # write from an illegal one if it tried.
+#
+# The rate limit and the body-size check that guard these three routes are
+# defined here, beside the routes they describe, but are *called* from
+# `_gate` itself, well above this point in the file - see the comment there.
+# That is a forward reference in reading order, not in execution order:
+# nothing calls `_gate` until the server is already answering requests, by
+# which time this whole module, including every name below, has finished
+# executing. Python resolves a function's globals at call time, not at
+# `def` time, so this is the same kind of reference `_gate` already makes to
+# names in other modules (`auth.required()`, `workspaces.use()`) that are
+# equally not defined at the top of this file.
 
+#: The path suffixes `_gate` rate-limits and body-caps. Matched against the
+#: URL's own last segment, not against FastAPI's resolved route - `_gate`
+#: runs ahead of routing, so it has no resolved route yet to ask.
+_CLIENT_WRITE_ROUTES = {"submit", "revise", "finalize"}
 
-#: Per-IP, per-route courtesy limiter for the three routes below. What this is
+#: Comfortably above the worst legal `/submit` body: `scope` and
+#: `budget_text` can each run to `config.MAX_BRIEF_CHARS` (20,000)
+#: characters, `client_email`/`client_phone` to 254 each - roughly 40,500
+#: characters of content before JSON's own quoting and escaping, which for
+#: multi-byte UTF-8 could run several bytes per character. 200,000 bytes
+#: leaves wide margin for that without coming close to admitting a
+#: deliberately oversized body.
+_MAX_CLIENT_BODY_BYTES = 200_000
+
+#: Per-IP, per-route courtesy limiter for the three routes above. What this is
 #: **not**: a defence against a determined or distributed attacker. It is a
 #: bare dict living in this one worker process's memory - gone the moment the
 #: process restarts, blind to any request handled by a different worker or
@@ -2640,7 +2762,28 @@ async def read_client_view(token: str) -> dict:
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
 _RATE_LIMIT_MAX_REQUESTS = 20
 _rate_limit_lock = threading.Lock()
-_rate_limit_hits: dict[tuple[str, str], deque] = defaultdict(deque)
+_rate_limit_hits: dict[tuple[str, str], deque] = {}
+
+#: Hard cap on how many distinct `(ip, route)` buckets this dict ever holds
+#: at once. The trim inside `_enforce_rate_limit` bounds each *bucket's* own
+#: size (at most `_RATE_LIMIT_MAX_REQUESTS` timestamps, and dropped entirely
+#: once every timestamp in it has aged out) - it does not bound how many
+#: *buckets* accumulate, and a distinct source address is exactly what an
+#: unauthenticated caller on this door controls. A bucket only gets trimmed
+#: when its own key is looked up again; an address that sends exactly one
+#: request and never returns leaves its bucket sitting in this dict,
+#: untouched, for the rest of the process's life - nothing else ever
+#: revisits it to notice the window has passed. Bounding *bucket count*
+#: rather than relying on time-based expiry is what actually stops that:
+#: once this many are tracked, the single oldest one (`dict` preserves
+#: insertion order since Python 3.7, and updating an existing key's value
+#: does not move it, so the first key in iteration order really is the
+#: least recently first-seen) is evicted to make room for a new one. A
+#: memory bound, not a fairness guarantee - an attacker generating enough
+#: distinct addresses can evict a legitimate caller's own bucket early - but
+#: it is what keeps this dict's size from growing without limit for the
+#: life of the process, which the time-based trim alone does not.
+_RATE_LIMIT_MAX_TRACKED_KEYS = 5_000
 
 
 def _client_ip(request: Request) -> str:
@@ -2658,18 +2801,44 @@ def _client_ip(request: Request) -> str:
 
 def _enforce_rate_limit(request: Request, route: str) -> None:
     """Refuse a caller's 21st write to `route` from one address inside a
-    minute. See `_rate_limit_hits`'s own comment for what this is not."""
+    minute. See `_rate_limit_hits`'s and `_RATE_LIMIT_MAX_TRACKED_KEYS`'s own
+    comments for what this is not, and for the two different things it
+    bounds - one bucket's own size, and how many buckets exist at all.
+
+    A bucket already emptied by the trim below is dropped from the dict
+    outright rather than left behind holding nothing - but that alone does
+    *not* bound this dict's total size: this same call immediately
+    recreates the bucket to record its own hit, so an address that is
+    genuinely still writing never has its bucket disappear, and an address
+    that never returns was never going to be looked up again regardless of
+    whether its bucket sat there empty or absent. The bound that actually
+    matters is `_RATE_LIMIT_MAX_TRACKED_KEYS`, enforced just below: once
+    that many distinct `(ip, route)` pairs are tracked, the single oldest
+    is evicted before a genuinely new one is added.
+    """
     now = time.monotonic()
     key = (_client_ip(request), route)
     with _rate_limit_lock:
-        hits = _rate_limit_hits[key]
-        while hits and now - hits[0] > _RATE_LIMIT_WINDOW_SECONDS:
-            hits.popleft()
-        if len(hits) >= _RATE_LIMIT_MAX_REQUESTS:
+        hits = _rate_limit_hits.get(key)
+        is_new_key = hits is None
+        if hits is not None:
+            while hits and now - hits[0] > _RATE_LIMIT_WINDOW_SECONDS:
+                hits.popleft()
+            if not hits:
+                del _rate_limit_hits[key]
+                hits = None
+
+        if hits is not None and len(hits) >= _RATE_LIMIT_MAX_REQUESTS:
             raise HTTPException(
                 status_code=429,
                 detail="Too many attempts from this address. Wait a minute and try again.",
             )
+
+        if hits is None:
+            if is_new_key and len(_rate_limit_hits) >= _RATE_LIMIT_MAX_TRACKED_KEYS:
+                oldest_key = next(iter(_rate_limit_hits))
+                del _rate_limit_hits[oldest_key]
+            hits = _rate_limit_hits[key] = deque()
         hits.append(now)
 
 
@@ -2696,30 +2865,32 @@ def _client_advance(intake_id: str, to: str, **fields) -> intakes.Intake:
     it.
 
     `intakes.advance` raises `IntakeError` for two entirely different
-    reasons, distinguished only by the message: "that move is not legal"
-    (unknown id, wrong state, an unknown field) and "the write itself
-    failed" (`_write`'s own wrapped `OSError` - a full disk, a sync client
-    holding a lock). Those are not the same answer. The first is a refusal,
-    and every refusal on this door is the identical opaque 404. The second is
+    reasons: "that move is not legal" (unknown id, wrong state, an unknown
+    field) and "the write itself failed" (`_write`'s own wrapped `OSError` -
+    a full disk, a sync client holding a lock) - the latter is
+    `intakes.IntakeWriteError`, a dedicated subtype precisely so this
+    function does not have to tell them apart by reading the exception's own
+    message. Those are not the same answer. The first is a refusal, and
+    every refusal on this door is the identical opaque 404. The second is
     not a refusal at all - it is this server failing to save a client's
     words - and folding it into "that link is gone" would tell somebody
-    their submission was rejected when it was actually lost. `_write`'s
-    wrapped message is the only raise site in `advance()` that names the
-    save rather than the move, so it is what is matched on below, rather
-    than adding a pre-read of `entry.state` here purely to classify an
-    exception after the fact - which would reintroduce the duplicated-check
-    problem this function exists to avoid, for a distinction that does not
-    need it.
+    their submission was rejected when it was actually lost. Caught first,
+    and ahead of the plain `IntakeError` below, since it is a subtype of it -
+    listing them in the other order would let the broader `except` swallow
+    it before this one ever ran. Deliberately not a pre-read of
+    `entry.state` here to classify the failure instead: that would
+    reintroduce the duplicated-check problem this function exists to avoid,
+    for a distinction `intakes.py` can already make structurally.
     """
     try:
         return intakes.advance(intake_id, to, **fields)
-    except intakes.IntakeError as exc:
-        if "could not be saved" in str(exc):
-            logger.exception("Could not save a client write to intake %s (-> %s)", intake_id, to)
-            raise HTTPException(
-                status_code=500,
-                detail="That could not be saved. Wait a moment and try again.",
-            ) from exc
+    except intakes.IntakeWriteError as exc:
+        logger.exception("Could not save a client write to intake %s (-> %s)", intake_id, to)
+        raise HTTPException(
+            status_code=500,
+            detail="That could not be saved. Wait a moment and try again.",
+        ) from exc
+    except intakes.IntakeError:
         raise _client_write_refused() from None
 
 
@@ -2739,25 +2910,31 @@ class ClientReviseRequest(BaseModel):
 
 
 @app.post("/api/client/{token}/submit", response_model=None, tags=["client"])
-async def submit_client_intake(
-    token: str, request: Request, body: ClientSubmitRequest
-) -> dict:
+async def submit_client_intake(token: str, body: ClientSubmitRequest) -> dict:
     """The client's own words, written once, from `issued` alone.
 
     There is no studio identity behind this call - just whoever is holding
     the link - so `intakes.advance`'s transition table is the entire abuse
     control: a second call, from `submitted` or anywhere past it, is refused
-    exactly as a call against a token that never resolved is. Length is
-    bounded with the same `_normalise_scope`/`_normalise_budget_text` the
-    studio's own `/api/intakes` route uses, rather than a second convention
-    for the same two fields.
-    """
-    _enforce_rate_limit(request, "submit")
+    exactly as a call against a token that never resolved is. All four fields
+    are bounded: `_normalise_scope`/`_normalise_budget_text` are the same the
+    studio's own `/api/intakes` route uses, and `_normalise_client_email`/
+    `_normalise_client_phone` apply the identical idiom to the two fields
+    that used to get only a bare `.strip()` - see their own docstrings.
 
+    No `Request` parameter, and no `_enforce_rate_limit` call here - unlike
+    the first cut of this route. `_gate` (main.py, well above this point)
+    now makes that check itself, ahead of routing, so it runs before FastAPI
+    reads or parses this request's body at all rather than after. See the
+    comment on that clause for why a check placed here, inside the handler,
+    can never be truly first.
+    """
     found = tokens.resolve(token)
     if found is None:
         raise _client_write_refused()
 
+    client_email = _normalise_client_email(body.client_email)
+    client_phone = _normalise_client_phone(body.client_phone)
     scope = _normalise_scope(body.scope)
     budget_text = _normalise_budget_text(body.budget_text)
 
@@ -2767,8 +2944,8 @@ async def submit_client_intake(
         moved = _client_advance(
             intake_id,
             intakes.SUBMITTED,
-            client_email=(body.client_email or "").strip(),
-            client_phone=(body.client_phone or "").strip(),
+            client_email=client_email,
+            client_phone=client_phone,
             scope=scope,
             budget_text=budget_text,
         )
@@ -2780,9 +2957,7 @@ async def submit_client_intake(
 
 
 @app.post("/api/client/{token}/revise", response_model=None, tags=["client"])
-async def revise_client_intake(
-    token: str, request: Request, body: ClientReviseRequest
-) -> dict:
+async def revise_client_intake(token: str, body: ClientReviseRequest) -> dict:
     """Ask for a change. Accepted only from `sent`, and only once at a time -
     a second ask before the studio has re-quoted moves the record to
     `revision_requested`, which is not `sent`, so `intakes.advance` refuses
@@ -2791,9 +2966,11 @@ async def revise_client_intake(
     `revisions` is a log `advance()` overwrites wholesale rather than appends
     to (see `ADVANCE_FIELDS`'s own docstring), so the full, updated list is
     built here from the record's current one and handed in whole.
-    """
-    _enforce_rate_limit(request, "revise")
 
+    No `Request` parameter and no `_enforce_rate_limit` call - see
+    `submit_client_intake`'s docstring for why: `_gate` makes this check now,
+    ahead of routing and body parsing.
+    """
     found = tokens.resolve(token)
     if found is None:
         raise _client_write_refused()
@@ -2821,22 +2998,40 @@ async def revise_client_intake(
             revisions=existing + [{"asked": asked, "at": storage.utc_now_iso()}],
         )
         bundle = storage.get(moved.sent_bundle_id) if moved.sent_bundle_id else None
-        return clientview.of(moved, bundle)
+        try:
+            return clientview.of(moved, bundle)
+        except ValueError:
+            # `clientview.of` raises for a quoted-face state with no bundle
+            # attached (see its own docstring) - reachable here because
+            # nothing in `intakes.py` keeps `sent_bundle_id` pointing at a
+            # real bundle: `DELETE /api/proposals/{id}` can remove one out
+            # from under a `sent` intake today, and `QUOTED -> SENT` never
+            # required the reverse. `moved` is already persisted at this
+            # point - the transition itself cannot be undone - so this
+            # answers the same opaque refusal `read_client_view` gives for
+            # the identical failure, rather than a 500 with a traceback.
+            logger.exception(
+                "clientview.of could not show intake %s after revise - dangling bundle?",
+                intake_id,
+            )
+            raise _client_write_refused() from None
     finally:
         workspaces.give_back(borrowed)
 
 
 @app.post("/api/client/{token}/finalize", response_model=None, tags=["client"])
-async def finalize_client_intake(token: str, request: Request) -> dict:
+async def finalize_client_intake(token: str) -> dict:
     """The client accepts what was sent. Not a signature and nothing is
     charged - that framing lives on the client's own screen (Task 8), not
     here. Accepted only from `sent`. Tells the intake's own author and every
     admin, by an explicit recipient list rather than a role alone, since
     whoever issued this particular request should hear about it even if they
     do not administer the workspace.
-    """
-    _enforce_rate_limit(request, "finalize")
 
+    No `Request` parameter and no `_enforce_rate_limit` call - see
+    `submit_client_intake`'s docstring for why: `_gate` makes this check now,
+    ahead of routing.
+    """
     found = tokens.resolve(token)
     if found is None:
         raise _client_write_refused()
@@ -2847,41 +3042,82 @@ async def finalize_client_intake(token: str, request: Request) -> dict:
         moved = _client_advance(intake_id, intakes.FINALIZED)
         bundle = storage.get(moved.sent_bundle_id) if moved.sent_bundle_id else None
 
+        # Built and validated *before* the notification below runs, on
+        # purpose. `moved` is already persisted at this point - the
+        # transition itself cannot be undone - but nothing external has been
+        # told anything yet. `clientview.of` raises `ValueError` for a
+        # quoted-face state with no bundle attached (see its own docstring),
+        # reachable here for the same reason `/revise` guards it above:
+        # nothing in `intakes.py` keeps `sent_bundle_id` pointing at a real
+        # bundle, and `DELETE /api/proposals/{id}` can remove one out from
+        # under a `sent` intake today. Failing *here*, ahead of
+        # `inbox.notify`, is the point: the worst case is a client seeing
+        # this door's ordinary opaque refusal on a state that quietly did
+        # move - not the studio being told a quotation was accepted while
+        # the client who "accepted" it stares at an error. Calling
+        # `clientview.of` bare, or guarding it only after notifying, would
+        # produce exactly that inversion.
+        try:
+            view = clientview.of(moved, bundle)
+        except ValueError:
+            logger.exception(
+                "clientview.of could not show intake %s after finalize - dangling bundle?",
+                intake_id,
+            )
+            raise _client_write_refused() from None
+
         # Resolved against the roster at write time, the same as every other
         # notification in this file - see `inbox.py`'s own docstring on why.
-        # A plain union of two sets rather than two separate `notify()` calls,
-        # so an admin who also happens to be `created_by` is told once, not
-        # twice.
-        recipients = {
+        # A plain union of two sets rather than two separate `notify()`
+        # calls, so an admin who also happens to be `created_by` is told
+        # once, not twice.
+        roster = members.listing()
+        roster_emails = {(member.email or "").strip().lower() for member in roster}
+        admin_emails = {
             (member.email or "").strip().lower()
-            for member in members.listing()
+            for member in roster
             if member.role == members.ADMIN
         }
+        recipients = set(admin_emails)
         created_by = (moved.created_by or "").strip().lower()
-        if created_by:
+        if created_by and created_by in roster_emails:
             recipients.add(created_by)
-        if recipients:
-            inbox.notify(
-                "intake.finalized",
-                list(recipients),
-                {
-                    "title": "A client finalised their quotation",
-                    "body": " · ".join(
-                        part
-                        for part in (
-                            bundle.estimate.quotation_ref if bundle else "",
-                            bundle.estimate.client_name if bundle else "",
-                            format_money(bundle.estimate.cost.total, bundle.estimate.currency)
-                            if bundle
-                            else "",
-                        )
-                        if part
-                    ),
-                    "href": "#/intakes",
-                },
-            )
 
-        return clientview.of(moved, bundle)
+        words = {
+            "title": "A client finalised their quotation",
+            "body": " · ".join(
+                part
+                for part in (
+                    bundle.estimate.quotation_ref if bundle else "",
+                    bundle.estimate.client_name if bundle else "",
+                    format_money(bundle.estimate.cost.total, bundle.estimate.currency)
+                    if bundle
+                    else "",
+                )
+                if part
+            ),
+            "href": "#/intakes",
+        }
+        if recipients:
+            inbox.notify("intake.finalized", list(recipients), words)
+        if created_by and created_by not in roster_emails:
+            # `created_by` is no longer on this workspace's team.
+            # `inbox.notify`'s list-audience path (`inbox._people`) only
+            # ever matches names against the *current* roster, so a former
+            # member would otherwise hear nothing about a request they
+            # personally took in - silently breaking this handler's own
+            # promise, stated above, that the author is told "even if they
+            # do not administer the workspace" (a departed member does not
+            # administer it either, and this is the sharper case of the
+            # same promise). `inbox.deliver` writes straight to a named
+            # person's file with no roster check at all, which is exactly
+            # what is needed here - and cannot double-notify: this branch
+            # and the `recipients`-based call above are mutually exclusive
+            # by construction, since `created_by in roster_emails` decides
+            # which one this person can ever reach.
+            inbox.deliver(inbox.key_for(created_by), "intake.finalized", words)
+
+        return view
     finally:
         workspaces.give_back(borrowed)
 

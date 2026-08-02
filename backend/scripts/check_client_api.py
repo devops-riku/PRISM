@@ -588,18 +588,42 @@ with TestClient(app) as client:
     )
 
     # --- Submit from every other state is refused, identically ---------------
+    #
+    # The brief says "any other state", and the table below is what that
+    # claim is actually asserting - every non-`issued`, non-`closed` row in
+    # `intakes.ALLOWED`, not just the two states nearest to `issued`.
+    # `submitted` itself is covered separately, above, by the double-submit
+    # test (a fresh `issued` fixture would only prove submit works twice in a
+    # row from `issued`, which the state-check design makes impossible - the
+    # double-submit test already reaches `submitted` for real).
+
+    _QUOTED_STEPS = (
+        (intakes.SUBMITTED, {}),
+        (intakes.PREPARING, {"job_id": "x"}),
+        (intakes.QUOTED, {"bundle_ids": ["a" * 12]}),
+    )
+    _SENT_STEPS = _QUOTED_STEPS + (
+        (intakes.SENT, {"sent_bundle_id": "a" * 12, "sent_at": "2026-01-01T00:00:00Z"}),
+    )
 
     SUBMIT_REFUSAL_FIXTURES = (
-        ("quoted", ((intakes.SUBMITTED, {}), (intakes.PREPARING, {"job_id": "x"}), (intakes.QUOTED, {"bundle_ids": ["a" * 12]}))),
+        ("preparing", ((intakes.SUBMITTED, {}), (intakes.PREPARING, {"job_id": "x"}))),
         (
-            "sent",
+            "quote_failed",
             (
                 (intakes.SUBMITTED, {}),
                 (intakes.PREPARING, {"job_id": "x"}),
-                (intakes.QUOTED, {"bundle_ids": ["a" * 12]}),
-                (intakes.SENT, {"sent_bundle_id": "a" * 12, "sent_at": "2026-01-01T00:00:00Z"}),
+                (intakes.QUOTE_FAILED, {"error": "simulated failure"}),
             ),
         ),
+        ("quoted", _QUOTED_STEPS),
+        ("sent", _SENT_STEPS),
+        (
+            "revision_requested",
+            _SENT_STEPS
+            + ((intakes.REVISION_REQUESTED, {"revisions": [{"asked": "x", "at": "2026-01-01T00:00:00Z"}]}),),
+        ),
+        ("finalized", _SENT_STEPS + ((intakes.FINALIZED, {}),)),
     )
     for label, steps in SUBMIT_REFUSAL_FIXTURES:
         workspaces.use(home.id)
@@ -678,18 +702,99 @@ with TestClient(app) as client:
         intakes.get(length_fixture.id).state == intakes.ISSUED,
     )
 
+    # --- client_email/client_phone are bounded too, not just scope/budget ---
+    #
+    # Before this fix these two fields got only a bare `.strip()` - unbounded
+    # on the first anonymous write in this codebase, and persisted verbatim
+    # into the studio's own `GET /api/intakes`. Same idiom as scope/budget:
+    # the exact detail is captured live from the normaliser itself.
+    LONG_CONTACT = "y" * (main_module._MAX_CONTACT_CHARS + 1)  # noqa: SLF001
+
+    try:
+        main_module._normalise_client_email(LONG_CONTACT)  # noqa: SLF001
+        expected_email_detail = None
+    except Exception as exc:  # noqa: BLE001
+        expected_email_detail = exc.detail
+
+    over_email = submit_client.post(
+        f"/api/client/{length_fixture.token}/submit",
+        json={"client_email": LONG_CONTACT, "client_phone": "fine", "scope": "fine", "budget_text": "fine"},
+    )
+    ok("submit: an over-length email is refused with 400", over_email.status_code == 400)
+    ok(
+        "submit: with the exact detail `_normalise_client_email` itself raises",
+        over_email.json()["detail"] == expected_email_detail,
+    )
+
+    try:
+        main_module._normalise_client_phone(LONG_CONTACT)  # noqa: SLF001
+        expected_phone_detail = None
+    except Exception as exc:  # noqa: BLE001
+        expected_phone_detail = exc.detail
+
+    over_phone = submit_client.post(
+        f"/api/client/{length_fixture.token}/submit",
+        json={"client_email": "fine", "client_phone": LONG_CONTACT, "scope": "fine", "budget_text": "fine"},
+    )
+    ok("submit: an over-length phone number is refused with 400", over_phone.status_code == 400)
+    ok(
+        "submit: with the exact detail `_normalise_client_phone` itself raises",
+        over_phone.json()["detail"] == expected_phone_detail,
+    )
+    ok(
+        "submit: refusing on contact-field length still did not move the intake off issued",
+        intakes.get(length_fixture.id).state == intakes.ISSUED,
+    )
+
+    # A control character is scrubbed rather than rejected - proven directly
+    # against the normaliser, including a tab and a newline (not just a
+    # bare C0 control), and end to end through a real submit.
+    ok(
+        "_normalise_client_email strips control characters rather than storing them, "
+        "including a tab/newline in the middle - not only what .strip() alone would catch "
+        "at the two ends",
+        main_module._normalise_client_email("a\x00b\x1fc\td\ne@example.com")  # noqa: SLF001
+        == "abcde@example.com",
+    )
+    workspaces.use(home.id)
+    control_char_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    scrubbed = submit_client.post(
+        f"/api/client/{control_char_fixture.token}/submit",
+        json={
+            "client_email": "weird\x07@client.com",
+            "client_phone": "09\x0017\x08000",
+            "scope": "fine",
+            "budget_text": "fine",
+        },
+    )
+    ok("submit with control characters in the contact fields: still 200", scrubbed.status_code == 200)
+    scrubbed_on_disk = intakes.get(control_char_fixture.id)
+    ok(
+        "and the control characters did not reach disk",
+        scrubbed_on_disk.client_email == "weird@client.com"
+        and scrubbed_on_disk.client_phone == "0917000",
+    )
+
     # --- A genuine save failure is not folded into the opaque "gone" body ----
     #
     # `_client_advance` (main.py) distinguishes `intakes.advance` raising
     # because the move is illegal from `intakes.advance` raising because
-    # `_write` itself could not save - matched on the wrapped message
-    # `_write` uses, since `IntakeError` does not otherwise say which of the
-    # two happened. Proven directly, the same way this file already forces
-    # `clientview.of` to raise for the "state clientview cannot show" case
-    # above: patch `intakes.advance` (through `main_module.intakes`, the
-    # attribute the handler actually resolves through) to raise exactly the
-    # message `_write` raises, and confirm the door answers 500 - a real
-    # error - rather than quietly claiming the link itself is gone.
+    # `_write` itself could not save - by exception *type*
+    # (`intakes.IntakeWriteError`, a dedicated subtype of `IntakeError`), not
+    # by reading the exception's own message. Proven twice, the same way
+    # this file already forces `clientview.of` to raise for the "state
+    # clientview cannot show" case above: patch `intakes.advance` (through
+    # `main_module.intakes`, the attribute the handler actually resolves
+    # through) to raise `IntakeWriteError`, and confirm the door answers
+    # 500 - a real error - rather than quietly claiming the link is gone.
+    # The second patch uses a message that shares not one word with
+    # `_write`'s own - proof this is a type dispatch, not a resurrected
+    # string match: if `intakes.py`'s wording ever changes, this test would
+    # still pass and `_client_advance` would still classify it correctly,
+    # which is exactly what a substring match could not promise.
     workspaces.use(home.id)
     save_failure_fixture = intakes.create(
         client_email="", client_phone="", scope="", budget_text="", preset={},
@@ -697,7 +802,7 @@ with TestClient(app) as client:
     )
 
     def _advance_that_cannot_save(*_args, **_kwargs):
-        raise intakes.IntakeError(
+        raise intakes.IntakeWriteError(
             "That intake could not be saved: [Errno 28] No space left on device"
         )
 
@@ -716,6 +821,51 @@ with TestClient(app) as client:
         "and its body is not the opaque 'gone' text - a lost submission must not read as a "
         "dead link",
         save_failed.json() != {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    def _advance_that_cannot_save_reworded(*_args, **_kwargs):
+        raise intakes.IntakeWriteError("Disk quota exceeded on volume PRISM-DATA")
+
+    workspaces.use(home.id)
+    reworded_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    try:
+        main_module.intakes.advance = _advance_that_cannot_save_reworded
+        save_failed_reworded = submit_client.post(
+            f"/api/client/{reworded_fixture.token}/submit",
+            json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+        )
+    finally:
+        main_module.intakes.advance = _real_advance
+
+    ok(
+        "a save failure is still classified correctly even with a completely different "
+        "message - this is a type dispatch on IntakeWriteError, not a resurrected string match",
+        save_failed_reworded.status_code == 500
+        and save_failed_reworded.json() != {"detail": main_module._CLIENT_LINK_GONE},
+    )
+
+    # And the ordinary refusal path is untouched: a plain `IntakeError` (not
+    # the `IntakeWriteError` subtype) for a state the transition table
+    # refuses still answers this door's usual opaque 404, not a 500 - proving
+    # `except intakes.IntakeWriteError` catching first does not accidentally
+    # widen what counts as a save failure.
+    workspaces.use(home.id)
+    ordinary_refusal_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    intakes.close(ordinary_refusal_fixture.id, "admin@neptune.ph")
+    ordinary_refusal = submit_client.post(
+        f"/api/client/{ordinary_refusal_fixture.token}/submit",
+        json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+    )
+    ok(
+        "a plain IntakeError (illegal move) still answers the ordinary opaque 404, not 500",
+        ordinary_refusal.status_code == 404
+        and ordinary_refusal.json() == {"detail": main_module._CLIENT_LINK_GONE},
     )
 
     # --- /revise: only from `sent` --------------------------------------------
@@ -770,6 +920,32 @@ with TestClient(app) as client:
     ok(
         "revise twice: the revisions log did not gain a second entry",
         len(intakes.get(revise_sent.id).revisions) == 1,
+    )
+
+    # --- A sent intake whose bundle has since been deleted is refused, not
+    #     a 500 traceback - `clientview.of` raises `ValueError` for a
+    #     quoted-face state with no bundle, and nothing in `intakes.py`
+    #     keeps `sent_bundle_id` pointing at a real bundle:
+    #     `DELETE /api/proposals/{id}` (main.py) can remove one out from
+    #     under a `sent` intake today, with nothing to stop it.
+    dangling_revise_sent, dangling_revise_bundle = _sent_intake(home, "author-dangling@neptune.ph")
+    ok(
+        "dangling-bundle fixture: the bundle exists before it is deleted",
+        storage.get(dangling_revise_bundle.id) is not None,
+    )
+    storage.delete(dangling_revise_bundle.id)
+    ok(
+        "dangling-bundle fixture: and is genuinely gone afterwards",
+        storage.get(dangling_revise_bundle.id) is None,
+    )
+    dangling_revise = revise_client.post(
+        f"/api/client/{dangling_revise_sent.token}/revise", json={"asked": "anything"}
+    )
+    ok(
+        "revise against a sent intake whose bundle was deleted answers this door's usual "
+        "opaque refusal, not a 500 with a traceback",
+        dangling_revise.status_code == 404
+        and dangling_revise.json() == {"detail": main_module._CLIENT_LINK_GONE},
     )
 
     REVISE_REFUSAL_FIXTURES = (
@@ -891,6 +1067,70 @@ with TestClient(app) as client:
         finalize_bundle.estimate.quotation_ref in owner_note.body,
     )
 
+    # --- created_by who is not on this workspace's roster still hears about
+    #     it - `inbox.notify`'s list-audience path only ever matches names
+    #     still on the roster, so a plain `notify()` call silently drops
+    #     anyone who has left the team (or, as here, was never on it despite
+    #     having created the request). `inbox.deliver` is the door that
+    #     writes to a named person regardless.
+    ghost_sent, ghost_bundle = _sent_intake(notif_ws, "ghost@neptune.ph")
+    ok(
+        "ghost fixture: created_by is not on this workspace's roster at all",
+        "ghost@neptune.ph" not in {m.email.lower() for m in members.listing()},
+    )
+    ghost_finalized = finalize_client.post(f"/api/client/{ghost_sent.token}/finalize")
+    ok("finalize with an off-roster created_by: still 200", ghost_finalized.status_code == 200)
+    ghost_mail = inbox.listing(person=inbox.key_for("ghost@neptune.ph"))
+    ok(
+        "finalize: created_by who is not on the roster is still told - this route's own "
+        "promise ('even if they do not administer the workspace') would otherwise quietly "
+        "break for exactly this person",
+        any(note.kind == "intake.finalized" for note in ghost_mail),
+    )
+
+    # --- A sent intake whose bundle has since been deleted is refused, not a
+    #     500 traceback - and, the sharper case Task 4's review actually
+    #     found: the ordering fix that stops the studio being told a
+    #     quotation was accepted while the client who "accepted" it sees an
+    #     error. `_client_advance` already persisted `finalized` by the time
+    #     `clientview.of` fails - that transition cannot be undone - so what
+    #     is being proven here is narrower and more important than "no
+    #     traceback": that `inbox.notify` never ran for this attempt at all.
+    dangling_finalize_sent, dangling_finalize_bundle = _sent_intake(notif_ws, "author@neptune.ph")
+    storage.delete(dangling_finalize_bundle.id)
+    ok(
+        "dangling-bundle finalize fixture: the bundle is genuinely gone",
+        storage.get(dangling_finalize_bundle.id) is None,
+    )
+    owner_finalized_notes_before_dangling = sum(
+        1
+        for note in inbox.listing(person=inbox.key_for("owner-admin@neptune.ph"))
+        if note.kind == "intake.finalized"
+    )
+    dangling_finalize = finalize_client.post(f"/api/client/{dangling_finalize_sent.token}/finalize")
+    ok(
+        "finalize against a sent intake whose bundle was deleted answers this door's usual "
+        "opaque refusal, not a 500 with a traceback",
+        dangling_finalize.status_code == 404
+        and dangling_finalize.json() == {"detail": main_module._CLIENT_LINK_GONE},
+    )
+    ok(
+        "the intake still genuinely moved to finalized - _client_advance's write cannot be "
+        "undone once it has happened, only what runs after it can be gated",
+        intakes.get(dangling_finalize_sent.id).state == intakes.FINALIZED,
+    )
+    owner_finalized_notes_after_dangling = sum(
+        1
+        for note in inbox.listing(person=inbox.key_for("owner-admin@neptune.ph"))
+        if note.kind == "intake.finalized"
+    )
+    ok(
+        "and this is the ordering fix itself: the admins were NOT told a quotation was "
+        "accepted while the client who 'accepted' it is looking at an error - clientview.of "
+        "is built and validated before inbox.notify runs, never after",
+        owner_finalized_notes_after_dangling == owner_finalized_notes_before_dangling,
+    )
+
     FINALIZE_REFUSAL_FIXTURES = (
         ("issued", ()),
         ("submitted", ((intakes.SUBMITTED, {}),)),
@@ -926,9 +1166,16 @@ with TestClient(app) as client:
     # mailbox length: `inbox.listing()` defaults to the newest 30 and `_save`
     # trims old notes, so a raw length comparison would still pass if a note
     # were both added and trimmed - unlikely with one note in a fresh
-    # mailbox, but not what "no second notification" actually claims.
+    # mailbox, but not what "no second notification" actually claims. Read
+    # fresh here, not from the `owner_mail` snapshot taken earlier - the
+    # ghost and dangling-bundle fixtures above have each sent owner-admin
+    # a further `intake.finalized` note of their own in the meantime, and a
+    # stale count would compare against a number that no longer reflects
+    # what is actually on disk.
     owner_finalized_notes_before = sum(
-        1 for note in owner_mail if note.kind == "intake.finalized"
+        1
+        for note in inbox.listing(person=inbox.key_for("owner-admin@neptune.ph"))
+        if note.kind == "intake.finalized"
     )
     refinalize = finalize_client.post(f"/api/client/{finalize_sent.token}/finalize")
     ok(
@@ -943,7 +1190,7 @@ with TestClient(app) as client:
     )
     ok(
         "finalize twice: no second notification was written",
-        owner_finalized_notes_after == owner_finalized_notes_before == 1,
+        owner_finalized_notes_after == owner_finalized_notes_before,
     )
 
     # --- The rate limit: the 21st write from one IP inside a minute is 429 ---
@@ -980,6 +1227,100 @@ with TestClient(app) as client:
         rate_other_ip.status_code == 404
         and rate_other_ip.json() == {"detail": main_module._CLIENT_LINK_GONE},
     )
+
+    # --- The rate limit runs before FastAPI ever parses the body -------------
+    #
+    # `rate_ip_a` is already over budget on `submit` from the block above.
+    # Sent a deliberately malformed body - not valid JSON at all - and if the
+    # limiter genuinely runs first, the answer is still 429; if it ran from
+    # inside the handler (where it used to live, behind `body:
+    # ClientSubmitRequest` as a parameter), FastAPI would have already
+    # rejected the malformed body with a 422 before the handler - and this
+    # check - ever ran.
+    malformed_but_over_budget = rate_ip_a.post(
+        f"/api/client/{rate_fixture.token}/submit",
+        content=b"{this is not valid json at all",
+        headers={"Content-Type": "application/json"},
+    )
+    ok(
+        "a malformed body from an address already over its rate-limit budget still gets "
+        "429, not 422 - proof the check runs ahead of FastAPI's own body parsing",
+        malformed_but_over_budget.status_code == 429,
+    )
+
+    # --- An oversized declared body is refused before a byte of it is read ---
+
+    oversized_client = _client_for("203.0.113.40")
+    oversized_body = {
+        "client_email": "x@y.com",
+        "client_phone": "",
+        "scope": "x" * (main_module._MAX_CLIENT_BODY_BYTES + 1000),  # noqa: SLF001
+        "budget_text": "y",
+    }
+    oversized_resp = oversized_client.post(
+        f"/api/client/{rate_fixture.token}/submit", json=oversized_body
+    )
+    ok(
+        "a body whose declared Content-Length exceeds the cap is refused with 413",
+        oversized_resp.status_code == 413,
+    )
+
+    # A body comfortably inside the cap is not swept up by it - proven with a
+    # fresh token so this does not collide with `rate_fixture`'s own already-
+    # submitted state and read as a false pass.
+    workspaces.use(home.id)
+    under_cap_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    under_cap_resp = oversized_client.post(
+        f"/api/client/{under_cap_fixture.token}/submit",
+        json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+    )
+    ok(
+        "a body comfortably inside the cap is unaffected by it - the same address's "
+        "oversized attempt above did not poison this one",
+        under_cap_resp.status_code == 200,
+    )
+
+    # --- The rate limiter's own dict never grows without bound ---------------
+    #
+    # `_RATE_LIMIT_MAX_TRACKED_KEYS` is patched down to a small number so this
+    # does not require 5,000 real HTTP requests to observe - the mechanism
+    # being proven (evict the single oldest bucket once the cap is reached) is
+    # the same at any size. Both the dict and the cap are swapped back in a
+    # `finally`, the same discipline this file already uses for `generate_estimate`,
+    # `tokens.resolve` and `clientview.of`.
+    _real_rate_limit_hits = main_module._rate_limit_hits
+    _real_max_tracked_keys = main_module._RATE_LIMIT_MAX_TRACKED_KEYS
+    try:
+        main_module._rate_limit_hits = {}
+        main_module._RATE_LIMIT_MAX_TRACKED_KEYS = 3
+        eviction_clients = [_client_for(f"203.0.113.{50 + i}") for i in range(5)]
+        workspaces.use(home.id)
+        eviction_fixture = intakes.create(
+            client_email="", client_phone="", scope="", budget_text="", preset={},
+            created_by="admin@neptune.ph",
+        )
+        for eviction_client in eviction_clients:
+            eviction_client.post(
+                f"/api/client/{eviction_fixture.token}/submit",
+                json={"scope": "x", "budget_text": "y"},
+            )
+        ok(
+            "the rate limiter's dict reached its tracked-key cap rather than growing to one "
+            "entry per distinct address",
+            len(main_module._rate_limit_hits) == 3,
+        )
+        ok(
+            "and it holds the three most recently first-seen addresses, not an arbitrary "
+            "three - the two earliest callers were evicted, the three latest were not",
+            {key[0] for key in main_module._rate_limit_hits}
+            == {"203.0.113.52", "203.0.113.53", "203.0.113.54"},
+        )
+    finally:
+        main_module._rate_limit_hits = _real_rate_limit_hits
+        main_module._RATE_LIMIT_MAX_TRACKED_KEYS = _real_max_tracked_keys
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")

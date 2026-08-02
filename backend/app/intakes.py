@@ -147,6 +147,19 @@ class IntakeError(Exception):
     """A move the machine does not allow, or an intake that is not there."""
 
 
+class IntakeWriteError(IntakeError):
+    """`_write` could not persist the record - a full disk, a sync client
+    holding a lock - as distinct from every other `IntakeError`, which means
+    "that move is not legal". A caller that needs to tell "refused" from
+    "lost" apart (`main.py`'s `_client_advance`, for the client's own write
+    routes: a refusal is this door's one opaque 404, but a save failure must
+    never read as a dead link - that would tell somebody their submission
+    was rejected when it was actually lost) catches this subtype first.
+    Kept a subtype of `IntakeError` rather than a separate hierarchy so
+    every existing `except IntakeError` in this codebase still catches it
+    unchanged."""
+
+
 class Intake(BaseModel):
     """One client request and everything that has happened to it."""
 
@@ -264,7 +277,7 @@ def _write(entry: Intake) -> Intake:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
-        raise IntakeError(f"That intake could not be saved: {exc}") from exc
+        raise IntakeWriteError(f"That intake could not be saved: {exc}") from exc
     return entry
 
 
