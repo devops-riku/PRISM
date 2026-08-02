@@ -43,6 +43,7 @@ from app import (
     config,
     hub,
     inbox,
+    intakes,
     mailer,
     members,
     design,
@@ -2257,6 +2258,72 @@ async def delete_workspace(request: Request, workspace_id: str) -> Response:
     return Response(status_code=204)
 
 
+class IntakeRequest(BaseModel):
+    """What the studio heard from the client, plus how it should be quoted."""
+
+    client_email: str = ""
+    client_phone: str = ""
+    scope: str = ""
+    budget_text: str = ""
+    preset: dict = Field(default_factory=dict)
+
+
+@app.post("/api/intakes", response_model=intakes.Intake, status_code=201, tags=["intakes"])
+async def create_intake(request: Request, body: IntakeRequest) -> intakes.Intake:
+    """Record a client request. Admin-only: an intake is the start of a price,
+    and issuing one is nearer to inviting somebody than to drafting a
+    quotation. This is deliberate rather than incidental - the gate's
+    member/admin split (`_gate`, main.py:311-319) only blocks a member's
+    POST to `/api/settings` and `/api/team`, so without this call a member's
+    POST here would go through unchecked."""
+    _require_admin(request, "Only an admin of this workspace can record a client request.")
+    if not body.scope.strip():
+        raise HTTPException(status_code=422, detail="A request needs a scope.")
+    try:
+        return intakes.create(
+            client_email=body.client_email,
+            client_phone=body.client_phone,
+            scope=body.scope,
+            budget_text=body.budget_text,
+            preset=body.preset,
+            created_by=_who_email(request),
+        )
+    except intakes.IntakeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/intakes", response_model=List[intakes.Intake], tags=["intakes"])
+async def list_intakes() -> List[intakes.Intake]:
+    """The queue, newest first. Scoped to this workspace like everything else.
+
+    No admin check: a member is exactly who turns a request into a
+    quotation, so seeing the queue is theirs by default like the rest of
+    `/api/`, and only admitting a new one is set apart above."""
+    return intakes.listing()
+
+
+@app.get("/api/intakes/{intake_id}", response_model=intakes.Intake, tags=["intakes"])
+async def read_intake(intake_id: str) -> intakes.Intake:
+    """One request. Open to members for the same reason the queue is; a
+    malformed or unknown id reads as a plain 404 because `intakes.get`
+    validates the id itself before any path is built."""
+    entry = intakes.get(intake_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="That request does not exist.")
+    return entry
+
+
+@app.post("/api/intakes/{intake_id}/close", response_model=intakes.Intake, tags=["intakes"])
+async def close_intake(request: Request, intake_id: str) -> intakes.Intake:
+    """Not going ahead. Reversible only by making a new request. Admin-only,
+    the same side of the line as issuing one in the first place."""
+    _require_admin(request, "Only an admin of this workspace can close a client request.")
+    try:
+        return intakes.close(intake_id, _who_email(request))
+    except intakes.IntakeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 class AuthConfig(BaseModel):
     """What the client needs before it can show a sign-in screen."""
 
@@ -2339,15 +2406,24 @@ def _who(request: Request) -> auth.User | None:
     return getattr(request.state, "user", None)
 
 
-def _require_admin(request: Request) -> None:
-    """Refuse anyone but an admin, and say what the difference is."""
+def _who_email(request: Request) -> str:
+    """The signed-in email, or '' on an install with no accounts."""
+    user = _who(request)
+    return user.email if user else ""
+
+
+def _require_admin(
+    request: Request, detail: str = "Only an admin of this workspace can change its team."
+) -> None:
+    """Refuse anyone but an admin of the workspace that is currently open, and
+    say what the difference is. Predates the intake routes - originally
+    written for team management below - and is reused rather than
+    re-defined for them; `detail` lets each call site's 403 name the thing it
+    is actually refusing instead of always talking about the team."""
     if not auth.required():
         return
     if getattr(request.state, "role", "") != members.ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Only an admin of this workspace can change its team.",
-        )
+        raise HTTPException(status_code=403, detail=detail)
 
 
 def _team(request: Request) -> TeamView:
