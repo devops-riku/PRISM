@@ -27,6 +27,7 @@ const TONE: Record<string, string> = {
   generation_blocked: 'alert',
   work_lost_to_restart: 'alert',
   removed_from_team: 'alert',
+  'intake.quote_failed': 'alert',
 }
 
 type DotProps = {

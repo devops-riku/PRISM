@@ -106,8 +106,14 @@ refuses(
     lambda: intakes.advance(entry.id, intakes.FINALIZED),
 )
 
+# A second Generate on an already-quoted intake is reachable in the shipped
+# UI (Price this -> pad -> Generate -> browser Back -> Generate again), so
+# `quoted -> preparing` has to be a legal move rather than a dead end that
+# leaves the record pointing at a bundle nobody is looking at anymore.
+intakes.advance(entry.id, intakes.PREPARING, job_id="j1-again")
+ok("quoted -> preparing is now legal", intakes.get(entry.id).state == intakes.PREPARING)
+
 # Illegal moves, forever.
-refuses("quoted -> preparing is refused", lambda: intakes.advance(entry.id, intakes.PREPARING))
 refuses("an unknown state is refused", lambda: intakes.advance(entry.id, "nonsense"))
 refuses("an unknown intake is refused", lambda: intakes.advance("0" * 12, intakes.CLOSED))
 

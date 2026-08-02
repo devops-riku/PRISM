@@ -108,6 +108,12 @@ function IntakeRow({
   // so pricing it again is a legal move, not a dead end - the row gets the
   // same door a fresh `submitted` request does.
   const canPrice = row.state === 'submitted' || row.state === 'quote_failed'
+  // `bundle_ids` is the only way from a quoted row back to what it produced -
+  // without this, "quoted" is a dead end even though the quotation itself is
+  // sitting right there at `#/q/<id>`. Guarded rather than assumed: nothing
+  // in `ALLOWED` can produce a `quoted` row with an empty list, but a row this
+  // screen has never heard of is exactly the case worth not crashing on.
+  const firstBundleId = row.state === 'quoted' ? row.bundle_ids[0] || '' : ''
 
   return (
     <article className="row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6">
@@ -156,6 +162,11 @@ function IntakeRow({
             {canPrice ? (
               <a href={`#/pad/${row.id}`} className={ACTION_PRIMARY}>
                 Price this
+              </a>
+            ) : null}
+            {firstBundleId ? (
+              <a href={`#/q/${firstBundleId}`} className={ACTION_PRIMARY}>
+                View quotation
               </a>
             ) : null}
             {/* Closing is an admin's call, like recording one - the server

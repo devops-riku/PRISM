@@ -79,6 +79,25 @@ def settle_job(job_id: str, want: str, seconds: float = 20.0) -> str:
     return found.state if found is not None else "missing"
 
 
+def settle_change(intake_id: str, before: list[str], seconds: float = 20.0):
+    """Wait until `bundle_ids` differs from `before`, then return the intake.
+
+    Used where the intake is already sitting in the state being waited for
+    before the request under test is even sent - `settle(id, QUOTED)` on an
+    intake that is already `quoted` would return true instantly, proving
+    nothing about whether the second pass actually landed. Polling for the
+    field to change is the only way to tell "still the first pass" from "the
+    second pass finished" apart.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        found = intakes.get(intake_id)
+        if found.bundle_ids != before:
+            return found
+        time.sleep(0.25)
+    return intakes.get(intake_id)
+
+
 def settle_note(kind: str, seconds: float = 5.0) -> bool:
     """Wait for a note of this kind to land, rather than reading once.
 
@@ -148,6 +167,42 @@ ok("with the bundle recorded", len(done.bundle_ids) == 1)
 ok("and what was actually priced", done.priced_scope == "A booking site.")
 ok("and what they hoped to spend", done.priced_budget == "around 300k")
 ok("the client's own words are untouched", done.scope == "A booking site.")
+
+# --- A second Generate on an already-quoted intake replaces, not appends ----
+#
+# Reachable in the shipped UI: Price this -> pad -> Generate -> `#/q/<id>` ->
+# browser Back -> the pad again, still prefilled with the same `intake_id` ->
+# Generate. `QUOTED: {PREPARING, ...}` exists so this run through the real
+# handler - not just `intakes.advance` in isolation - leaves the intake
+# pointing at what is now on screen, not at both bundles or, worse, still the
+# first one.
+first_bundle_ids = list(done.bundle_ids)
+main.generate_estimate = stub_estimate
+second_pass = client.post(
+    "/api/proposals",
+    headers=headers,
+    data={
+        "brief": "A booking site, revised scope.",
+        "intake_id": entry.id,
+        "budget_hint": "around 350k",
+    },
+)
+ok("Generate again on an already-quoted intake still answers 202", second_pass.status_code == 202)
+
+requoted = settle_change(entry.id, first_bundle_ids)
+ok("the intake reaches quoted again", requoted.state == intakes.QUOTED)
+ok(
+    "the second pass replaces bundle_ids rather than keeping the first",
+    requoted.bundle_ids != first_bundle_ids and len(requoted.bundle_ids) == 1,
+)
+ok(
+    "and replaces priced_scope with what is now on screen, not the first brief",
+    requoted.priced_scope == "A booking site, revised scope.",
+)
+ok(
+    "and replaces priced_budget the same way",
+    requoted.priced_budget == "around 350k",
+)
 
 # --- A ladder produces more than one bundle, and all of them are recorded ----
 

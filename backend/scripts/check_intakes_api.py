@@ -26,6 +26,7 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app import config  # noqa: E402
 from app import intakes as intakes_module  # noqa: E402
 from app import workspaces  # noqa: E402
 from app.main import app  # noqa: E402
@@ -59,6 +60,25 @@ ok("creating an intake answers 201", created.status_code == 201)
 body = created.json()
 ok("it comes back submitted", body["state"] == "submitted")
 ok("with the client's words", body["scope"] == "A booking site for two clinics.")
+
+# A client's words are unbounded text reaching a prompt PRISM has always
+# trusted - `scope` and `budget_text` need the same ceiling `brief` has
+# always had (main.py's `_normalise_brief`), before any public route can
+# reach them. Rejected outright, not silently truncated, and neither creates
+# a row - the count check below still expects exactly one.
+over_scope = client.post(
+    "/api/intakes",
+    headers=headers,
+    json={"scope": "x" * (config.MAX_BRIEF_CHARS + 1)},
+)
+ok("an over-length scope is refused, not truncated silently", over_scope.status_code == 400)
+
+over_budget = client.post(
+    "/api/intakes",
+    headers=headers,
+    json={"scope": "Fine.", "budget_text": "x" * (config.MAX_BRIEF_CHARS + 1)},
+)
+ok("an over-length budget_text is refused the same way", over_budget.status_code == 400)
 
 listed = client.get("/api/intakes", headers=headers)
 ok("the queue lists it", listed.status_code == 200 and len(listed.json()) == 1)
@@ -123,7 +143,6 @@ import time  # noqa: E402
 import jwt  # noqa: E402
 
 from app import auth as auth_module  # noqa: E402
-from app import config  # noqa: E402
 from app import members  # noqa: E402
 
 TEST_JWT_SECRET = "check-intakes-api-test-secret-do-not-reuse-32bytes"

@@ -606,6 +606,54 @@ def _normalise_instruction(raw: str) -> str:
     return instruction
 
 
+def _normalise_budget_hint(raw: str) -> str:
+    """`budget_hint` is free text the model reasons about, same as `brief` -
+    it just never had `brief`'s ceiling. Bounded here with the same constant
+    and the same shape of error, not a second convention, because a client's
+    words reaching a prompt need one length rule, not one per field."""
+    hint = (raw or "").strip()
+    if len(hint) > config.MAX_BRIEF_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The budget note is {len(hint):,} characters. The limit is "
+                f"{config.MAX_BRIEF_CHARS:,} - summarise it rather than pasting the whole thread."
+            ),
+        )
+    return hint
+
+
+def _normalise_scope(raw: str) -> str:
+    """An intake's `scope` reaches the same prompt a brief does - Stage 1 has
+    no anonymous write to it, but Stage 2 will, and the ceiling is cheap to
+    have in place before that matters."""
+    scope = (raw or "").strip()
+    if len(scope) > config.MAX_BRIEF_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The scope is {len(scope):,} characters. The limit is "
+                f"{config.MAX_BRIEF_CHARS:,} - summarise it or attach the detail separately."
+            ),
+        )
+    return scope
+
+
+def _normalise_budget_text(raw: str) -> str:
+    """The client's own budget words, bounded the same way `scope` is - see
+    `_normalise_scope`."""
+    text = (raw or "").strip()
+    if len(text) > config.MAX_BRIEF_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The budget note is {len(text):,} characters. The limit is "
+                f"{config.MAX_BRIEF_CHARS:,} - summarise it rather than pasting the whole thread."
+            ),
+        )
+    return text
+
+
 def _apply_ceiling(estimate: Estimate, ceiling: float) -> tuple[Estimate, bool, str]:
     """Hold a quotation to a price it must not exceed.
 
@@ -929,7 +977,7 @@ async def create_proposal(
         client_name=(client_name or "").strip(),
         project_name=(project_name or "").strip(),
         market_region=(market_region or "").strip() or "Philippines",
-        budget_hint=(budget_hint or "").strip(),
+        budget_hint=_normalise_budget_hint(budget_hint),
         timeline_hint=(timeline_hint or "").strip(),
         target_total=_normalise_target(target_total, code),
         # Both are accepted: the pad sends the mode, and `tax_inclusive` is what
@@ -2363,12 +2411,14 @@ async def create_intake(request: Request, body: IntakeRequest) -> intakes.Intake
     _require_admin(request, "Only an admin of this workspace can record a client request.")
     if not body.scope.strip():
         raise HTTPException(status_code=422, detail="A request needs a scope.")
+    scope = _normalise_scope(body.scope)
+    budget_text = _normalise_budget_text(body.budget_text)
     try:
         return intakes.create(
             client_email=body.client_email,
             client_phone=body.client_phone,
-            scope=body.scope,
-            budget_text=body.budget_text,
+            scope=scope,
+            budget_text=budget_text,
             preset=body.preset,
             created_by=_who_email(request),
         )

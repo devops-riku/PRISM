@@ -119,6 +119,19 @@ GET  /api/proposals/{id}/files/{kind}.pdf     -> application/pdf (reportlab, ser
 GET  /api/settings   PUT /api/settings        -> StudioDefaults
 GET  /api/currencies                          -> [{code, name, symbol}]
 GET  /api/health                              -> {status, model, key_configured}
+
+POST /api/intakes                             application/json -> 201 Intake
+  body:   client_email, client_phone (str)
+          scope (required, str)
+          budget_text (str)
+          preset (dict - the pad settings this intake will be quoted under:
+                  kind, currency, market region, tax basis, payment terms, tiers)
+  Admin-only.
+
+GET  /api/intakes                             -> [Intake], newest first
+GET  /api/intakes/{intake_id}                 -> Intake
+POST /api/intakes/{intake_id}/close           -> Intake
+  Admin-only.
 ```
 
 `{kind}` is `proposal` or `requirements`.
@@ -145,6 +158,26 @@ until `state` leaves `queued`/`running`, then fetches each `result_ids` entry.
 
 Errors return `{"detail": "..."}` with a real status code. A missing API key is a
 `503` with an actionable message, not a stack trace.
+
+**Intake** — `backend/app/intakes.py`, not `schemas.py`: it is storage-side and
+never reaches the model, the third kind of record beside a `ProposalBundle`
+and a `ProposalDocument`, and the only one that moves.
+
+```
+id, state, created_at, created_by             str
+client_email, client_phone, scope, budget_text str    what the client said, verbatim
+preset                                        dict    the pad settings this will be quoted under
+job_id, bundle_ids, document_id               str, [str], str
+priced_scope, priced_budget                   str     scope/budget as they stood when Generate ran
+error                                         str
+closed_at, closed_by                          str
+```
+
+`state` is one of `submitted`, `preparing`, `quoted`, `quote_failed`, `closed`
+in Stage 1; `issued`, `sent`, `revision_requested`, `finalized`,
+`proposal_sent` are defined but refused until Stage 2 wires the actor that can
+reach them. `POST /api/proposals`'s `intake_id` moves an intake through this
+machine as a side effect of pricing it - see `intakes.ALLOWED`.
 
 CORS: allow `http://localhost:5173` and `http://127.0.0.1:5173`.
 

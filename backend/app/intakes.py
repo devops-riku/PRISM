@@ -47,10 +47,28 @@ PROPOSAL_SENT = "proposal_sent"
 
 #: What may follow what. A move not listed here is refused, which is what makes
 #: this a state machine rather than a string field somebody assigns to.
+#:
+#: `QUOTED: {PREPARING, ...}` - a second Generate is reachable in the shipped
+#: UI: Price this -> the pad -> Generate -> `#/q/<bundle>` -> browser Back ->
+#: the pad again, still prefilled with the same `intake_id` -> Generate again.
+#: Refusing that move (as this table used to) does not stop the second
+#: quotation from being made - the pad has no idea the intake is already
+#: `quoted` - it only stops the intake from recording it, so the record keeps
+#: pointing at the first bundle while the studio is looking at a second,
+#: different one on screen. That is the exact pairing this feature exists to
+#: produce, made silently wrong instead of merely absent.
+#:
+#: So the second pass REPLACES. `bundle_ids`, `priced_scope` and
+#: `priced_budget` are overwritten with whatever the new pass produced, the
+#: same way `priced_scope` was already a snapshot rather than a log. The
+#: record answers "what is this request currently quoted at", not "everything
+#: it has ever been quoted at" - a Stage 2 reader deciding which bundle the
+#: client sees needs the latest, not a history, and a history is what
+#: appending would have built by accident.
 ALLOWED: dict = {
     SUBMITTED: {PREPARING, CLOSED},
     PREPARING: {QUOTED, QUOTE_FAILED, CLOSED},
-    QUOTED: {CLOSED},
+    QUOTED: {PREPARING, CLOSED},
     QUOTE_FAILED: {PREPARING, CLOSED},
     CLOSED: set(),
 }
