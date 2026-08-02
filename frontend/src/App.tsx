@@ -3,6 +3,7 @@ import {
   createProposal,
   currentWorkspace,
   fetchBundle,
+  fetchIntake,
   fetchSettings,
   listWorkspaces,
   reviseProposal,
@@ -35,7 +36,7 @@ import TierSwitcher from './components/TierSwitcher'
 import ErrorNotice from './components/ErrorNotice'
 import { formatDate } from './lib/format'
 import { prefersReducedMotion } from './components/motion'
-import type { ProposalBundle, StudioDefaults, Workspace } from './types'
+import type { Intake, ProposalBundle, StudioDefaults, Workspace } from './types'
 
 /** Every screen this router can name. `routeFor` answers with one of them. */
 type Route =
@@ -261,6 +262,16 @@ export default function App() {
   // the form mounts once they are known rather than resetting under the user.
   // Partial, because the catch below opens the form on nothing at all.
   const [defaults, setDefaults] = useState<Partial<StudioDefaults> | null>(null)
+  // Which client request the pad was opened from, read straight off the hash
+  // the way `#/invite/<token>` and `#/p/<id>` already are elsewhere in this
+  // file. Gated on `route === 'pad'` so a hash that merely starts with
+  // something else (`#/intakes`, `#/q/<id>`) never reads as a stray id and
+  // fires a lookup for a request that was never asked for.
+  const padIntakeId = route === 'pad' ? (window.location.hash || '').replace(/^#\/pad\/?/, '') : ''
+  // The request the pad is prefilled from, once it has been fetched. A stale
+  // or unknown id is not a reason to refuse the pad — it opens empty, which is
+  // the screen the studio would otherwise have gone to anyway.
+  const [intake, setIntake] = useState<Intake | null>(null)
   // How many books of work exist. `null` while it is being read; 0 means the
   // app has nowhere to file anything, which is the one state that overrides
   // whatever screen the address bar asks for.
@@ -395,6 +406,26 @@ export default function App() {
       live = false
     }
   }, [])
+
+  // "Price this" on the request queue links to `#/pad/<id>` with the client's
+  // own words already on file. Fetching it here, rather than inside the pad
+  // route below, means it only ever runs once per id — not once per render of
+  // a screen that re-renders on every keystroke.
+  useEffect(() => {
+    if (!padIntakeId) {
+      setIntake(null)
+      return
+    }
+    let live = true
+    fetchIntake(padIntakeId)
+      .then((found) => live && setIntake(found))
+      // A stale link is not a reason to refuse the pad. It opens empty, which
+      // is the screen the studio would otherwise have gone to anyway.
+      .catch(() => live && setIntake(null))
+    return () => {
+      live = false
+    }
+  }, [padIntakeId])
 
   useEffect(() => {
     if (!bundle || !shouldScroll.current || !resultsRef.current) return
@@ -707,6 +738,12 @@ export default function App() {
               pending={pending}
               job={creation.job}
               onSubmit={handleSubmit}
+              intakeId={intake ? intake.id : ''}
+              prefill={
+                intake
+                  ? { scope: intake.scope, budget: intake.budget_text, clientName: intake.client_email }
+                  : undefined
+              }
             />
           ) : null}
         </div>

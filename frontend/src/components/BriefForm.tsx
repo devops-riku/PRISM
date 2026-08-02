@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FieldLabel } from './FieldRow'
 import ImageDropzone from './ImageDropzone'
@@ -65,15 +65,37 @@ type SchedulePreview = {
   text: string
 }
 
+/** What a client request arrives with, before a studio member has touched
+ *  anything on the pad. Keyed by name rather than reusing `Intake` directly,
+ *  so this file does not have to know the record's other dozen fields. */
+type BriefPrefill = {
+  scope: string
+  budget: string
+  clientName: string
+}
+
 type BriefFormProps = {
   /** The studio's saved defaults, or `{}` when they could not be read. */
   defaults?: Partial<StudioDefaults>
   pending: boolean
   job: Job | null
   onSubmit: (form: FormData) => void
+  /** The client request this pad was opened from, if any. Sent back to the
+   *  server so the resulting quotation is recorded against it. */
+  intakeId?: string
+  /** The client's own words, seeded into the form once. Absent when the pad
+   *  was opened on its own rather than from a request. */
+  prefill?: BriefPrefill
 }
 
-export default function BriefForm({ defaults = {}, pending, job, onSubmit }: BriefFormProps) {
+export default function BriefForm({
+  defaults = {},
+  pending,
+  job,
+  onSubmit,
+  intakeId = '',
+  prefill,
+}: BriefFormProps) {
   // Asked first because it shapes everything after it - the words the model
   // writes in, and the whole second document. Software is the default because
   // it is what PRISM has always quoted, so a studio that only does one thing
@@ -108,6 +130,19 @@ export default function BriefForm({ defaults = {}, pending, job, onSubmit }: Bri
   const [pricingBasis, setPricingBasis] = useState<PricingBasis>('rate_card')
   const [images, setImages] = useState<File[]>([])
   const [step, setStep] = useState(0)
+
+  // Seeds the scope, budget hint and client name from `prefill` the moment it
+  // arrives, and never again — a studio member who edits the scope and then
+  // triggers a re-render (the defaults finally loading, a job tick) must not
+  // have their edit reverted underneath them.
+  const seeded = useRef(false)
+  useEffect(() => {
+    if (!prefill || seeded.current) return
+    seeded.current = true
+    setBrief(prefill.scope)
+    setBudgetHint(prefill.budget)
+    setClientName(prefill.clientName)
+  }, [prefill])
 
   const clock = useElapsed(pending)
   const trimmedBrief = brief.trim()
@@ -337,6 +372,10 @@ export default function BriefForm({ defaults = {}, pending, job, onSubmit }: Bri
     images.forEach((file) =>
       form.append(documentish(file) ? 'documents' : 'images', file, file.name),
     )
+    // Sent only when the pad was opened from a client request, so the
+    // resulting quotation is recorded against it and the request advances
+    // through the intake state machine.
+    if (intakeId) form.append('intake_id', intakeId)
 
     onSubmit(form)
   }
