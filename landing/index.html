@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PRISM — one scope in, two documents out</title>
+    <meta
+      name="description"
+      content="Describe a job in plain language. PRISM returns a priced client quotation and a requirements sheet for whoever builds it. One submission, no chat loop."
+    />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f6f3ee" />
+
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2032%2032%27%3E%3Crect%20width=%2732%27%20height=%2732%27%20rx=%278%27%20fill=%27%23F6F3EE%27/%3E%3Ccircle%20cx=%2716%27%20cy=%2716%27%20r=%275%27%20fill=%27%2335655A%27/%3E%3C/svg%3E"
+    />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&amp;family=Instrument+Sans:ital,wght@0,400..700;1,400..700&amp;family=Instrument+Serif:ital@0;1&amp;display=swap"
+    />
+
+    <style>
+      /* ══════════════════════════════════════════════════════════════════
+         The landing page, built on the app's own Clarity Kit rather than a
+         separate marketing look. Somebody who reads this page and then opens
+         PRISM should not feel handed off to a different product — so the
+         palette, the type roles and the stepped radii are the ones in
+         frontend/src/index.css, verbatim.
+
+         Self-contained on purpose: one file, no build step, no dependencies.
+         Drop it on any static host, or open it from disk.
+         ══════════════════════════════════════════════════════════════════ */
+
+      :root {
+        --canvas: #f6f3ee;
+        --paper: #fffdfa;
+        --duplicate: #f1ede5;
+        --rule: #e4ded4;
+        --hairline: #efeae2;
+        --ink: #1d1b17;
+        --body: #4a443b;
+        --void: #6b6459;
+        --faint: #8a8378;
+        --ballpoint: #35655a;
+        --accent-deep: #24463e;
+        --accent-soft: #edf1ef;
+        --alert: #a8443a;
+
+        --display: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+        --text: "Figtree", ui-sans-serif, system-ui, sans-serif;
+        --serif: "Instrument Serif", Georgia, "Times New Roman", serif;
+
+        --press: cubic-bezier(0.2, 0.7, 0.2, 1);
+        --gutter: clamp(1.25rem, 5vw, 4rem);
+        --measure: 76rem;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--body);
+        font-family: var(--text);
+        font-size: 15px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      h1,
+      h2,
+      h3 {
+        font-family: var(--display);
+        color: var(--ink);
+        letter-spacing: -0.025em;
+        line-height: 1.1;
+        margin: 0;
+      }
+
+      p {
+        margin: 0;
+      }
+
+      a {
+        color: var(--ballpoint);
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--ballpoint);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+
+      .wrap {
+        max-width: var(--measure);
+        margin: 0 auto;
+        padding-inline: var(--gutter);
+      }
+
+      /* An eyebrow is a label, not decoration: it names the section so the
+         heading underneath does not have to explain itself. */
+      .eyebrow {
+        font-family: var(--display);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--faint);
+        margin: 0;
+      }
+
+      /* ── Masthead ──────────────────────────────────────────────────── */
+
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: color-mix(in srgb, var(--canvas) 88%, transparent);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid transparent;
+        transition: border-color 200ms var(--press);
+      }
+
+      header[data-scrolled] {
+        border-bottom-color: var(--rule);
+      }
+
+      .masthead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        height: 60px;
+      }
+
+      .wordmark {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+        font-family: var(--display);
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--ink);
+        text-decoration: none;
+      }
+
+      .wordmark span[aria-hidden] {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--ballpoint);
+      }
+
+      /* ── Buttons ───────────────────────────────────────────────────── */
+
+      .action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        padding: 0.7rem 1.15rem;
+        border-radius: 11px;
+        border: 1px solid var(--ballpoint);
+        background: var(--ballpoint);
+        color: var(--paper);
+        font-family: var(--display);
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        text-decoration: none;
+        box-shadow: 0 1px 2px rgba(29, 27, 23, 0.14);
+        transition:
+          background-color 150ms var(--press),
+          transform 150ms var(--press);
+      }
+
+      .action:hover {
+        background: var(--accent-deep);
+        border-color: var(--accent-deep);
+      }
+
+      .action:active {
+        transform: scale(0.99);
+      }
+
+      .action--quiet {
+        background: transparent;
+        color: var(--ballpoint);
+        border-color: var(--rule);
+        box-shadow: none;
+      }
+
+      .action--quiet:hover {
+        background: var(--duplicate);
+        border-color: var(--ballpoint);
+      }
+
+      /* ── Hero ──────────────────────────────────────────────────────────
+         The page opens on the thing the product is named after. A single
+         beam enters the glass and leaves it as two — which is not a metaphor
+         here, it is the literal claim: one brief in, two documents out. The
+         copy sits inside the diagram rather than beside it, so the picture
+         is the argument rather than an illustration of one. */
+
+      .hero {
+        position: relative;
+        padding-block: clamp(3.5rem, 9vw, 7rem) clamp(3rem, 7vw, 5.5rem);
+        overflow: hidden;
+      }
+
+      .hero::before {
+        content: "";
+        position: absolute;
+        inset: -20% -10% auto;
+        height: 70%;
+        background: radial-gradient(
+          50% 60% at 50% 40%,
+          rgba(53, 101, 90, 0.07) 0%,
+          transparent 70%
+        );
+        pointer-events: none;
+      }
+
+      .hero .wrap {
+        position: relative;
+      }
+
+      .hero h1 {
+        font-size: clamp(2.5rem, 7vw, 4.4rem);
+        max-width: 16ch;
+        margin-top: 1.1rem;
+      }
+
+      .hero h1 em {
+        font-family: var(--serif);
+        font-style: italic;
+        font-weight: 400;
+        letter-spacing: -0.01em;
+      }
+
+      .hero .lede {
+        margin-top: 1.4rem;
+        max-width: 46ch;
+        font-size: clamp(1rem, 1.6vw, 1.15rem);
+        line-height: 1.55;
+        color: var(--void);
+      }
+
+      .hero .cta {
+        margin-top: 2.2rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.7rem;
+        align-items: center;
+      }
+
+      .hero .caveat {
+        margin-top: 1.1rem;
+        font-size: 13px;
+        color: var(--faint);
+      }
+
+      /* The refraction drawing. Strokes only — the page has no illustration
+         style beyond the one line weight it uses everywhere else. */
+      .refraction {
+        margin-top: clamp(2.5rem, 6vw, 4rem);
+        width: 100%;
+        height: auto;
+        overflow: visible;
+      }
+
+      .refraction .line {
+        fill: none;
+        stroke-width: 1.25;
+        stroke-linecap: round;
+      }
+
+      .refraction .beam {
+        stroke: var(--ballpoint);
+      }
+
+      .refraction .glass {
+        stroke: var(--ink);
+        fill: rgba(53, 101, 90, 0.05);
+      }
+
+      .refraction .grid {
+        stroke: var(--rule);
+        stroke-width: 1;
+      }
+
+      .refraction text {
+        font-family: var(--display);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        fill: var(--faint);
+      }
+
+      .refraction .out {
+        fill: var(--ink);
+        letter-spacing: 0.1em;
+      }
+
+      /* ── Sections ──────────────────────────────────────────────────── */
+
+      section {
+        padding-block: clamp(3.5rem, 8vw, 6rem);
+      }
+
+      .rule-top {
+        border-top: 1px solid var(--rule);
+      }
+
+      .section-head {
+        max-width: 52ch;
+      }
+
+      .section-head h2 {
+        margin-top: 0.9rem;
+        font-size: clamp(1.6rem, 3.2vw, 2.3rem);
+      }
+
+      .section-head p {
+        margin-top: 0.9rem;
+        color: var(--void);
+      }
+
+      /* ── The two documents ─────────────────────────────────────────────
+         The split beam, continued as layout: two panels, the same shape,
+         different audiences. They are deliberately equal in weight — the
+         product's point is that the builder's document is not an afterthought
+         attached to the client's. */
+
+      .split {
+        margin-top: 2.5rem;
+        display: grid;
+        gap: 1.25rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+      }
+
+      .doc {
+        background: var(--paper);
+        border: 1px solid var(--rule);
+        border-radius: 18px;
+        padding: clamp(1.4rem, 3vw, 2rem);
+      }
+
+      .doc h3 {
+        margin-top: 0.7rem;
+        font-size: 1.35rem;
+      }
+
+      .doc > p {
+        margin-top: 0.6rem;
+        color: var(--void);
+        font-size: 14px;
+      }
+
+      .doc ul {
+        margin: 1.4rem 0 0;
+        padding: 0;
+        list-style: none;
+        border-top: 1px solid var(--hairline);
+      }
+
+      .doc li {
+        padding: 0.6rem 0;
+        border-bottom: 1px solid var(--hairline);
+        font-size: 14px;
+        color: var(--body);
+        display: flex;
+        gap: 0.7rem;
+        align-items: baseline;
+      }
+
+      .doc li::before {
+        content: "";
+        flex: none;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--ballpoint);
+        opacity: 0.5;
+      }
+
+      /* ── The three claims ──────────────────────────────────────────────
+         Not "features". Each one is a decision that costs something and is
+         unusual enough to be worth stating plainly. */
+
+      .claims {
+        margin-top: 2.5rem;
+        display: grid;
+        gap: 1.25rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+      }
+
+      .claim {
+        padding-top: 1.4rem;
+        border-top: 2px solid var(--ink);
+      }
+
+      .claim h3 {
+        font-size: 1.05rem;
+        letter-spacing: -0.01em;
+      }
+
+      .claim p {
+        margin-top: 0.7rem;
+        font-size: 14px;
+        color: var(--void);
+      }
+
+      /* ── The four steps ────────────────────────────────────────────────
+         Numbered because this genuinely is a sequence — the order is the
+         product. Nothing else on the page is numbered. */
+
+      .steps {
+        margin-top: 2.5rem;
+        display: grid;
+        gap: 0;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+        border: 1px solid var(--rule);
+        border-radius: 18px;
+        background: var(--paper);
+        overflow: hidden;
+      }
+
+      .step {
+        padding: clamp(1.3rem, 2.6vw, 1.8rem);
+        border-right: 1px solid var(--hairline);
+      }
+
+      .step:last-child {
+        border-right: 0;
+      }
+
+      .step .n {
+        font-family: var(--display);
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        color: var(--ballpoint);
+      }
+
+      .step h3 {
+        margin-top: 0.8rem;
+        font-size: 1rem;
+      }
+
+      .step p {
+        margin-top: 0.5rem;
+        font-size: 14px;
+        color: var(--void);
+      }
+
+      /* ── Closing ───────────────────────────────────────────────────── */
+
+      .closing {
+        text-align: center;
+      }
+
+      .closing h2 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        max-width: 20ch;
+        margin-inline: auto;
+      }
+
+      .closing p {
+        margin-top: 1rem;
+        color: var(--void);
+        max-width: 44ch;
+        margin-inline: auto;
+      }
+
+      .closing .cta {
+        margin-top: 2rem;
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.7rem;
+      }
+
+      footer {
+        border-top: 1px solid var(--rule);
+        padding-block: 2rem 2.5rem;
+      }
+
+      .colophon {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        justify-content: space-between;
+        align-items: baseline;
+        font-size: 13px;
+        color: var(--faint);
+      }
+
+      /* ── Motion ────────────────────────────────────────────────────────
+         Two moments, both optional. The diagram draws itself once on load —
+         the same `pathLength="1"` trick the app's boot preloader uses, so one
+         dasharray draws any path regardless of its real length. Sections rise
+         a few pixels as they arrive. Under `prefers-reduced-motion` both
+         collapse to their finished state rather than being disabled halfway,
+         which is the failure mode that leaves a page half-drawn. */
+
+      @media (prefers-reduced-motion: no-preference) {
+        .refraction .line {
+          stroke-dasharray: 1;
+          stroke-dashoffset: 1;
+          animation: draw 1400ms var(--press) forwards;
+        }
+
+        .refraction .glass {
+          animation-delay: 220ms;
+        }
+
+        .refraction .out-a {
+          animation-delay: 700ms;
+        }
+
+        .refraction .out-b {
+          animation-delay: 840ms;
+        }
+
+        .refraction text {
+          opacity: 0;
+          animation: fade 500ms var(--press) 1100ms forwards;
+        }
+
+        .reveal {
+          opacity: 0;
+          transform: translateY(12px);
+          transition:
+            opacity 520ms var(--press),
+            transform 520ms var(--press);
+        }
+
+        .reveal[data-seen] {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes draw {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @keyframes fade {
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <div class="wrap masthead">
+        <a class="wordmark" href="#top">
+          <span aria-hidden="true"></span>
+          PRISM
+        </a>
+        <!-- Points at the local app. Change this to the deployed origin when
+             PRISM is hosted somewhere. -->
+        <a class="action" href="http://localhost:5173">Open PRISM</a>
+      </div>
+    </header>
+
+    <main id="top">
+      <div class="hero">
+        <div class="wrap">
+          <p class="eyebrow">Proposals &amp; quotations</p>
+          <h1>One scope in, <em>two</em> documents out.</h1>
+          <p class="lede">
+            Describe the job the way you would to a colleague. Attach the client&rsquo;s brief, a
+            spreadsheet, a photo of the whiteboard. Submit once — and get back a priced quotation
+            for the client and a requirements sheet for whoever builds it.
+          </p>
+
+          <div class="cta">
+            <a class="action" href="http://localhost:5173">Write a quotation</a>
+            <a class="action action--quiet" href="#documents">See what it produces</a>
+          </div>
+
+          <p class="caveat">No chat loop. No follow-up turns. One submission produces both.</p>
+
+          <svg
+            class="refraction"
+            viewBox="0 0 900 260"
+            role="img"
+            aria-label="A single beam entering a prism and leaving it as two: a client quotation and a requirements sheet."
+          >
+            <!-- The baseline the whole diagram sits on, so the beams read as
+                 measured rather than floating. -->
+            <path class="line grid" d="M0 130 H250" opacity="0.5" />
+
+            <!-- In: one brief, meeting the left face at (363, 130). -->
+            <path class="line beam" d="M60 130 H363" />
+            <circle class="beam" cx="60" cy="130" r="3.5" fill="#35655a" stroke="none" />
+            <text x="58" y="110">Your brief</text>
+
+            <!-- The glass: apex at 400,62 and a base from 330 to 470. -->
+            <path class="line glass" d="M400 62 L470 190 L330 190 Z" />
+
+            <!-- Inside it, bent — and leaving through the right face at
+                 (443, 140), which is the single point both documents come
+                 from. One estimate, rendered twice. -->
+            <path class="line beam" d="M363 130 L443 140" />
+            <path class="line beam out-a" d="M443 140 L860 78" />
+            <path class="line beam out-b" d="M443 140 L860 214" />
+            <circle class="beam" cx="860" cy="78" r="3.5" fill="#35655a" stroke="none" />
+            <circle class="beam" cx="860" cy="214" r="3.5" fill="#35655a" stroke="none" />
+
+            <text class="out" x="855" y="64" text-anchor="end">Client quotation</text>
+            <text class="out" x="855" y="236" text-anchor="end">Requirements sheet</text>
+          </svg>
+        </div>
+      </div>
+
+      <section id="documents" class="rule-top">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <p class="eyebrow">What arrives</p>
+            <h2>Two documents, two readers, one set of numbers.</h2>
+            <p>
+              The same estimate, written twice for the two people who have to agree on it. Neither
+              is a summary of the other, and the totals cannot drift apart — they are the same
+              figures, rendered twice.
+            </p>
+          </div>
+
+          <div class="split reveal">
+            <article class="doc">
+              <p class="eyebrow">For the person paying</p>
+              <h3>Client quotation</h3>
+              <p>Plain, confident, no jargon, priced in their own currency.</p>
+              <ul>
+                <li>Your understanding of the job, in their words</li>
+                <li>The proposed solution, and what is deliberately out of scope</li>
+                <li>A priced line-item table</li>
+                <li>Payment milestones and a timeline</li>
+                <li>What happens next</li>
+              </ul>
+            </article>
+
+            <article class="doc">
+              <p class="eyebrow">For the person building</p>
+              <h3>Requirements sheet</h3>
+              <p>Named for the discipline it belongs to — engineering, accounting, design.</p>
+              <ul>
+                <li>Numbered requirements, each with acceptance criteria</li>
+                <li>Phases, and what each one delivers</li>
+                <li>Tech stack, API surface and data model notes</li>
+                <li>Testing and deployment notes</li>
+                <li>The open questions worth asking before starting</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="rule-top">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <p class="eyebrow">Three decisions</p>
+            <h2>The parts that are not negotiable.</h2>
+            <p>
+              Every quotation tool can produce a table. These are the choices that decide whether
+              you can put your name on what comes out of it.
+            </p>
+          </div>
+
+          <div class="claims reveal">
+            <div class="claim">
+              <h3>The server owns the arithmetic</h3>
+              <p>
+                Every total is recomputed after the model answers, so a document can never show a
+                figure that disagrees with the sum of its own rows.
+              </p>
+            </div>
+
+            <div class="claim">
+              <h3>No currency conversion, anywhere</h3>
+              <p>
+                A job for Berlin is priced as a German job in euros — not a local quote run through
+                an exchange rate. There is no FX table in the system.
+              </p>
+            </div>
+
+            <div class="claim">
+              <h3>Nothing is corrected quietly</h3>
+              <p>
+                Hit a budget and the effort moves, never the rates. Anything stretched, capped or
+                dropped is printed on the page that changed.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rule-top">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <p class="eyebrow">How it goes</p>
+            <h2>About ninety seconds, most of it waiting.</h2>
+          </div>
+
+          <div class="steps reveal">
+            <div class="step">
+              <p class="n">01</p>
+              <h3>Say what the job is</h3>
+              <p>Plain language. The kind of thing you would tell a colleague over a desk.</p>
+            </div>
+            <div class="step">
+              <p class="n">02</p>
+              <h3>Attach what you were sent</h3>
+              <p>PDF, Word, Excel, screenshots. PRISM reads them into the scope.</p>
+            </div>
+            <div class="step">
+              <p class="n">03</p>
+              <h3>Set currency and region</h3>
+              <p>Optionally a target total, a ceiling, or tiers to quote against.</p>
+            </div>
+            <div class="step">
+              <p class="n">04</p>
+              <h3>Submit once</h3>
+              <p>Close the tab if you like. The work carries on and is waiting when you return.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rule-top closing">
+        <div class="wrap reveal">
+          <h2>The quote you have been putting off.</h2>
+          <p>
+            It runs on your machine, against your own API key, and nothing leaves it except the
+            brief you chose to send.
+          </p>
+          <div class="cta">
+            <a class="action" href="http://localhost:5173">Open PRISM</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap colophon">
+        <p>PRISM — one scope in, two documents out.</p>
+        <p>Built for studios who would rather be doing the work.</p>
+      </div>
+    </footer>
+
+    <script>
+      // Two behaviours, both cosmetic, both safe to fail: a hairline under the
+      // masthead once the page has moved, and sections arriving as they are
+      // reached. Anything that reveals content must also survive the observer
+      // being unavailable — hence the immediate fallback.
+      const header = document.querySelector('header')
+      const onScroll = () => header.toggleAttribute('data-scrolled', window.scrollY > 4)
+      onScroll()
+      window.addEventListener('scroll', onScroll, { passive: true })
+
+      const sections = document.querySelectorAll('.reveal')
+      if ('IntersectionObserver' in window) {
+        const watcher = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (!entry.isIntersecting) return
+              entry.target.setAttribute('data-seen', '')
+              watcher.unobserve(entry.target)
+            })
+          },
+          { rootMargin: '0px 0px -12% 0px' },
+        )
+        sections.forEach((section) => watcher.observe(section))
+      } else {
+        sections.forEach((section) => section.setAttribute('data-seen', ''))
+      }
+    </script>
+  </body>
+</html>

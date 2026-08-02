@@ -1,0 +1,29 @@
+# Python
+.venv
+__pycache__/
+*.pyc
+
+# Node / Vite
+node_modules/
+dist/
+.vite
+
+# Secrets. backend/.env.example is tracked on purpose, so do not widen this
+# to .env* - that would swallow the example file too.
+.env
+
+# Generated proposal bundles. Keep the directory, drop its contents.
+backend/generated/*
+!backend/generated/.gitkeep
+
+# Tooling scratch
+.graphify/
+.superpowers/
+*.bak
+*.tsbuildinfo
+
+# OS
+.DS_Store
+.gstack/
+Thumbs.db
+.tscheck/

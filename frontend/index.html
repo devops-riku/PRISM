@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>PRISM - proposal builder</title>
+    <meta
+      name="description"
+      content="PRISM turns one client brief into two documents: a priced proposal for the client and a numbered requirements spec for the developer. One submission, no chat loop."
+    />
+
+    <!-- A quotation pad is paper. There is no dark mode. -->
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#F6F3EE" />
+
+    <!-- Ballpoint-blue stamp mark: a rubber stamp struck slightly off-square. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2032%2032%27%3E%3Crect%20width=%2732%27%20height=%2732%27%20rx=%278%27%20fill=%27%23F6F3EE%27/%3E%3Ccircle%20cx=%2716%27%20cy=%2716%27%20r=%275%27%20fill=%27%2335655A%27/%3E%3C/svg%3E"
+    />
+
+    <!--
+      Two families, seven roles: Instrument Sans sets every heading and
+      every small capital label; Figtree reads at paragraph sizes, where its
+      wider apertures are easier on a long clause. Instrument Serif is held
+      back for the one place a serif earns its keep - a number or a name
+      being presented rather than scanned.
+
+      A geometric sans with rounded terminals - modern without being neutral,
+      and friendly without being soft, which is the line a quotation has to walk.
+      It replaces Instrument Sans at the studio's request.
+
+      Checked before adopting it, because the whole costing depends on it: the
+      font carries `tnum`, so a column of money still aligns digit for digit.
+      A rounded face without tabular figures would have looked better and cost
+      more than it was worth.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&amp;family=Instrument+Sans:ital,wght@0,400..700;1,400..700&amp;family=Instrument+Serif:ital@0;1&amp;display=swap"
+    />
+  </head>
+
+  <body>
+    <!--
+      The boot screen.
+
+      It lives in the HTML rather than in React because it has to be on screen
+      before the bundle has parsed - a loader that appears once the app is ready
+      is a loader that was never needed. The mark is what the name means: a beam
+      entering a prism and leaving it split. It draws itself once, then the
+      three refracted beams keep breathing, so a slow start looks like something
+      working rather than something stuck.
+
+      Removed by src/main.tsx the moment React has mounted.
+    -->
+    <style>
+      /* The Prism Preloader, ported from the design file the studio supplied.
+         Geometry, colours, easing curves and the phase percentages are its own;
+         what changed is the loop length, the typeface (the app's Figtree rather
+         than Inter Tight), and the reduced-motion case, which the original did
+         not carry.
+
+         The drawing trick is worth knowing: every stroked shape declares
+         `pathLength="1"`, so one dasharray of 1 and an offset from 1 to 0 draws
+         it completely regardless of how long the real path is. No measuring, no
+         per-shape length constants. */
+      #boot {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        --dur: 2.6s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(60% 60% at 50% 45%, #fbfaf8 0%, #f2efeb 100%);
+        transition: opacity 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+      }
+
+      #boot[data-done] {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #boot .stack {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #boot svg {
+        overflow: visible;
+      }
+
+      #boot .beam {
+        animation: prism-beam var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .glass {
+        animation: prism-fill var(--dur) ease-in-out infinite;
+      }
+
+      #boot .edge {
+        animation: prism-draw var(--dur) cubic-bezier(0.6, 0, 0.3, 1) infinite;
+      }
+
+      #boot .ray-a {
+        animation: prism-ray-a var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .ray-b {
+        animation: prism-ray-b var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .ray-c {
+        animation: prism-ray-c var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .spark {
+        transform-origin: 181px 118px;
+        animation: prism-spark var(--dur) ease-out infinite;
+      }
+
+      #boot .word {
+        margin: 0;
+        font-family: "Figtree", ui-sans-serif, system-ui, sans-serif;
+        font-size: 15px;
+        font-weight: 400;
+        color: #5d5a55;
+        letter-spacing: 0.55em;
+        text-indent: 0.55em;
+        animation: prism-word var(--dur) ease-in-out infinite;
+      }
+
+      @keyframes prism-draw {
+        0%, 4% { stroke-dashoffset: 1; }
+        22%, 78% { stroke-dashoffset: 0; }
+        96%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-fill {
+        0%, 20% { opacity: 0; }
+        34%, 76% { opacity: 1; }
+        92%, 100% { opacity: 0; }
+      }
+
+      @keyframes prism-beam {
+        0%, 22% { stroke-dashoffset: 1; }
+        38%, 80% { stroke-dashoffset: 0; }
+        94%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-ray-a {
+        0%, 38% { stroke-dashoffset: 1; }
+        54%, 82% { stroke-dashoffset: 0; }
+        92%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-ray-b {
+        0%, 42% { stroke-dashoffset: 1; }
+        58%, 83% { stroke-dashoffset: 0; }
+        93%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-ray-c {
+        0%, 46% { stroke-dashoffset: 1; }
+        62%, 84% { stroke-dashoffset: 0; }
+        94%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-spark {
+        0%, 34% { opacity: 0; transform: scale(0.4); }
+        46% { opacity: 0.9; transform: scale(1); }
+        62%, 80% { opacity: 0.25; transform: scale(0.8); }
+        90%, 100% { opacity: 0; transform: scale(0.4); }
+      }
+
+      @keyframes prism-word {
+        0%, 46% { opacity: 0; letter-spacing: 0.9em; }
+        64%, 82% { opacity: 1; letter-spacing: 0.55em; }
+        94%, 100% { opacity: 0; letter-spacing: 0.35em; }
+      }
+
+      /* Asked for less motion: the mark holds at the frame the loop is built
+         around - beam in, glass lit, all three rays out - and does not cycle. */
+      /* ── What the wait is actually made of ─────────────────────────────
+         Three segments, and each one lights when something has genuinely
+         happened: the page arrived, the app finished downloading, the app
+         started. Nothing here advances on a timer, so on a fast connection
+         the whole thing is gone before the second segment is noticed, and on
+         a slow one it stops exactly where the loading stopped — which is the
+         only useful thing a loading screen can tell you.
+
+         No percentage, for the reason the progress bar in the app carries in
+         its own comment: a number that moves while nothing is happening is a
+         lie told in CSS. */
+      #boot .thread {
+        display: flex;
+        gap: 4px;
+        margin-top: 14px;
+      }
+
+      #boot .thread i {
+        width: 26px;
+        height: 2px;
+        border-radius: 2px;
+        background: #ded9d1;
+        transition: background-color 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+      }
+
+      #boot[data-step="1"] .thread i:nth-child(1),
+      #boot[data-step="2"] .thread i:nth-child(-n + 2),
+      #boot[data-step="3"] .thread i {
+        background: #35655a;
+      }
+
+      /* Only shown once the wait is long enough to be worth explaining. The
+         elapsed seconds are real; the sentence is the same one the pad uses
+         when it has nothing better to report. */
+      #boot .note {
+        margin: 10px 0 0;
+        height: 1em;
+        font-family: "Figtree", ui-sans-serif, system-ui, sans-serif;
+        font-size: 12px;
+        color: #8a8378;
+        opacity: 0;
+        transition: opacity 300ms ease;
+      }
+
+      #boot[data-waiting] .note {
+        opacity: 1;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #boot .beam,
+        #boot .edge,
+        #boot .ray-a,
+        #boot .ray-b,
+        #boot .ray-c,
+        #boot .glass,
+        #boot .word {
+          animation: none;
+          stroke-dashoffset: 0;
+          opacity: 1;
+        }
+
+        #boot .spark { animation: none; opacity: 0.25; }
+      }
+    </style>
+
+    <div id="boot" role="status" aria-label="PRISM is starting">
+      <div class="stack">
+        <svg
+          viewBox="0 0 420 250"
+          fill="none"
+          aria-hidden="true"
+          style="width: 283px; height: 149px"
+        >
+          <line
+            class="beam"
+            x1="42" y1="118" x2="176" y2="118"
+            stroke="#1f3f3a" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <!-- The prism, with its corners turned rather than mitred: three
+               quadratic curves where a polygon would have had points. -->
+          <path
+            class="glass"
+            d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
+            fill="#c9c9c9"
+            fill-opacity="0.3"
+          />
+          <path
+            class="edge"
+            d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
+            stroke="#191817" stroke-width="3" fill="none"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <line
+            class="ray-a"
+            x1="242" y1="108" x2="378" y2="66"
+            stroke="#c96a63" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <line
+            class="ray-b"
+            x1="244" y1="118" x2="390" y2="118"
+            stroke="#1f3f3a" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <line
+            class="ray-c"
+            x1="242" y1="128" x2="372" y2="170"
+            stroke="#d69433" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <circle class="spark" cx="181" cy="118" r="5" fill="#ffffff" />
+        </svg>
+
+        <p class="word">PRISM</p>
+
+        <div class="thread" aria-hidden="true">
+          <i></i>
+          <i></i>
+          <i></i>
+        </div>
+
+        <p class="note"></p>
+      </div>
+    </div>
+
+    <script>
+      /**
+       * The boot screen, paced by the load rather than by a timer.
+       *
+       * It used to sit for a flat 1500ms and leave — which meant a local start
+       * was padded to a second and a half, and a slow one showed exactly the
+       * same thing while the browser was still pulling the bundle down. The
+       * screen said "starting" either way and never said "still downloading".
+       *
+       * Now three things move it, and all three are real:
+       *
+       *   1  this script runs         — the HTML arrived
+       *   2  the module executes      — the app finished downloading, which is
+       *                                 the part that depends on the connection
+       *   3  React paints             — the app is actually up
+       *
+       * Steps 2 and 3 are reported by src/main.tsx. Nothing is inferred from a
+       * clock, so on a fast connection this is gone before anybody reads it.
+       *
+       * The floor is 400ms and exists only so a very fast start does not flash
+       * a screen for two frames. There is no ceiling: a slow start is shown for
+       * as long as it takes, with the seconds counted honestly.
+       */
+      ;(function () {
+        var boot = document.getElementById('boot')
+        if (!boot) return
+
+        var startedAt = Date.now()
+        var FLOOR_MS = 400
+        var note = boot.querySelector('.note')
+
+        // A connection the browser already knows is poor: slow the mark down so
+        // it reads as patient rather than frantic, and say something sooner.
+        var link =
+          navigator.connection || navigator.mozConnection || navigator.webkitConnection || null
+        var poor = !!(link && (link.saveData || /^(slow-2g|2g)$/.test(link.effectiveType || '')))
+        if (poor) boot.style.setProperty('--dur', '3.6s')
+
+        var step = 0
+        boot.setAttribute('data-step', '1')
+
+        // What to say while waiting, indexed by how far the load actually got.
+        // Before the module runs the browser is downloading it; after, the app
+        // is starting. Those are the only two states there are to be in.
+        var SAYING = ['Downloading the app', 'Starting up']
+
+        var ticker = window.setInterval(function () {
+          var seconds = Math.floor((Date.now() - startedAt) / 1000)
+          // Silence until the wait is long enough that a person is wondering.
+          if (seconds < (poor ? 1 : 3)) return
+          boot.setAttribute('data-waiting', '')
+          if (note) note.textContent = SAYING[Math.min(step, 1)] + ' · ' + seconds + 's'
+        }, 500)
+
+        window.__prismBoot = {
+          /** Called by the app as it gets further. Never goes backwards. */
+          step: function (reached) {
+            if (reached > step) step = reached
+            boot.setAttribute('data-step', String(Math.min(step + 1, 3)))
+          },
+
+          /** The app is up. Take the screen down, and stop counting. */
+          done: function () {
+            window.clearInterval(ticker)
+            var wait = Math.max(0, FLOOR_MS - (Date.now() - startedAt))
+            window.setTimeout(function () {
+              boot.setAttribute('data-done', '')
+              boot.addEventListener('transitionend', function () { boot.remove() }, { once: true })
+              // A browser that skipped the transition entirely — reduced
+              // motion, a background tab — never fires transitionend, so the
+              // node is swept anyway. A fixed overlay left in the document is a
+              // transparent sheet over every click on the page underneath.
+              window.setTimeout(function () { boot.remove() }, 600)
+            }, wait)
+          },
+        }
+      })()
+    </script>
+
+    <div id="root"></div>
+
+    <noscript>
+      <!-- index.css is imported by the module below, so with scripting off
+           there is no stylesheet at all. These styles have to be inline. -->
+      <div
+        style="
+          max-width: 940px;
+          margin: 0 auto;
+          padding: 4rem 1.5rem;
+          background: #fcfcfa;
+          color: #14181c;
+          font-family: ui-sans-serif, system-ui, sans-serif;
+          font-size: 15px;
+          line-height: 1.6;
+        "
+      >
+        <p
+          style="
+            font-family: ui-sans-serif, system-ui, sans-serif;
+            font-size: 12px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #6b7280;
+            margin: 0 0 0.75rem;
+          "
+        >
+          Scripting off
+        </p>
+        <h1 style="font-size: 24px; margin: 0 0 0.75rem; font-weight: 700">
+          PRISM needs JavaScript
+        </h1>
+        <p style="margin: 0">
+          The whole quotation pad is rendered in the browser. Enable JavaScript
+          for this site and reload to prepare a quotation.
+        </p>
+      </div>
+    </noscript>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

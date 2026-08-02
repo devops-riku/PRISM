@@ -1,0 +1,31 @@
+# PRISM backend. Lower bounds only - nothing here is pinned to an exact release.
+#
+#   py -m pip install -r backend/requirements.txt
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# The current SDK. NOT google-generativeai, which is retired and has a
+# different, incompatible call shape.
+google-genai>=1.0
+
+pydantic>=2.7
+
+# Required for multipart/form-data. Without it every UploadFile request 500s on
+# arrival, before any handler code runs.
+python-multipart>=0.0.9
+
+python-dotenv>=1.0
+
+# Verifying Supabase access tokens. `crypto` brings the RSA/EC backend needed
+# for a project that publishes its keys rather than sharing a secret.
+PyJWT[crypto]>=2.8
+anyio>=4.4
+reportlab
+
+# Reading what the client sent. A scope in Word, a requirement list in Excel and
+# a tender as a PDF are all quoted from as text - see app/attachments.py.
+# pypdf comes with the PDF export already.
+python-docx>=1.1
+openpyxl>=3.1
+pypdf>=4.0

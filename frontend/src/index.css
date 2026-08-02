@@ -1,0 +1,1171 @@
+@import "tailwindcss";
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PRISM — Clarity Kit
+
+   The whole design system. There is no tailwind.config.js and no
+   postcss.config.js in this project: Tailwind v4 is CSS-first and this file is
+   the single source of truth for every colour, typeface, size, radius, shadow
+   and easing curve in the client.
+
+   The direction is the client's own kit, supplied as
+   `Desktop/Design Framework/Clarity Kit.dc.html` and summarised in
+   docs/DESIGN.md: "one screen, one thing at a time". Warm paper tones, generous
+   radii, soft shadows, and a single deep pine green carrying every action. It
+   replaces the earlier carbon-copy pad direction outright.
+
+   The token NAMES are kept from that earlier direction because their semantic
+   roles carried over one for one — `ballpoint` is still "the one accent", `rule`
+   is still "borders", `duplicate` is still "the second surface". Only the values
+   changed, so the whole client re-skinned without rewiring every component.
+
+   Layer discipline matters here. CSS written outside a @layer is unlayered and
+   beats *everything*, including Tailwind's utilities. So:
+     · @theme      → tokens
+     · @layer base → element defaults (canvas, ink, focus) — utilities override
+     · @layer components → hand-written classes — utilities override
+     · @keyframes  → top level (layers do not apply)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── Colour — the Clarity Kit palette, verbatim ───────────────────────
+     The accent is never a large fill except on the primary button. */
+  --color-canvas: #f6f3ee; /* the page itself, warm off-white       */
+  --color-paper: #fffdfa; /* cards, sheets, inputs                 */
+  --color-duplicate: #f1ede5; /* secondary fill: wells, chips, stripes  */
+  --color-rule: #e4ded4; /* borders                               */
+  --color-hairline: #efeae2; /* dividers inside a card                */
+  --color-ink: #1d1b17; /* headings                              */
+  --color-body: #4a443b; /* body copy                             */
+  --color-void: #6b6459; /* secondary copy                        */
+  --color-faint: #8a8378; /* eyebrows, captions, table headers     */
+  --color-ballpoint: #35655a; /* the one action colour, deep pine      */
+  --color-accent-deep: #24463e; /* hover                                 */
+  --color-accent-soft: #edf1ef; /* accent tint background                */
+  --color-alert: #a8443a; /* the single warm red, real problems    */
+  --color-alert-soft: #fcf4f2; /* its tint                              */
+
+  /* ── Type — one family, four roles ────────────────────────────────────
+     Figtree: a geometric sans with rounded terminals, replacing the kit's
+     Instrument Sans at the studio's request. Modern without being neutral, and
+     rounded without turning a quotation into a greetings card.
+
+     Neither `font-label` nor `font-figure` is a separate family. They are named
+     for their job so the small tracked captions and the big display figures
+     each have one definition, and both ask for tabular figures - which Figtree
+     carries, checked before it was adopted, because a rounded face without
+     `tnum` would have broken every money column in the project. */
+  /* Instrument Sans for anything that is read as a title or a label: it is
+     tighter and more spoken than Figtree at large sizes, and it is what the
+     Clarity Kit sets its own headings in. */
+  --font-display: "Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Figtree", ui-sans-serif, system-ui, sans-serif;
+
+  --font-label: "Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-label--font-feature-settings: "tnum"; /* figures always align */
+
+  /* A serif, for the one figure a document is actually about. Used sparingly:
+     a page where everything is emphasised has emphasised nothing. */
+  --font-quote: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-figure: "Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-figure--font-feature-settings: "tnum";
+
+  /* ── Scale — 12 / 13 / 15 / 18 / 26 / 34 / 58 ─────────────────────────
+     Mapped onto Tailwind's default names so the familiar utilities land on the
+     kit's scale. Body is 15px at 1.6, labels 12-13px. Headings carry the kit's
+     tight tracking, which is what makes Figtree read as a display face
+     rather than a UI font. */
+  --text-xs: 12px;
+  --text-xs--line-height: 1.4;
+  --text-sm: 13px;
+  --text-sm--line-height: 1.5;
+  --text-base: 15px;
+  --text-base--line-height: 1.6;
+  --text-lg: 18px;
+  --text-lg--line-height: 1.6;
+  --text-xl: 26px;
+  --text-xl--line-height: 1.2;
+  --text-xl--letter-spacing: -0.01em;
+  --text-2xl: 34px;
+  --text-2xl--line-height: 1.1;
+  --text-2xl--letter-spacing: -0.02em;
+  --text-3xl: 58px;
+  --text-3xl--line-height: 1.05;
+  --text-3xl--letter-spacing: -0.03em;
+
+  /* ── Radius — soft, and stepped by role ───────────────────────────────
+     7px chips · 11px buttons · 12px inputs · 14px cards · 18px panels. The
+     bare `rounded` utility answers 11px because a button is the commonest
+     thing to round. */
+  --radius-DEFAULT: 11px;
+  --radius-xs: 7px;
+  --radius-sm: 9px;
+  --radius-md: 11px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 22px;
+  --radius-4xl: 26px;
+  /* The kit's pill: chips, status dots, anything whose shape says
+     'this is one small fact' rather than 'this is a control'. */
+  --radius-pill: 99px;
+
+  /* ── Shadows — the kit's four, no others ─────────────────────────────── */
+  --shadow-sheet: 0 1px 2px rgb(40 33 22 / 0.04), 0 18px 40px -28px
+    rgb(40 33 22 / 0.16);
+  --shadow-raised: 0 10px 24px -18px rgb(40 33 22 / 0.3);
+  --shadow-action: 0 8px 18px -12px rgb(53 101 90 / 0.9);
+  --shadow-ring: 0 0 0 4px rgb(53 101 90 / 0.12);
+
+  /* ── Layout ───────────────────────────────────────────────────────────
+     `max-w-sheet` for the pad and the documents, `max-w-ledger` for the
+     admin table, which needs the extra width for six columns. */
+  --container-sheet: 1080px;
+  --container-ledger: 1180px;
+
+  /* ── Motion — the kit's curves ────────────────────────────────────────── */
+  --ease-press: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BASE — the sheet of paper everything is printed on
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-body);
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* At 360px a long unbroken token (a URL in a brief) must not widen the
+       page. Wrapping is always preferable to a horizontal scrollbar. */
+    overflow-wrap: break-word;
+  }
+
+  /* Ballpoint focus, on everything, always visible. Controls that carry their
+     own focus treatment (the wells below) opt out deliberately. */
+  :focus-visible {
+    outline: 2px solid var(--color-ballpoint);
+    outline-offset: 2px;
+    border-radius: var(--radius-DEFAULT);
+  }
+
+  ::selection {
+    background-color: var(--color-ballpoint);
+    color: var(--color-paper);
+  }
+
+  ::placeholder {
+    color: var(--color-faint);
+    opacity: 1;
+  }
+
+  a {
+    color: var(--color-ballpoint);
+    text-underline-offset: 3px;
+  }
+
+  a:hover {
+    color: var(--color-accent-deep);
+  }
+
+  /* Headings carry the kit's tight tracking, which is what makes Figtree read
+     as a display face rather than a UI font. */
+  h1,
+  h2,
+  h3 {
+    color: var(--color-ink);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  [disabled],
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* Images and canvases never overflow their column. */
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COMPONENTS — the handful of things utilities express badly
+
+     .display      Archivo, expanded, uppercase — preprinted form headers
+     .mono         DM Mono with tabular figures — every number, no exception
+     .well         an input well: duplicate stock, one bottom rule
+     .well-ruled   the same well with printed baselines (for the brief)
+     .thread       the progress bar across the top of a working card
+     .sheet        a result sheet
+     .stamp        the grand-total rubber stamp  (+ .stamp-currency/.stamp-figure)
+     .prose        rendered markdown
+
+   Everything here is single-class specificity, so any Tailwind utility wins.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The kit's orbit: three dots turning about a centre. Used where the wait is
+   one long call with nothing to report inside it - a percentage there would be
+   a number invented to fill a gap. */
+@keyframes ck-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* And the thread's own version of the same admission: a short segment
+   sweeping the track, which says "still working" without claiming ground. */
+@keyframes ck-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@keyframes ck-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@layer components {
+  /* ── The pad's question ──────────────────────────────────────────────
+     One question at a time, set large enough to be the only thing on the
+     screen worth reading. The Clarity Kit's flow pattern asks for this
+     size deliberately: at 18px a question reads as a field label and the
+     form reads as paperwork; at 26px it reads as somebody asking. */
+  .pad-question {
+    display: block;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 21px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+  }
+
+  @media (max-width: 640px) {
+    .pad-question {
+      font-size: 18px;
+    }
+  }
+
+  /* The brief is the one field worth real height. Sized to the panel rather
+     than to a constant, so it grows on a large screen and gives way on a
+     laptop instead of pushing the step into a scroll. */
+  .pad-brief {
+    min-height: clamp(96px, 22vh, 190px);
+  }
+
+  /* ── Signature air ───────────────────────────────────────────────────
+     A line the document leaves empty for a pen. The markdown carries it as
+     a literal `&nbsp;` because Python strips a real no-break space, so all
+     three renderers - print, PDF and this one - recognise the token rather
+     than the character. */
+  .sign-space {
+    display: block;
+    height: 26px;
+  }
+
+  /* ── The keycap ──────────────────────────────────────────────────────
+     A key you can press, drawn as the thing you press. Monospace on
+     purpose: it is a key, not a word, and it should not read as prose. */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    padding: 3px 6px;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-paper);
+    color: var(--color-faint);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  /* ── The chip ────────────────────────────────────────────────────────
+     One small fact - a state, a count, a mode - in a pill so it reads as a
+     label on the thing beside it rather than as a control. Three tones and
+     nothing else: neutral for facts, live for work in progress, alert for
+     something that stopped. A palette of chips is a legend nobody has. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-rule);
+    background-color: var(--color-duplicate);
+    color: var(--color-void);
+    font-family: var(--font-label);
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .chip::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background-color: currentColor;
+    opacity: 0.55;
+  }
+
+  .chip--live {
+    border-color: color-mix(in oklab, var(--color-ballpoint) 35%, transparent);
+    background-color: var(--color-accent-soft);
+    color: var(--color-ballpoint);
+  }
+
+  /* The dot on a live chip breathes, so a page left open says whether
+     anything is still happening without being read. */
+  .chip--live::before {
+    opacity: 1;
+    animation: ck-pulse 1.6s var(--ease-press) infinite;
+  }
+
+  .chip--alert {
+    border-color: color-mix(in oklab, var(--color-alert) 30%, transparent);
+    background-color: color-mix(in oklab, var(--color-alert) 7%, var(--color-paper));
+    color: var(--color-alert);
+  }
+
+  .chip--alert::before {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chip--live::before {
+      animation: none;
+    }
+  }
+
+  /* ── Heading type ─────────────────────────────────────────────────────
+     Figtree at 600 with tight tracking. Not uppercase: the kit sets
+     its headings in sentence case and saves capitals for the small labels. */
+  .display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Small tracked labels ─────────────────────────────────────────────
+     The kit's eyebrow: 12-13px, uppercase, 0.14em tracking, faint. Also the
+     class every table figure carries, because it brings tabular figures. */
+  .mono {
+    font-family: var(--font-label);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* ── Display figures ──────────────────────────────────────────────────
+     A number meant to be read as a statement rather than scanned in a column:
+     Figtree at 600 with tight -0.03em tracking, the treatment
+     it gives its own headline figures. */
+  .figure {
+    font-family: var(--font-figure);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* ── The input well ───────────────────────────────────────────────────
+     The kit's field: surface fill, 1px border, 12px radius. On focus the
+     border turns accent and a 4px tinted ring appears outside it. The ring is
+     a shadow, so nothing reflows. */
+  .well {
+    display: block;
+    width: 100%;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    padding-block: 0.7rem;
+    padding-inline: 0.9rem;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-lg);
+    appearance: none;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  /* The field warms towards the accent as the pointer crosses it, so a form
+     reads as a set of things you can touch before you touch one. It stops
+     short of the accent itself - that belongs to focus, which is a stronger
+     claim than "your pointer is here". */
+  .well:hover:not(:focus):not(:disabled) {
+    border-color: color-mix(in oklab, var(--color-ballpoint) 35%, var(--color-rule));
+  }
+
+  .well:focus {
+    outline: none;
+    border-color: var(--color-ballpoint);
+    box-shadow: var(--shadow-ring);
+  }
+
+  .well:disabled {
+    color: var(--color-faint);
+    background-color: var(--color-duplicate);
+    opacity: 1;
+  }
+
+  /* Forced-colours users lose the tinted ring entirely, so hand the outline
+     back to them. */
+  @media (forced-colors: active) {
+    .well:focus {
+      outline: 2px solid Highlight;
+      outline-offset: 1px;
+    }
+  }
+
+  /* A native select keeps its own arrow only on some platforms; draw one. */
+  select.well {
+    padding-inline-end: 2rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%231D1B17' stroke-width='1.6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.8rem center;
+    background-size: 10px 6px;
+  }
+
+  /* ── The brief field ──────────────────────────────────────────────────
+     The one question the whole product hangs on, so it gets height and room to
+     breathe rather than printed ruling - this direction has no pad to imitate. */
+  .well-ruled {
+    font-size: var(--text-lg);
+    line-height: 1.6;
+    padding-block: 0.9rem;
+    resize: vertical;
+  }
+
+  /* ── The primary action ───────────────────────────────────────────────── */
+  /* ── Buttons ──────────────────────────────────────────────────────────
+     Both actions are the same control at the same size. They differ in fill
+     and nothing else: the primary is pine, the quiet one is paper with a
+     hairline. Emphasis comes from colour, which is free, rather than from
+     height or width, which shift every button beside them - a 248px primary
+     next to a 90px Back read as two unrelated controls that happened to land
+     in the same row.
+
+     One shared height, one shared minimum width, one border on both (the
+     primary's is transparent) so the box models match to the pixel. */
+  .action-primary,
+  .action-quiet {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding-block: 0.5rem;
+    padding-inline: 1.15rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.2;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .action-primary {
+    /* Only the primary carries a minimum width. Shared, it would inflate the
+       Remove button on every rate-card row into something the size of a
+       decision; on the primary it stops "Save" from becoming a stub. */
+    min-width: 7rem;
+    background-color: var(--color-ballpoint);
+    color: var(--color-canvas);
+    box-shadow: var(--shadow-action);
+    transition:
+      background-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .action-primary:hover:not(:disabled) {
+    background-color: var(--color-accent-deep);
+  }
+
+  /* ── Pressed ──────────────────────────────────────────────────────────
+     A button that does not move under the finger leaves you wondering whether
+     the click landed. One pixel down and the shadow off is the whole gesture -
+     it reads as the surface taking the press rather than as an animation. Kept
+     out of the reduced-motion guard on purpose: a transform that resolves
+     instantly is a state, not motion. */
+  .action-primary:active:not(:disabled) {
+    transform: translateY(1px);
+    box-shadow: none;
+  }
+
+  .action-quiet:active:not(:disabled) {
+    transform: translateY(1px);
+    background-color: var(--color-duplicate);
+  }
+
+  .action-primary:disabled {
+    background-color: var(--color-duplicate);
+    color: var(--color-faint);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  /* ── The secondary action ─────────────────────────────────────────────
+     A quiet outlined control: download, print, remove, delete. */
+  .action-quiet {
+    background-color: var(--color-paper);
+    color: var(--color-body);
+    border-color: var(--color-rule);
+    transition:
+      border-color 0.15s ease,
+      color 0.15s ease;
+  }
+
+  .action-quiet:hover:not(:disabled) {
+    border-color: var(--color-ballpoint);
+    color: var(--color-ballpoint);
+    text-decoration: none;
+  }
+
+  /* A disabled quiet button used to look exactly like a live one and still lit
+     up on hover, which is a control promising something it will not do. Remove
+     on the last payment row and Prepare before there is a brief are both this
+     state. */
+  .action-quiet:disabled {
+    color: var(--color-faint);
+    border-color: var(--color-hairline);
+    cursor: not-allowed;
+  }
+
+  /* ── A row under the pointer ──────────────────────────────────────────
+     Long lists are scanned across, not down, and a line of text with nothing
+     holding it loses the eye halfway. The tint is barely there by design: it
+     answers the pointer without turning the table into a set of buttons. */
+  .row-touch {
+    transition: background-color 0.12s ease;
+  }
+
+  .row-touch:hover {
+    background-color: color-mix(in oklab, var(--color-duplicate) 55%, transparent);
+  }
+
+  /* ── The progress thread ──────────────────────────────────────────────
+     The kit's own device: a 2px accent bar across the top of the card that
+     widens as the work proceeds. It replaces a spinner because it says how far
+     along the work is, not merely that it is happening. */
+  .thread {
+    height: 2px;
+    background-color: var(--color-hairline);
+    overflow: hidden;
+  }
+
+  /* ── Orbit ───────────────────────────────────────────────────────────
+     Three dots turning, for a wait with no inside. PRISM reports progress
+     from steps that actually finished, which is right - and it means a
+     single ninety-second model call sits at one number the whole way. A
+     frozen 8% reads as broken; this reads as working, and claims nothing.
+     One leading dot at full weight and two trailing it, exactly as the kit
+     draws it. */
+  .orbit {
+    position: relative;
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    animation: ck-orbit 2.4s linear infinite;
+  }
+
+  .orbit span {
+    position: absolute;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-ballpoint);
+  }
+
+  .orbit span:nth-child(1) {
+    top: 0;
+    left: 50%;
+    margin-left: -2.5px;
+    width: 5px;
+    height: 5px;
+  }
+
+  .orbit span:nth-child(2) {
+    bottom: 1px;
+    left: 1px;
+    width: 4px;
+    height: 4px;
+    opacity: 0.55;
+  }
+
+  .orbit span:nth-child(3) {
+    bottom: 1px;
+    right: 1px;
+    width: 4px;
+    height: 4px;
+    opacity: 0.3;
+  }
+
+  /* The same honesty in the thread: a segment sweeping, not a fill. */
+  .thread--waiting::after {
+    content: "";
+    display: block;
+    width: 25%;
+    height: 100%;
+    background-color: var(--color-ballpoint);
+    animation: ck-sweep 1.4s var(--ease-press) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .orbit,
+    .thread--waiting::after {
+      animation: none;
+    }
+
+    .thread--waiting::after {
+      width: 100%;
+      opacity: 0.4;
+    }
+  }
+
+  .thread > span {
+    display: block;
+    height: 2px;
+    border-radius: 99px;
+    background-color: var(--color-ballpoint);
+    transition: width 0.5s var(--ease-press);
+  }
+
+  /* ── A result sheet ───────────────────────────────────────────────────
+     Paper by default; add `bg-duplicate` for the developer's copy. */
+  .sheet {
+    position: relative;
+    width: 100%;
+    max-width: var(--container-sheet);
+    margin-inline: auto;
+    background-color: var(--color-paper);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-sheet);
+    overflow: hidden;
+  }
+
+  /* ── The total ────────────────────────────────────────────────────────
+     The one place a figure is allowed to be loud. A calm accent-tinted panel
+     with the number set as a display figure — the kit's own treatment for a
+     number that is the answer rather than a data point. No rotation, no stamp: the
+     old carbon-pad conceit does not belong in this direction.
+
+     The resting state is the settled state, so a reduced-motion visitor sees a
+     finished panel and never a mid-animation frame. */
+  .stamp {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    padding-block: 1.1rem 1.2rem;
+    padding-inline: 1.5rem;
+    min-width: 248px;
+    color: var(--color-ballpoint);
+    background-color: var(--color-accent-soft);
+    border: 1px solid color-mix(in srgb, var(--color-ballpoint) 22%, transparent);
+    border-radius: var(--radius-xl);
+  }
+
+  .stamp-currency {
+    font-family: var(--font-label);
+    font-weight: 500;
+    font-size: var(--text-xs);
+    line-height: 1;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ballpoint);
+    opacity: 0.75;
+  }
+
+  .stamp-figure {
+    font-family: var(--font-figure);
+    font-weight: 600;
+    font-size: 34px;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    white-space: nowrap;
+    color: var(--color-ink);
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     PROSE — rendered markdown
+     Headings in Archivo uppercase, body in Source Serif 4, ruled tables,
+     every figure in DM Mono.
+     ══════════════════════════════════════════════════════════════════════ */
+  .prose {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    color: var(--color-ink);
+    overflow-wrap: break-word;
+
+    & > :first-child {
+      margin-block-start: 0;
+    }
+
+    & > :last-child {
+      margin-block-end: 0;
+    }
+
+    /* -- headings ---------------------------------------------------- */
+    & :is(h1, h2, h3, h4, h5, h6) {
+      font-family: var(--font-display);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--color-ink);
+      text-wrap: balance;
+    }
+
+    & h1 {
+      font-size: var(--text-xl);
+      line-height: 1.15;
+      margin-block: 0 0.8rem;
+    }
+
+    & h2 {
+      font-size: var(--text-lg);
+      line-height: 1.25;
+      margin-block: 2.25rem 0.7rem;
+      padding-block-end: 0.35rem;
+      border-block-end: 1px solid var(--color-rule);
+    }
+
+    & h3 {
+      font-size: var(--text-base);
+      line-height: 1.3;
+      letter-spacing: 0.02em;
+      margin-block: 1.6rem 0.45rem;
+    }
+
+    & :is(h4, h5, h6) {
+      font-size: var(--text-sm);
+      line-height: 1.35;
+      letter-spacing: 0.1em;
+      color: var(--color-void);
+      margin-block: 1.3rem 0.35rem;
+    }
+
+    /* -- flow -------------------------------------------------------- */
+    & p {
+      margin-block: 0 0.9rem;
+    }
+
+    & :is(ul, ol) {
+      margin-block: 0 0.9rem;
+      padding-inline-start: 1.4rem;
+    }
+
+    & ul {
+      list-style: square;
+    }
+
+    & ol {
+      list-style: decimal;
+    }
+
+    & li {
+      margin-block: 0.22rem;
+    }
+
+    & li::marker {
+      color: var(--color-void);
+      font-family: var(--font-label);
+      font-size: var(--text-sm);
+    }
+
+    & :is(ul, ol) :is(ul, ol) {
+      margin-block: 0.22rem 0.4rem;
+    }
+
+    /* Acceptance criteria arrive as GFM task items. They get a ruled box in
+       place of the square marker - the same box a paper checklist would use. */
+    & li.task {
+      list-style: none;
+      display: flex;
+      gap: 0.6rem;
+      align-items: flex-start;
+      margin-inline-start: -1.4rem;
+    }
+
+    /* An acceptance criterion is something an engineer ticks off, so it gets a
+       real box. The border is --color-void rather than --color-rule: a rule is
+       for dividing a surface it barely contrasts with, and at 1px on the
+       duplicate stock it was invisible. Sized to 15px and given the kit's small
+       radius so it reads as a control rather than a speck. */
+    & .task-box {
+      flex: none;
+      inline-size: 15px;
+      block-size: 15px;
+      margin-block-start: 0.24em;
+      border: 1.5px solid var(--color-void);
+      border-radius: 4px;
+      background-color: var(--color-paper);
+    }
+
+    & .task-box[data-done='true'] {
+      border-color: var(--color-ballpoint);
+      background-color: var(--color-ballpoint);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.3l2.4 2.4L9.6 4' fill='none' stroke='%23FFFDFA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: 11px 11px;
+    }
+
+    & strong {
+      font-weight: 600;
+    }
+
+    & a {
+      color: var(--color-ballpoint);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    & hr {
+      border: 0;
+      border-block-start: 1px solid var(--color-rule);
+      margin-block: 1.75rem;
+    }
+
+    & blockquote {
+      margin-block: 0 1rem;
+      padding-inline-start: 0.9rem;
+      border-inline-start: 2px solid var(--color-ballpoint);
+      color: var(--color-void);
+    }
+
+    /* -- code -------------------------------------------------------- */
+    & code {
+      font-family: var(--font-label);
+      font-size: 0.92em;
+      background-color: var(--color-duplicate);
+      border-radius: var(--radius-DEFAULT);
+      padding: 0.1em 0.32em;
+    }
+
+    & pre {
+      font-family: var(--font-label);
+      font-size: var(--text-sm);
+      line-height: 1.55;
+      background-color: var(--color-duplicate);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-DEFAULT);
+      padding: 0.85rem 1rem;
+      margin-block: 0 1rem;
+      overflow-x: auto;
+    }
+
+    & pre code {
+      background: none;
+      border: 0;
+      padding: 0;
+      font-size: inherit;
+    }
+
+    /* -- tables: the heart of the client sheet ------------------------ */
+    & table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-block: 0 1.35rem;
+      font-size: var(--text-sm);
+    }
+
+    /* A short label in the first column of a two-column block - "Quotation
+       ref.", "Date of issue" - must not wrap just because the value beside it
+       is long. Only bold first cells are pinned: the Investment table's long
+       descriptions are not bold and still wrap as they should. */
+    & td:first-child > strong,
+    & th:first-child > strong {
+      white-space: nowrap;
+    }
+
+    & thead th {
+      font-family: var(--font-label);
+      font-weight: 500;
+      font-size: var(--text-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--color-void);
+      text-align: start;
+      white-space: nowrap;
+      padding: 0.5rem 0.6rem;
+      border-block-end: 2px solid var(--color-ink);
+    }
+
+    & tbody td {
+      padding: 0.55rem 0.6rem;
+      vertical-align: top;
+      border-block-end: 1px solid var(--color-rule);
+    }
+
+    & tbody tr:last-child td {
+      border-block-end: 0;
+    }
+
+    /* A heavier rule above the total row. Markdown has no <tfoot>, so the
+       total arrives as the last row and is bold — collapse resolves the 2px
+       ink border over the 1px rule above it, no double line. */
+    & tbody tr:last-child:has(strong) > td {
+      border-block-start: 2px solid var(--color-ink);
+      font-weight: 600;
+    }
+
+    & tfoot td {
+      padding: 0.6rem;
+      font-weight: 600;
+      border-block-start: 2px solid var(--color-ink);
+    }
+
+    /* Every number cell in DM Mono, tabular, right-aligned. Markdown's
+       right-aligned columns are the money columns; `.num` is the manual
+       escape hatch for cells built in JSX rather than parsed from markdown. */
+    & :is(td, th)[align="right"],
+    & :is(td, th)[style*="right"],
+    & :is(td, th).num {
+      font-family: var(--font-label);
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    & :is(td, th)[align="center"] {
+      text-align: center;
+    }
+
+    /* Down at 360px a six-column rate table cannot fit. Let the table itself
+       scroll rather than the page. */
+    @media (max-width: 40rem) {
+      & table {
+        display: block;
+        width: max-content;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     MOTION — four moments, nothing else.
+     Reduce is the safe default: every rule below is inside the
+     no-preference guard, and every resting state above is already correct.
+     ══════════════════════════════════════════════════════════════════════ */
+  @media (prefers-reduced-motion: no-preference) {
+    /* The kit ships four keyframes and they are the whole motion budget. */
+
+    /* ck-rise — results arriving, 60ms apart. */
+    .sheet {
+      animation: ck-rise 320ms var(--ease-press) both;
+      animation-delay: var(--sheet-delay, 0ms);
+    }
+
+    .sheet ~ .sheet {
+      --sheet-delay: 60ms;
+    }
+
+    /* ck-toast — the total landing. Once, on result render. */
+    .stamp {
+      animation: ck-toast 320ms var(--ease-press) both;
+    }
+
+    /* The same rise, borrowed for the message stack rather than given its own
+       keyframe: a toast arrives the way a total does, from just below where it
+       ends up. No new moment of motion is spent on it. */
+    .toast {
+      animation: ck-toast 320ms var(--ease-press) both;
+    }
+
+    /* ck-shimmer — a sheen travelling along a bar that is actually working.
+       It says "running", which is true, and claims no ground: the fill's width
+       still only moves when a step genuinely finishes. Without it a bar that
+       sits at 33% for forty seconds is indistinguishable from one that has
+       stalled. */
+    .bar-live {
+      background-image: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in oklab, var(--color-paper) 28%, transparent) 45%,
+        transparent 90%
+      );
+      background-size: 220px 100%;
+      background-repeat: no-repeat;
+      animation: ck-shimmer 1.6s linear infinite;
+    }
+
+    /* ck-rise again, shorter — a step of the pad arriving. The panel is keyed
+       on the step id, so React remounts it and the animation runs once per
+       move. Half the duration of a result sheet: this is a step in a form
+       somebody is working through, not an answer worth announcing. */
+    .step-panel {
+      animation: ck-rise 200ms var(--ease-press) both;
+    }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   UTILITIES — one correction
+
+   Every *named* radius step (`rounded-sm`, `rounded-md`, …) reads from the
+   `--radius-*` tokens above and is therefore already 2px. The **bare** forms
+   are the exception: Tailwind v4 hardcodes `rounded`, `rounded-t`, `rounded-l`
+   and friends to 0.25rem, and no theme variable — `--radius-DEFAULT` included —
+   can reach them. Verified against tailwindcss 4.3.3, which compiles
+   `.rounded { border-radius: 0.25rem }` regardless of the theme.
+
+   So they are pinned here. Same layer as Tailwind's own utilities and later in
+   document order, which is what makes these win. Radius is 2px everywhere,
+   whichever spelling gets reached for.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@layer utilities {
+  /* Scrolls, but shows nothing for it.
+     Used on the pad, where the card is pinned to the viewport and a bar that
+     appeared on one step and not another would read as the card resizing. The
+     content is still reachable by wheel, trackpad, arrow keys and Tab — this
+     hides the indicator, not the overflow. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rounded {
+    border-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-t {
+    border-top-left-radius: var(--radius-DEFAULT);
+    border-top-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-r {
+    border-top-right-radius: var(--radius-DEFAULT);
+    border-bottom-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-b {
+    border-bottom-right-radius: var(--radius-DEFAULT);
+    border-bottom-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-l {
+    border-top-left-radius: var(--radius-DEFAULT);
+    border-bottom-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-s {
+    border-start-start-radius: var(--radius-DEFAULT);
+    border-end-start-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-e {
+    border-start-end-radius: var(--radius-DEFAULT);
+    border-end-end-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-tl {
+    border-top-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-tr {
+    border-top-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-br {
+    border-bottom-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-bl {
+    border-bottom-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-ss {
+    border-start-start-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-se {
+    border-start-end-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-ee {
+    border-end-end-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-es {
+    border-end-start-radius: var(--radius-DEFAULT);
+  }
+}
+
+/* Keyframes live outside the layers — @layer has no effect on them, and
+   top level keeps the names unambiguous. */
+@keyframes ck-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ck-toast {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ck-shimmer {
+  from {
+    background-position: -300px 0;
+  }
+  to {
+    background-position: 300px 0;
+  }
+}
+
+@keyframes ck-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
