@@ -268,6 +268,12 @@ ok(
 # the one function `send_intake` calls to decide membership - and watching a
 # bundle id that was never quoted get accepted anyway.
 
+# Re-asserted rather than assumed: every TestClient call between here and
+# `send_target`'s own `workspaces.use(made.id)` above carried its own
+# `X-Workspace` header and re-points the ambient context on the way through
+# `_gate` - `_quoted()` itself has no workspace argument and relies entirely
+# on this being set correctly first.
+workspaces.use(made.id)
 mutation_target = _quoted(["dddddddddddd"])
 _real_quoted_bundle = main_module._quoted_bundle
 
