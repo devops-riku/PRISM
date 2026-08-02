@@ -4,9 +4,10 @@
  * The backend is the authority. Every type here mirrors a Pydantic model in
  * backend/app - schemas.py for the quotation and the proposal, jobs.py for
  * background work, settings.py for the studio's defaults, members.py and
- * inbox.py and workspaces.py for the team, the mail and the books of work. When
- * one of those models changes, this file is wrong until somebody changes it
- * too; nothing here is inferred from a response at runtime.
+ * inbox.py and workspaces.py for the team, the mail and the books of work, and
+ * intakes.py for a client request. When one of those models changes, this
+ * file is wrong until somebody changes it too; nothing here is inferred from
+ * a response at runtime.
  *
  * Two rules that explain most of what follows:
  *
@@ -735,6 +736,75 @@ export type Note = {
 export type Mailbox = {
   unread: number
   notes: Note[]
+}
+
+// --- client intakes ------------------------------------------------------------
+
+/**
+ * Where a client request has got to - `intakes.ALLOWED`.
+ *
+ * Only the first five are reachable in Stage 1; the rest are defined in the
+ * same table (`intakes.STAGE_TWO`) but refused by `intakes.advance` until the
+ * client link ships. They stay in the union anyway: the server can send any
+ * of the ten in principle, and a narrower type would only turn a future state
+ * into a compile error at the wrong call site.
+ *
+ * Like `QuotationKind`, the stored field is a plain `str` with no validator of
+ * its own - this union is the closed set `intakes.advance` enforces, not a
+ * type Pydantic checks on the way in.
+ */
+export type IntakeState =
+  | 'submitted'
+  | 'preparing'
+  | 'quoted'
+  | 'quote_failed'
+  | 'closed'
+  | 'issued'
+  | 'sent'
+  | 'revision_requested'
+  | 'finalized'
+  | 'proposal_sent'
+
+/**
+ * One client request and everything that has happened to it - `intakes.Intake`.
+ *
+ * Storage-side and workspace-scoped, like `Member` and `Invite`: it never
+ * reaches Gemini itself, only records what a client asked for and which job,
+ * bundles and document came out of it.
+ */
+export type Intake = {
+  id: string
+  state: IntakeState
+  created_at: string
+  created_by: string
+
+  // What the client said. Kept verbatim, never rewritten.
+  client_email: string
+  client_phone: string
+  scope: string
+  budget_text: string
+
+  /**
+   * The PAD settings this intake will be quoted under - kind, currency,
+   * market region, tax basis, payment terms, tiers. The server's own field is
+   * a bare, unconstrained `dict` rather than a fixed shape, and its values
+   * are not uniformly strings, so this stays a plain record rather than
+   * `Record<string, string>`.
+   */
+  preset: Record<string, unknown>
+
+  // What actually happened.
+  job_id: string
+  bundle_ids: string[]
+  document_id: string
+  /** The scope and budget as they stood when Generate was pressed. Kept apart
+   * from the client's own words so the pair reads as "asked" and "priced". */
+  priced_scope: string
+  priced_budget: string
+  error: string
+
+  closed_at: string
+  closed_by: string
 }
 
 // --- small reference shapes ---------------------------------------------------

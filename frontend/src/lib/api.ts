@@ -17,6 +17,7 @@ import { currentWorkspace, setCurrentWorkspace } from './workspace'
 import type {
   Currency,
   DocumentKind,
+  Intake,
   Invite,
   InvitePreview,
   Job,
@@ -1052,4 +1053,66 @@ export async function clearNotifications(options: CallOptions = {}): Promise<Mai
 /** Take charge of a workspace nobody administers yet. Fails if it has a team. */
 export async function claimWorkspace(options: CallOptions = {}): Promise<Team> {
   return request<Team>('/team/claim', { method: 'POST', signal: options.signal })
+}
+
+/**
+ * The client-request queue, newest first. Readable by any member; recording
+ * or closing one is an admin's call - see `createIntake` and `closeIntake`.
+ */
+export async function listIntakes(options: CallOptions = {}): Promise<Intake[]> {
+  const data = await request<Intake[]>('/intakes', options)
+  if (!Array.isArray(data)) {
+    throw new ApiError('The request queue came back in a shape this page cannot read.', {
+      kind: 'parse',
+    })
+  }
+  return data
+}
+
+/** One client request. 404s when the id is absent or malformed. */
+export async function fetchIntake(id: string, options: CallOptions = {}): Promise<Intake> {
+  const intakeId = String(id ?? '').trim()
+  if (!intakeId) throw new ApiError('No request id to look up.', { kind: 'validation' })
+
+  const data = await request<Intake>(`/intakes/${encodeURIComponent(intakeId)}`, options)
+  if (!data || typeof data !== 'object' || typeof data.id !== 'string') {
+    throw new ApiError('That answer was not a client request.', { kind: 'parse' })
+  }
+  return data
+}
+
+/**
+ * Record a client request. Admin-only - recording one is nearer to inviting
+ * somebody than to drafting a quotation, per `main.create_intake`.
+ */
+export async function createIntake(
+  body: {
+    client_email: string
+    client_phone: string
+    scope: string
+    budget_text: string
+    preset: Record<string, unknown>
+  },
+  options: CallOptions = {},
+): Promise<Intake> {
+  if (!String(body.scope ?? '').trim()) {
+    throw new ApiError('A request needs a scope.', { kind: 'validation' })
+  }
+  return request<Intake>('/intakes', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json' },
+    signal: options.signal,
+  })
+}
+
+/** Not going ahead. Admin-only; 404s when the id is absent or malformed. */
+export async function closeIntake(id: string, options: CallOptions = {}): Promise<Intake> {
+  const intakeId = String(id ?? '').trim()
+  if (!intakeId) throw new ApiError('No request id to close.', { kind: 'validation' })
+
+  return request<Intake>(`/intakes/${encodeURIComponent(intakeId)}/close`, {
+    method: 'POST',
+    signal: options.signal,
+  })
 }
