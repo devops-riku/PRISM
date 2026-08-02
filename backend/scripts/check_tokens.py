@@ -317,6 +317,50 @@ ok(
 )
 ok("and _built is set regardless, so a working walk is not retried either", tokens._built)
 
+# --- a boot-time walk that fails must not poison the index forever ---------
+#
+# `build_index()` is what `main.py`'s startup event calls, once, before the
+# server accepts its first connection - and unlike the lazy path just above,
+# a failed walk there must NOT be allowed to set `_built` and move on. The
+# lazy path accepts that tradeoff because a request-triggered failure has an
+# anonymous route's retry-storm to protect against; a boot-time failure has
+# no request behind it at all, and the alternative is far worse: every token
+# minted before that boot would answer "gone" - the same 404 an unknown
+# token gets - until somebody restarts the process, since `resolve`'s lazy
+# path is gated on `not _built` and would never fire again. Forced the same
+# way as the lazy-walk test above - breaking `workspaces.listing` itself -
+# but calling `build_index()` (what boot calls), not letting `resolve`
+# trigger the walk.
+
+boot_ws = workspaces.create("Boot Failure")
+boot_fixture = make(boot_ws.id, "boot-fixture")
+boot_token = boot_fixture.token
+
+tokens._built = False  # noqa: SLF001 - simulating a fresh process, pre-boot
+tokens._index.clear()  # noqa: SLF001 - nothing remembered yet, as a real boot starts
+
+
+def _boom_listing_at_boot():
+    raise RuntimeError("synthetic failure, mid-walk, at boot")
+
+
+workspaces.listing = _boom_listing_at_boot
+try:
+    tokens.build_index()
+finally:
+    workspaces.listing = real_listing
+
+ok(
+    "a failed boot-time walk leaves _built False, unlike a failed lazy one",
+    not tokens._built,  # noqa: SLF001
+)
+ok(
+    "so the very next miss retries the walk for real and finds the token, "
+    "once the underlying issue has cleared - no restart required",
+    tokens.resolve(boot_token) == (boot_ws.id, boot_fixture.id),
+)
+ok("and _built is finally True, once a walk actually completed", tokens._built)  # noqa: SLF001
+
 # --- close() and relink() must survive a process restart -------------------
 #
 # `forget_token`/`forget_workspace` only clear the *in-memory* index. A real

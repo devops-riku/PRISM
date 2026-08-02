@@ -62,12 +62,34 @@ def _expired(stamp: str) -> bool:
     return when < datetime.now(timezone.utc)
 
 
-def _build_locked() -> None:
+def _build_locked(*, accept_partial: bool = True) -> None:
     """Walk every workspace once, reading each intake's own token off disk.
 
     Called with `_lock` already held, and only on a miss with the walk still
     unrun - a token that was minted and remembered in this same process is
     already in `_index` and never reaches this function at all.
+
+    `accept_partial` decides what a walk that dies partway through - a
+    transient `OneDrive` sharing violation reaching `workspaces.root()`'s
+    `mkdir`, say, which this codebase's own comments elsewhere call not
+    hypothetical - does to `_built`:
+
+    - `True` (the default, and what `resolve()`'s own lazy trigger below
+      uses): `_built` flips anyway, keeping whatever partial index this run
+      produced as final for the process. A walk retried on every later miss
+      is a full scan per call again, exactly what this index exists to save
+      an anonymous route from paying, so a *request-triggered* failure
+      accepts the partial result rather than risk that. Anything the walk never
+      reached is still recoverable the moment its own `create` or `relink`
+      calls `remember` for real.
+    - `False` (what `build_index()` uses, below): `_built` is left `False`
+      on failure, so the very next miss - lazy, from `resolve()` - retries
+      the walk for real. A *boot-time* failure has no request behind it to
+      protect from a retry storm, and the alternative is far worse than one
+      expensive retry: every token minted before this boot would answer as
+      unresolvable, forever, until somebody restarts the process, because
+      `resolve()`'s lazy path is gated on `not _built` and would otherwise
+      never fire again.
     """
     global _built
     if _built:
@@ -89,18 +111,24 @@ def _build_locked() -> None:
         finally:
             workspaces.give_back(previous)
     except Exception:
-        # A walk that dies partway through - `workspaces.root()`'s `mkdir`
-        # reaching a permissions error, say - must not become a walk retried
-        # on every later miss too: that is a full scan per call again,
-        # exactly what this index exists to avoid, and it would surface on
-        # Task 3's unauthenticated route as a 500 with a stack trace where an
-        # unknown token has to answer 404. `_built` still flips below,
-        # accepting whatever partial index this run produced as final for
-        # the process; anything the walk never reached is still recoverable
-        # the moment its own `create` or `relink` calls `remember` for real.
         logger.exception("Building the token index failed partway through")
-    finally:
-        _built = True
+        if not accept_partial:
+            # Distinct from the message above, and at the same ERROR level,
+            # so an operator scanning logs after a boot can tell this apart
+            # from an ordinary lazy-path miss hitting a transient glitch -
+            # this one means every existing client link is unresolvable
+            # right now, not just the one token whose probe happened to
+            # trigger the walk.
+            logger.error(
+                "The client-link token index could not be built at startup. "
+                "Every intake token minted before this boot will answer as "
+                "unresolvable (the same 404 an unknown token gets) until the "
+                "next resolve() miss retries the walk - which happens "
+                "automatically, at that request's expense, rather than "
+                "requiring a restart."
+            )
+            return
+    _built = True
 
 
 def build_index() -> None:
@@ -120,13 +148,20 @@ def build_index() -> None:
     every other check script that imports this module directly, a future
     admin CLI - still build lazily, correctly, on their own first miss.
 
+    Calls `_build_locked(accept_partial=False)`, not the default: a failed
+    walk here must not silently poison the index for the life of the
+    process the way a failed *lazy* walk is allowed to - see
+    `_build_locked`'s own docstring for the two behaviours `accept_partial`
+    switches between and why boot needs the stricter one.
+
     Safe to call more than once, and safe to call from a place that never
     checks whether it already ran: `_build_locked` is itself idempotent once
-    `_built` flips, so a second call is a lock acquisition and a flag check,
-    nothing more.
+    `_built` flips, so a second call - whether this one succeeded before or
+    a previous one left `_built` False on purpose - is at most one more
+    attempt at the same walk, never less correct than not calling it again.
     """
     with _lock:
-        _build_locked()
+        _build_locked(accept_partial=False)
 
 
 def remember(token: str, workspace_id: str, intake_id: str) -> None:
