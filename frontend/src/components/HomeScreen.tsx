@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 import { listJobs } from '../lib/api'
 import { useRole } from '../lib/role'
 import { DISPLAY } from './tokens'
@@ -113,13 +114,36 @@ const FOR_CLIENT = [
   },
 ]
 
+//: The pill's two stops, in the order arrow keys move through them.
+const SIDES = [
+  ['you', 'For You'],
+  ['client', 'For Client'],
+] as const
+
 export default function HomeScreen() {
   const [running, setRunning] = useState<number | null>(null)
   const [side, setSide] = useState<'you' | 'client'>('you')
   const destinations = side === 'you' ? FOR_YOU : FOR_CLIENT
+  const pill = useRef<HTMLDivElement | null>(null)
   // Settings belongs to whoever runs the workspace. A member is not shown a
   // door that opens onto a 403.
   const { isAdmin } = useRole()
+
+  // A role="tablist" promises the WAI-ARIA tab pattern: the arrows move
+  // between tabs and only the active one sits in the page's Tab order. Two
+  // stops side by side means only the horizontal arrows are meaningful here
+  // (the APG reserves Up/Down for a vertical tablist, which this is not).
+  const moveSide = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+    if (!step) return
+    event.preventDefault()
+    const index = SIDES.findIndex(([id]) => id === side)
+    const [next] = SIDES[(index + step + SIDES.length) % SIDES.length]
+    setSide(next)
+    // Focus follows selection, so the arrow keys feel like a switch rather
+    // than a cursor moving over inert labels.
+    pill.current?.querySelector<HTMLElement>(`[data-tab="${next}"]`)?.focus()
+  }
 
   useEffect(() => {
     let live = true
@@ -158,18 +182,17 @@ export default function HomeScreen() {
         </div>
 
         <div className="mt-10 mb-6 flex justify-center">
-          <div className="pill" role="tablist" aria-label="Whose work">
-            {(
-              [
-                ['you', 'For You'],
-                ['client', 'For Client'],
-              ] as const
-            ).map(([id, label]) => (
+          <div ref={pill} className="pill" role="tablist" aria-label="Whose work" onKeyDown={moveSide}>
+            {SIDES.map(([id, label]) => (
               <button
                 key={id}
                 type="button"
                 role="tab"
+                id={`home-tab-${id}`}
+                data-tab={id}
                 aria-selected={side === id}
+                aria-controls="home-panel"
+                tabIndex={side === id ? 0 : -1}
                 onClick={() => setSide(id)}
                 className={`pill__tab ${side === id ? 'pill__tab--on' : ''}`}
               >
@@ -180,7 +203,9 @@ export default function HomeScreen() {
         </div>
 
         <nav
-          aria-label="Where to go"
+          id="home-panel"
+          role="tabpanel"
+          aria-labelledby={`home-tab-${side}`}
           className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
         >
           {destinations.filter((place) => isAdmin || place.href !== '#/settings').map(

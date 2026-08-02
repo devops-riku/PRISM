@@ -383,13 +383,28 @@
     font-family: var(--font-label);
     font-size: 13px;
     color: var(--color-void);
-    transition: background-color 150ms var(--ease-press), color 150ms var(--ease-press);
+    cursor: pointer;
+    /* .15s ease, not --ease-press: that curve is reserved for the kit's four
+       keyframe moments and the thread's width. This is a plain colour swap,
+       the same kind .well and .action-primary already run on .15s ease. */
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
   }
 
   .pill__tab--on {
     background-color: var(--color-paper);
     color: var(--color-ink);
     box-shadow: var(--shadow-sheet);
+  }
+
+  /* The base focus ring is drawn for square controls (--radius-DEFAULT). A
+     pill-shaped tab needs its own outline radius so the ring follows the
+     curve instead of squaring off a rounded control - this rule only
+     replaces that one property, the ring's colour and offset still come
+     from the base rule underneath it. */
+  .pill__tab:focus-visible {
+    border-radius: var(--radius-pill);
   }
 
   /* ── Heading type ─────────────────────────────────────────────────────
