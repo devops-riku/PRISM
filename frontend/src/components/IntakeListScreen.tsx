@@ -3,7 +3,7 @@ import { closeIntake, listIntakes } from '../lib/api'
 import { formatDate } from '../lib/format'
 import RowMenu from './RowMenu'
 import { useRole } from '../lib/role'
-import { ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL } from './tokens'
+import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL } from './tokens'
 import type { Intake, IntakeState } from '../types'
 
 /**
@@ -87,11 +87,25 @@ function buildSections(rows: Intake[]): Section[] {
 type IntakeRowProps = {
   row: Intake
   isAdmin: boolean
-  onClose: (id: string) => void
+  confirming: boolean
+  onRequestClose: (id: string) => void
+  onConfirmClose: (id: string) => void
+  onCancelClose: () => void
 }
 
-function IntakeRow({ row, isAdmin, onClose }: IntakeRowProps) {
+function IntakeRow({
+  row,
+  isAdmin,
+  confirming,
+  onRequestClose,
+  onConfirmClose,
+  onCancelClose,
+}: IntakeRowProps) {
   const scopeLine = firstLine(row.scope)
+  // `preparing` failed once; `ALLOWED` still permits it back into `preparing`,
+  // so pricing it again is a legal move, not a dead end - the row gets the
+  // same door a fresh `submitted` request does.
+  const canPrice = row.state === 'submitted' || row.state === 'quote_failed'
 
   return (
     <article className="row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6">
@@ -100,6 +114,11 @@ function IntakeRow({ row, isAdmin, onClose }: IntakeRowProps) {
         {scopeLine ? (
           <p className="mt-1 max-w-[52ch] truncate font-body text-[13.5px] text-void">
             {scopeLine}
+          </p>
+        ) : null}
+        {row.state === 'quote_failed' && row.error ? (
+          <p className="mt-1 max-w-[52ch] truncate border-l-2 border-l-alert pl-2 font-body text-[13px] text-alert">
+            {row.error}
           </p>
         ) : null}
         <p className="mt-2 flex flex-wrap items-center gap-2">
@@ -111,20 +130,44 @@ function IntakeRow({ row, isAdmin, onClose }: IntakeRowProps) {
       </div>
 
       <span className="flex flex-none flex-wrap items-center gap-2">
-        {row.state === 'submitted' ? (
-          <a href={`#/pad/${row.id}`} className={ACTION_PRIMARY}>
-            Price this
-          </a>
-        ) : null}
-        {/* Closing is an admin's call, like recording one - the server
-            refuses a member either way, and offering it to someone it would
-            be refused for is a door that only looks open. */}
-        {isAdmin && row.state !== 'closed' ? (
-          <RowMenu
-            label={`Actions for ${row.client_email || 'this request'}`}
-            items={[{ label: 'Close', onSelect: () => onClose(row.id) }]}
-          />
-        ) : null}
+        {confirming ? (
+          // Closing is not going ahead, and there is no move back from it in
+          // `intakes.ALLOWED` - the same weight `QuotationList.tsx` and
+          // `ProposalList.tsx` give their own irreversible row actions, so the
+          // menu gives way to an inline confirm rather than firing on one
+          // click.
+          <span className="inline-flex gap-2">
+            <button
+              type="button"
+              className={`${ACTION} border-alert text-alert`}
+              onClick={() => onConfirmClose(row.id)}
+            >
+              Close it
+            </button>
+            <button type="button" className={ACTION} onClick={onCancelClose}>
+              Keep it
+            </button>
+          </span>
+        ) : (
+          <>
+            {canPrice ? (
+              <a href={`#/pad/${row.id}`} className={ACTION_PRIMARY}>
+                Price this
+              </a>
+            ) : null}
+            {/* Closing is an admin's call, like recording one - the server
+                refuses a member either way, and offering it to someone it
+                would be refused for is a door that only looks open. */}
+            {isAdmin && row.state !== 'closed' ? (
+              <RowMenu
+                label={`Actions for ${row.client_email || 'this request'}`}
+                items={[
+                  { label: 'Close', danger: true, onSelect: () => onRequestClose(row.id) },
+                ]}
+              />
+            ) : null}
+          </>
+        )}
       </span>
     </article>
   )
@@ -135,6 +178,7 @@ export default function IntakeListScreen() {
   const [rows, setRows] = useState<Intake[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [confirmingId, setConfirmingId] = useState('')
 
   useEffect(() => {
     let live = true
@@ -155,10 +199,11 @@ export default function IntakeListScreen() {
     }
   }, [])
 
-  const close = (id: string) => {
+  const handleClose = (id: string) => {
     setError('')
     closeIntake(id)
       .then((updated) => {
+        setConfirmingId('')
         setRows((current) => current.map((row) => (row.id === id ? updated : row)))
       })
       .catch((failure) => setError(failure?.message || 'That request was not closed.'))
@@ -197,13 +242,21 @@ export default function IntakeListScreen() {
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pb-2">
             {sections.map((section) => (
               <div key={section.key} className={section.muted ? 'opacity-60' : ''}>
-                <p
+                <h3
                   className={`${MONO_LABEL} border-b border-rule bg-duplicate px-5 py-2 sm:px-6`}
                 >
                   {section.heading} · {section.rows.length}
-                </p>
+                </h3>
                 {section.rows.map((row) => (
-                  <IntakeRow key={row.id} row={row} isAdmin={isAdmin} onClose={close} />
+                  <IntakeRow
+                    key={row.id}
+                    row={row}
+                    isAdmin={isAdmin}
+                    confirming={confirmingId === row.id}
+                    onRequestClose={setConfirmingId}
+                    onConfirmClose={handleClose}
+                    onCancelClose={() => setConfirmingId('')}
+                  />
                 ))}
               </div>
             ))}

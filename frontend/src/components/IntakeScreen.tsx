@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { createIntake } from '../lib/api'
 import { useRole } from '../lib/role'
-import { ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
+import { ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL, WELL_TEXTAREA } from './tokens'
 
 /**
  * Recording what a client asked for, before anybody prices it.
@@ -105,7 +105,7 @@ export default function IntakeScreen() {
                   disabled={busy}
                   onChange={(event) => setScope(event.target.value)}
                   placeholder="A booking site for a dive shop in Cebu. Guests pick a date and pay a deposit online."
-                  className={`${WELL} pad-brief mt-2`}
+                  className={`${WELL_TEXTAREA} pad-brief mt-2`}
                 />
               </div>
 
