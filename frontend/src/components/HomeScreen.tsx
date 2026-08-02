@@ -17,9 +17,16 @@ import { DISPLAY } from './tokens'
  * "Being prepared" is the way in to the jobs page. It is the only figure here
  * because it is the only one that changes while you are looking at it - "on
  * file" said what the PAD Quotations card already said, one row above it.
+ *
+ * A pill above the grid decides which side is showing. For You is the grid
+ * above, exactly as it was; For Client is where a client's own request
+ * starts, and where it waits once sent. The count at the foot only ever reads
+ * the studio's own queue - a client's request does not have one yet.
  */
 
-const DESTINATIONS = [
+//: What the studio does for itself. The existing five, unchanged - Settings
+//: is still filtered out for anyone who is not an admin.
+const FOR_YOU = [
   {
     href: '#/pad',
     label: 'Create PAD',
@@ -80,8 +87,36 @@ const DESTINATIONS = [
   },
 ]
 
+//: What the studio does with a client in the room. Two for now; the client
+//: link and the sent-quotation queue join them when Stage 2 ships.
+const FOR_CLIENT = [
+  {
+    href: '#/intakes/new',
+    label: 'New client request',
+    detail: 'What they asked for, in their words',
+    icon: (
+      <>
+        <path d="M4 6.5h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
+        <path d="M4 7l8 6 8-6" />
+      </>
+    ),
+  },
+  {
+    href: '#/intakes',
+    label: 'Client requests',
+    detail: 'What is waiting on you',
+    icon: (
+      <>
+        <path d="M4.5 5.5h15M4.5 12h15M4.5 18.5h9" />
+      </>
+    ),
+  },
+]
+
 export default function HomeScreen() {
   const [running, setRunning] = useState<number | null>(null)
+  const [side, setSide] = useState<'you' | 'client'>('you')
+  const destinations = side === 'you' ? FOR_YOU : FOR_CLIENT
   // Settings belongs to whoever runs the workspace. A member is not shown a
   // door that opens onto a 403.
   const { isAdmin } = useRole()
@@ -122,11 +157,33 @@ export default function HomeScreen() {
           </p>
         </div>
 
+        <div className="mt-10 mb-6 flex justify-center">
+          <div className="pill" role="tablist" aria-label="Whose work">
+            {(
+              [
+                ['you', 'For You'],
+                ['client', 'For Client'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={side === id}
+                onClick={() => setSide(id)}
+                className={`pill__tab ${side === id ? 'pill__tab--on' : ''}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <nav
           aria-label="Where to go"
-          className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
+          className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
         >
-          {DESTINATIONS.filter((place) => isAdmin || place.href !== '#/settings').map(
+          {destinations.filter((place) => isAdmin || place.href !== '#/settings').map(
             (place) => (
             <a
               key={place.href}

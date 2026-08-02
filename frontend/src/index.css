@@ -366,6 +366,32 @@
     }
   }
 
+  /* A two-way switch, not a nav. Used where one screen answers the same
+     question for two different audiences. */
+  .pill {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-duplicate);
+    border: 1px solid var(--color-rule);
+  }
+
+  .pill__tab {
+    padding: 0.45rem 1.1rem;
+    border-radius: var(--radius-pill);
+    font-family: var(--font-label);
+    font-size: 13px;
+    color: var(--color-void);
+    transition: background-color 150ms var(--ease-press), color 150ms var(--ease-press);
+  }
+
+  .pill__tab--on {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    box-shadow: var(--shadow-sheet);
+  }
+
   /* ── Heading type ─────────────────────────────────────────────────────
      Figtree at 600 with tight tracking. Not uppercase: the kit sets
      its headings in sentence case and saves capitals for the small labels. */
