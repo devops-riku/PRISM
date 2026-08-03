@@ -16,7 +16,17 @@ read, because the alternative is a quotation priced from a document PRISM never
 saw.
 
 Nothing here raises into a request. A file that cannot be read is reported on
-the quotation as a file that could not be read.
+the quotation as a file that could not be read. That rule got stronger, not
+weaker, when the person who sent the file stopped being a studio member: a
+client filling in a link is not in the room to be asked what they meant, so
+every refusal below has to arrive on the quotation as a sentence somebody can
+act on.
+
+A `.docx` and an `.xlsx` are zip archives, and the two libraries that read them
+will decompress whatever they are handed. `MAX_UNPACKED_BYTES` is the bound
+that stops a quarter of a megabyte on the wire from becoming two hundred off
+it; see its own comment for why summing what the archive declares is a real
+bound and not a courtesy.
 """
 
 from __future__ import annotations
@@ -24,11 +34,19 @@ from __future__ import annotations
 import io
 import logging
 import re
+import zipfile
 from typing import NamedTuple
 
 logger = logging.getLogger("prism.attachments")
 
-__all__ = ["Attachment", "read", "SUFFIXES", "MAX_CHARS", "describe_for_prompt"]
+__all__ = [
+    "Attachment",
+    "read",
+    "SUFFIXES",
+    "MAX_CHARS",
+    "MAX_UNPACKED_BYTES",
+    "describe_for_prompt",
+]
 
 #: What a document may contribute. Generous enough for a forty-page tender and
 #: small enough that ten of them cannot push the actual brief out of the model's
@@ -37,6 +55,29 @@ MAX_CHARS = 24_000
 
 #: The whole set, across every attachment on one submission.
 MAX_TOTAL_CHARS = 60_000
+
+#: What a zipped document may unpack to, added up across every entry in it.
+#:
+#: `_from_docx` and `_from_xlsx` hand caller-supplied bytes straight to a zip
+#: reader, and a zip reader with no bound on its output is the oldest trick
+#: there is against a file parser: a few hundred kilobytes of deflated zeroes
+#: expand to hundreds of megabytes, and nothing in either library stops at any
+#: particular size. That was survivable while every file here came from a
+#: signed-in studio member uploading their own tender pack. It is not
+#: survivable now that a client holding a link can send one.
+#:
+#: An order of magnitude above the largest file this app accepts on the wire
+#: (`config.MAX_DOCUMENT_BYTES`, twelve megabytes): generous enough for a
+#: forty-page tender whose XML deflates ten to one, and far short of the
+#: gigabytes a deliberate archive reaches. Nothing refused by this bound could
+#: have survived `MAX_CHARS` anyway - a spreadsheet with a hundred megabytes of
+#: cells in it contributes the same first 24,000 characters whether it is read
+#: or not.
+MAX_UNPACKED_BYTES = 128 * 1024 * 1024
+
+#: The kinds whose reader is a zip reader, and so the kinds the bound applies
+#: to. A PDF and a text file are read straight through and cannot expand.
+_ZIPPED_KINDS = frozenset({"docx", "xlsx"})
 
 #: What the picker accepts. Keyed by suffix rather than by mime type: browsers
 #: disagree about the mime for .docx and .xlsx, and the suffix is what the
@@ -85,6 +126,34 @@ def _from_pdf(data: bytes) -> str:
         except Exception:  # noqa: BLE001 - one bad page must not lose the rest
             continue
     return "\n\n".join(pages)
+
+
+def _unpacked_size(data: bytes) -> int:
+    """What an archive says it unpacks to, or -1 when it is not an archive.
+
+    Read from the central directory alone - `infolist()` parses metadata and
+    opens no entry - so this costs nothing on a real document and refuses a
+    bomb before a single byte of it has been decompressed.
+
+    Those declared sizes are worth trusting as an *upper* bound even though the
+    caller wrote them, which is the part worth spelling out. `zipfile` truncates
+    every entry's read at the size that entry declared (`ZipExtFile._read1` does
+    `data = data[:self._left]`), so an archive that understates itself does not
+    get to expand past what it claimed - it runs out of declared room and fails
+    its CRC instead. Understating is therefore not a way around this bound;
+    overstating is exactly what it refuses. Both readers here are built on
+    `zipfile`, so both inherit that.
+
+    A file that is not an archive at all returns -1 rather than raising, and is
+    deliberately let through to the reader below. Its problem is that it is
+    broken, not that it is large, and it should keep the message it has always
+    had rather than be told something untrue about its size.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            return sum(entry.file_size for entry in archive.infolist())
+    except Exception:  # noqa: BLE001 - not an archive, or one nothing can index
+        return -1
 
 
 def _from_docx(data: bytes) -> str:
@@ -140,6 +209,21 @@ def read(name: str, data: bytes) -> Attachment:
 
     if not kind:
         return Attachment(filename, "", "", f"{filename} is not a file type PRISM can read.")
+
+    if kind in _ZIPPED_KINDS:
+        # Ahead of the reader, not inside it: the whole point is that neither
+        # `docx.Document` nor `openpyxl.load_workbook` is ever handed the
+        # archive. See `MAX_UNPACKED_BYTES` and `_unpacked_size`.
+        unpacked = _unpacked_size(data)
+        if unpacked > MAX_UNPACKED_BYTES:
+            logger.warning("Refused %s: it declares %d bytes unpacked", filename, unpacked)
+            return Attachment(
+                filename,
+                kind,
+                "",
+                f"{filename} unpacks to {unpacked:,} bytes, far more than PRISM will "
+                "open. Nothing from it reached the quotation.",
+            )
 
     try:
         text = _tidy(READERS[kind](data))

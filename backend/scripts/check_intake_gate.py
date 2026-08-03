@@ -18,12 +18,22 @@ resolves against the roster at write time, so the workspace here claims an
 admin before any of that runs, and the check reads that admin's own inbox
 rather than trusting that the write merely didn't crash.
 
+The section at the bottom of this file is about the other gate this file is
+named for - `_gate`, the HTTP middleware - and specifically about the body cap
+it puts on the client's three anonymous write routes. Its declared-length half
+is covered in `check_client_api.py`, beside the rest of that door; the half
+here is the one that had no cover at all, where the caller declares no length
+because they sent the body chunked. See that section's own comment for why the
+assertions there are driven at the ASGI layer rather than through `TestClient`.
+
     cd backend
     .venv/Scripts/python.exe scripts/check_intake_gate.py
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -43,7 +53,7 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import inbox, intakes, jobs, main, members, workspaces  # noqa: E402
+from app import config, inbox, intakes, jobs, main, members, workspaces  # noqa: E402
 from app.gemini_service import GeminiConfigError, GeminiResponseError  # noqa: E402
 from app.schemas import Estimate  # noqa: E402
 
@@ -432,6 +442,334 @@ odd = client.post(
     data={"brief": "Unknown intake.", "intake_id": "0" * 12},
 )
 ok("an unknown intake_id does not fail the request", odd.status_code == 202)
+
+# =============================================================================
+# `_gate`'s body cap, on the half of it that a `Content-Length` header does not
+# describe
+# =============================================================================
+#
+# `_gate` refuses an oversized *declared* body before a byte of it is read, and
+# `check_client_api.py` proves that. What it could not prove, and what this
+# section exists for, is the case where there is nothing to declare: a caller
+# sending `Transfer-Encoding: chunked` omits `Content-Length` entirely, the
+# declared-length clause becomes a no-op, `_gate` falls through, and Starlette
+# buffers and parses the whole body before the handler runs. It needs no valid
+# token to do it - `tokens.resolve` is never reached - so a bogus one works,
+# and the eventual 404 is paid for after the damage.
+#
+# Driven at the ASGI layer rather than through `TestClient`, because the claim
+# is about *when* the refusal happens and `TestClient` cannot express it:
+# httpx's `Request.read()` joins an iterator body into one `bytes` before the
+# transport ever sees it (Starlette's own generator branch in
+# `testclient.py` is marked `pragma: no cover` for exactly that reason), so
+# every `TestClient` request arrives as a single `http.request` message no
+# matter how it was written. Calling `main.app(scope, receive, send)` directly
+# is the only way in this repo to hand a body over in pieces and count how many
+# of them were actually taken. Both instruments are used below - the ASGI one
+# for the byte count, `TestClient` for the ordinary surface a real client hits.
+
+_HOST_HEADER = (b"host", b"testserver")
+
+
+def drive(
+    path: str,
+    *,
+    client_ip: str,
+    headers: list[tuple[bytes, bytes]],
+    body_bytes: int = 0,
+    payload: bytes | None = None,
+    chunk_bytes: int = 64 * 1024,
+) -> tuple[int, int]:
+    """One POST straight at the ASGI app. Returns `(status, bytes_handed_over)`.
+
+    `receive` yields the body a chunk at a time and counts what it gave away,
+    so "was this refused before the body was read" is a number rather than an
+    argument. Nothing here fabricates a response: the status is whatever the
+    real app - every middleware, `_gate` included - actually sent.
+
+    `body_bytes` invents filler of that size, which is all an oversized body
+    needs to be. `payload` sends exact bytes instead, for the cases that have to
+    reach a handler and be understood by it rather than merely be large.
+    """
+    if payload is not None:
+        body_bytes = len(payload)
+    handed = {"count": 0}
+    answered: dict[str, object] = {}
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [_HOST_HEADER] + headers,
+        "client": (client_ip, 443),
+        "server": ("testserver", 80),
+        "state": {},
+    }
+
+    async def receive() -> dict:
+        if handed["count"] >= body_bytes:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        end = min(handed["count"] + chunk_bytes, body_bytes)
+        piece = payload[handed["count"] : end] if payload is not None else b"x" * (end - handed["count"])
+        handed["count"] = end
+        return {"type": "http.request", "body": piece, "more_body": handed["count"] < body_bytes}
+
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.start":
+            answered["status"] = message["status"]
+
+    asyncio.run(main.app(scope, receive, send))
+    return int(answered.get("status", 0)), handed["count"]
+
+
+JSON_HEADERS = [(b"content-type", b"application/json"), (b"transfer-encoding", b"chunked")]
+JSON_CAP = main._MAX_CLIENT_BODY_BYTES  # noqa: SLF001
+BOGUS = "/api/client/not-a-real-token-at-all/submit"
+
+# Twenty times the cap, offered a chunk at a time. A gate that only reads
+# `Content-Length` takes every byte of it.
+chunked_status, chunked_handed = drive(
+    BOGUS, client_ip="203.0.113.71", body_bytes=JSON_CAP * 20, headers=JSON_HEADERS
+)
+ok(
+    "a chunked body past the cap is refused with 413, not answered after it has "
+    "already been buffered and parsed",
+    chunked_status == 413,
+)
+ok(
+    "and refused before the body was fully read - the caller was stopped near the "
+    f"cap, not at the end of what it offered ({chunked_handed:,} of "
+    f"{JSON_CAP * 20:,} bytes taken)",
+    chunked_handed < JSON_CAP * 20,
+)
+ok(
+    "and stopped within one chunk of the cap, not merely somewhere short of the end",
+    chunked_handed <= JSON_CAP + 64 * 1024,
+)
+
+# The cheap path, measured the same way: a declared oversized length is refused
+# with the body untouched. `check_client_api.py` asserts the 413; this asserts
+# the "before a byte of it is read" half of the same claim.
+declared_status, declared_handed = drive(
+    BOGUS,
+    client_ip="203.0.113.72",
+    body_bytes=JSON_CAP * 20,
+    headers=[(b"content-type", b"application/json"), (b"content-length", str(JSON_CAP * 20).encode())],
+)
+ok(
+    "a declared oversized length is still refused with 413 - the cheap path is "
+    "unchanged",
+    declared_status == 413,
+)
+ok(
+    "and not one byte of that body was ever handed over",
+    declared_handed == 0,
+)
+
+# A chunked body comfortably inside the cap is not swept up by any of this. Real
+# JSON rather than filler, and handed over in sixteen-byte pieces: this has to
+# reach the handler and be *understood* there, which is the same consume-and-
+# replay claim the end-to-end section below makes, asserted here at the layer
+# where the pieces are visible.
+under_payload = json.dumps({"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"}).encode()
+under_status, under_handed = drive(
+    BOGUS, client_ip="203.0.113.73", payload=under_payload, chunk_bytes=16, headers=JSON_HEADERS
+)
+ok(
+    "a chunked body inside the cap is judged on its merits - a bogus token gets "
+    "this door's usual 404, not a 413 and not a 422 for a body nobody could read",
+    under_status == 404,
+)
+ok("and all of it was read, because all of it was allowed", under_handed == len(under_payload))
+
+# --- The larger cap, and only for multipart ---------------------------------
+#
+# A JSON submit and a file upload cannot share one number: the four text fields
+# are bounded by `_MAX_CLIENT_BODY_BYTES` and a document is three orders of
+# magnitude past that. The route is still JSON-only today - Task 3 is what makes
+# `/submit` multipart - so the assertion a multipart body inside the larger cap
+# can carry is "not refused by the *cap*", which is exactly the claim being
+# made. What it gets instead is whatever the JSON-only handler makes of it.
+
+ok(
+    "config names a total-upload cap of its own, separate from the studio's",
+    hasattr(config, "MAX_CLIENT_UPLOAD_TOTAL_BYTES"),
+)
+
+if hasattr(config, "MAX_CLIENT_UPLOAD_TOTAL_BYTES"):
+    MULTIPART_HEADERS = [
+        (b"content-type", b"multipart/form-data; boundary=----PRISMcheckboundary"),
+        (b"transfer-encoding", b"chunked"),
+    ]
+    UPLOAD_CAP = config.MAX_CLIENT_UPLOAD_TOTAL_BYTES
+
+    ok(
+        "and it is meaningfully larger than the JSON cap - a document does not fit "
+        "in the room four text fields need",
+        UPLOAD_CAP > JSON_CAP * 10,
+    )
+
+    big_multipart_status, _ = drive(
+        BOGUS,
+        client_ip="203.0.113.74",
+        body_bytes=JSON_CAP * 4,
+        headers=MULTIPART_HEADERS,
+    )
+    ok(
+        "a multipart body several times the JSON cap is not refused by the cap - "
+        "the limit is chosen from the content type, not applied blind",
+        big_multipart_status != 413,
+    )
+
+    over_multipart_status, over_multipart_handed = drive(
+        BOGUS,
+        client_ip="203.0.113.75",
+        body_bytes=UPLOAD_CAP + JSON_CAP + 2 * 1024 * 1024,
+        headers=MULTIPART_HEADERS,
+    )
+    ok(
+        "but a multipart body past the larger cap is refused too - the larger cap "
+        "is a cap, not an exemption",
+        over_multipart_status == 413,
+    )
+    ok(
+        "and that one was also stopped early rather than buffered whole",
+        over_multipart_handed < UPLOAD_CAP + JSON_CAP + 2 * 1024 * 1024,
+    )
+
+    # A JSON body of the same size gets the smaller number - proof the two are
+    # actually distinguished rather than the larger one quietly winning for
+    # everybody.
+    json_at_multipart_size_status, _ = drive(
+        BOGUS, client_ip="203.0.113.76", body_bytes=JSON_CAP * 4, headers=JSON_HEADERS
+    )
+    ok(
+        "the same body declared as JSON is refused - the wider allowance belongs to "
+        "multipart alone",
+        json_at_multipart_size_status == 413,
+    )
+
+    # And to `/submit` alone. `/revise` takes a sentence and `/finalize` takes
+    # nothing at all; neither will ever carry a file, so declaring a multipart
+    # content type on one of them must not buy a hundredfold more room than the
+    # route could possibly use.
+    for other_route in ("revise", "finalize"):
+        other_status, _ = drive(
+            f"/api/client/not-a-real-token-at-all/{other_route}",
+            client_ip=f"203.0.113.{77 + len(other_route)}",
+            body_bytes=JSON_CAP * 4,
+            headers=MULTIPART_HEADERS,
+        )
+        ok(
+            f"a multipart body past the JSON cap on /{other_route} is still refused - "
+            "the wider allowance is the upload route's, not the content type's",
+            other_status == 413,
+        )
+
+# --- The regression that matters: a real submit still works ------------------
+#
+# Refusing an undeclared oversized body means engaging with the request stream,
+# and whatever `_gate` consumes has to reach the handler afterwards. This is
+# the thing most likely to break silently, so it is proven end to end and both
+# ways: with a `Content-Length` (the ordinary browser case) and without one (a
+# chunked body small enough to be legal, which is the path that actually has to
+# be consumed and replayed).
+
+workspaces.use(made.id)
+declared_submit = intakes.create(
+    client_email="",
+    client_phone="",
+    scope="",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+declared_response = client.post(
+    f"/api/client/{declared_submit.token}/submit",
+    json={
+        "client_email": "buyer@client.com",
+        "client_phone": "+63 917 000 0000",
+        "scope": "An ordinary submission, with a length the client declared.",
+        "budget_text": "around 300k",
+    },
+)
+ok("an ordinary JSON submit still answers 200", declared_response.status_code == 200)
+declared_stored = intakes.get(declared_submit.id)
+ok(
+    "and every word of it reached disk intact - the body survived the gate",
+    declared_stored.state == intakes.SUBMITTED
+    and declared_stored.client_email == "buyer@client.com"
+    and declared_stored.client_phone == "+63 917 000 0000"
+    and declared_stored.scope == "An ordinary submission, with a length the client declared."
+    and declared_stored.budget_text == "around 300k",
+)
+
+workspaces.use(made.id)
+chunked_submit = intakes.create(
+    client_email="",
+    client_phone="",
+    scope="",
+    budget_text="",
+    preset={},
+    created_by="riku@neptune.ph",
+)
+
+
+def _in_pieces(payload: bytes, size: int = 16):
+    """A body httpx cannot measure, so it sends it without a `Content-Length`."""
+    for start in range(0, len(payload), size):
+        yield payload[start : start + size]
+
+
+chunked_payload = json.dumps(
+    {
+        "client_email": "chunked@client.com",
+        "client_phone": "",
+        "scope": "A submission sent chunked, small enough to be perfectly legal.",
+        "budget_text": "under 100k",
+    }
+).encode("utf-8")
+
+chunked_response = client.post(
+    f"/api/client/{chunked_submit.token}/submit",
+    content=_in_pieces(chunked_payload),
+    headers={"Content-Type": "application/json"},
+)
+ok(
+    "the chunked submit really did travel without a declared length - otherwise "
+    "the cheap path would have judged it and this would prove nothing",
+    "content-length" not in chunked_response.request.headers
+    and chunked_response.request.headers.get("transfer-encoding") == "chunked",
+)
+ok("a legal chunked JSON submit still answers 200", chunked_response.status_code == 200)
+chunked_stored = intakes.get(chunked_submit.id)
+ok(
+    "and its words reached disk too - what the gate consumed was replayed to the "
+    "handler, not swallowed",
+    chunked_stored.state == intakes.SUBMITTED
+    and chunked_stored.client_email == "chunked@client.com"
+    and chunked_stored.scope == "A submission sent chunked, small enough to be perfectly legal."
+    and chunked_stored.budget_text == "under 100k",
+)
+
+# The same body sent chunked and oversized, through the ordinary client rather
+# than the ASGI driver - the surface a real caller actually reaches.
+oversized_chunked = client.post(
+    "/api/client/not-a-real-token-at-all/submit",
+    content=_in_pieces(b"x" * (JSON_CAP + 50_000), size=8192),
+    headers={"Content-Type": "application/json"},
+)
+ok(
+    "and an oversized chunked body through the ordinary client is 413, not the 404 "
+    "a bogus token would otherwise earn after the body had already been read",
+    oversized_chunked.status_code == 413,
+)
 
 print()
 print(f"{len(FAILURES)} FAILED" if FAILURES else "all pass")

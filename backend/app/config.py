@@ -149,6 +149,21 @@ MAX_IMAGE_BYTES: int = _env_int("MAX_IMAGE_BYTES", 8 * 1024 * 1024)
 #: exists to stop a pasted database from reaching the model.
 MAX_BRIEF_CHARS: int = _env_int("MAX_BRIEF_CHARS", 20_000)
 
+#: Everything a client may attach to one intake, added together. Deliberately
+#: its own name rather than a second use of `MAX_DOCUMENT_BYTES` above: those
+#: are the studio's own limits on the studio's own uploads, and a studio
+#: raising one for itself must not thereby raise it for a stranger holding a
+#: link. Read by `_gate` (app/main.py) today, where it sizes the body cap on
+#: an anonymous multipart write and so bounds what arrives on the wire; the
+#: `/submit` handler reads it again once that route accepts files, to bound the
+#: files themselves once they have been parsed out. Two different things
+#: measured against one number, deliberately: a caller must not be able to get
+#: past the second by arranging the first. Twenty megabytes is a scope in Word,
+#: a spreadsheet and a few photographs of a site; it is not a video.
+MAX_CLIENT_UPLOAD_TOTAL_BYTES: int = _env_int(
+    "MAX_CLIENT_UPLOAD_TOTAL_BYTES", 20 * 1024 * 1024
+)
+
 #: Mime types the Gemini vision path handles reliably. Anything else that still
 #: claims `image/*` is passed through - this list drives the error message only.
 SUPPORTED_IMAGE_TYPES: tuple[str, ...] = (

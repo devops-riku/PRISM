@@ -40,6 +40,11 @@ from pydantic import BaseModel, Field
 # Starlette base accepts whichever one the running FastAPI hands back.
 from starlette.datastructures import UploadFile as BaseUploadFile
 
+# Raised out of `request.stream()` when the caller hangs up mid-body. `_gate`
+# reads the stream itself now, so it is the first thing in this app that can
+# see one.
+from starlette.requests import ClientDisconnect
+
 from app import (
     attachments as attachments_module,
     auth,
@@ -289,32 +294,108 @@ async def _gate(request, call_next):
     if request.method == "POST" and path.startswith("/api/client/"):
         write_route = path.rsplit("/", 1)[-1]
         if write_route in _CLIENT_WRITE_ROUTES:
+            # How much this particular write is allowed to weigh, chosen from
+            # the route and the content type together - see
+            # `_client_body_limit` below for why a JSON submit and a file
+            # upload cannot share one number, and why both conditions matter.
+            body_limit = _client_body_limit(request, write_route)
+
             # `Content-Length` is what every JSON client this app actually
             # talks to sends (`fetch`, `axios`, `httpx`, this test suite's
-            # own `TestClient`) for a body this small - and it is the
-            # cheapest possible refusal for an oversized one: rejected
-            # before a single byte of the body is read, not after it has
-            # already been buffered and hits a validator deep inside a
-            # Pydantic model. It is not proof of anything, honestly stated:
-            # a caller can lie about it, or use chunked transfer-encoding to
-            # omit it entirely, and nothing here bounds a body it cannot see
-            # the declared length of - a header that is absent or not a
-            # plain integer is let through undetermined rather than
-            # rejected. Streaming-body enforcement that catches a lying or
-            # chunked caller too would need to wrap the ASGI `receive`
-            # callable itself, which is a larger change than this fix; the
-            # honest backstop for that case in a real deployment is a
-            # reverse proxy (nginx, Cloudflare, ...) in front of this
-            # process, which is where body-size limits normally belong.
+            # own `TestClient`) for a body this small, and it is the cheapest
+            # possible refusal for an oversized one: rejected before a single
+            # byte of the body is read, not after it has already been
+            # buffered and hits a validator deep inside a Pydantic model.
+            # Kept for exactly that reason. What it is not is *proof* - a
+            # caller can omit it by sending the body chunked, or declare a
+            # small one and send a large one anyway, since HTTP framing takes
+            # `Transfer-Encoding` over `Content-Length` when both are present
+            # and the header then describes nothing. So this clause is the
+            # fast path and never the bound; the bound is the read below,
+            # which runs whatever this header said.
             declared_length = request.headers.get("content-length", "")
-            if declared_length.isdigit() and int(declared_length) > _MAX_CLIENT_BODY_BYTES:
-                return JSONResponse(
-                    status_code=413, content={"detail": "That request is too large."}
-                )
+            if declared_length.isdigit() and int(declared_length) > body_limit:
+                return JSONResponse(status_code=413, content={"detail": _TOO_LARGE})
+
             try:
                 _enforce_rate_limit(request, write_route)
             except HTTPException as exc:
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+            # The bound that actually holds, and the reason this middleware
+            # touches the request stream at all.
+            #
+            # Without this, a caller sending `Transfer-Encoding: chunked`
+            # skipped the cap entirely: the clause above became a no-op,
+            # `_gate` fell through, and Starlette buffered and parsed the
+            # whole body before the handler ran - so the eventual 404 for a
+            # bogus token was paid for after the damage. Measured against a
+            # real uvicorn rather than theorised: a security review streamed
+            # 200 MiB into one request, fully buffered, and four concurrent
+            # 150 MiB posts took the process from 116 MiB resident to
+            # 1,249 MiB. It needs no valid token to do any of it, because
+            # `tokens.resolve` is never reached.
+            #
+            # **Consume and replay**, of the three ways to close that. The
+            # body is read here in chunks, counted, and refused the moment
+            # the running total passes the limit - so an oversized caller is
+            # stopped within one chunk of the cap rather than at the end of
+            # whatever they felt like sending. What is read is then handed to
+            # the handler by assigning `request._body`: this middleware is a
+            # `BaseHTTPMiddleware`, and Starlette's `_CachedRequest` exists
+            # precisely for this - its `wrapped_receive` replays a cached
+            # `_body` to everything downstream, so `await request.body()`
+            # inside FastAPI still sees every byte. That is a supported path,
+            # not a reach past a private name for want of a public one.
+            #
+            # The two alternatives, and why not. Refusing *without*
+            # consuming is not available: nothing can know a body is too
+            # large without reading enough of it to tell. A pure-ASGI
+            # wrapper around `receive` would let the multipart parser spool
+            # to disk as it goes instead of holding the body here, which is
+            # genuinely better for memory - but it has to signal the refusal
+            # by raising through FastAPI's own body parsing and Starlette's
+            # `ExceptionMiddleware`, and it would move the client's controls
+            # out of this function, which is the one place they are all
+            # readable together. Worth revisiting if the upload cap ever
+            # grows; at these sizes it is not worth the seams.
+            #
+            # State the cost plainly, because there is one, and it is not
+            # zero. On the path that is *not* refused this holds the body for
+            # the length of the request, and FastAPI then makes a second copy
+            # of it: `wrapped_receive` hands the cached bytes downstream as a
+            # single message, and `Request.body()` joins that with the
+            # trailing empty chunk `Request.stream()` always yields - a
+            # two-element join, which allocates rather than handing back the
+            # object it was given. So a legal client write costs roughly
+            # twice its own size resident where it used to cost once.
+            # Accepted knowingly: at 200,000 bytes that is nothing, at the
+            # upload cap it is tens of megabytes, and the thing being traded
+            # away is a path where an *illegal* write cost whatever the
+            # caller felt like sending. The improvement is not that nothing
+            # is buffered. It is that what is buffered is finally bounded by
+            # a number this file chose rather than by one the caller did.
+            #
+            # Ordered after the rate limit deliberately: a caller already
+            # over their budget is refused without this process buffering
+            # anything at all for them.
+            consumed = 0
+            pieces: List[bytes] = []
+            try:
+                async for piece in request.stream():
+                    consumed += len(piece)
+                    if consumed > body_limit:
+                        return JSONResponse(status_code=413, content={"detail": _TOO_LARGE})
+                    pieces.append(piece)
+            except ClientDisconnect:
+                # The caller hung up mid-body. Answered plainly rather than
+                # allowed to propagate: nobody is listening for this
+                # response, but letting it escape would file a server error
+                # in the log for something that is not one.
+                return JSONResponse(
+                    status_code=400, content={"detail": "That request ended before it was sent."}
+                )
+            request._body = b"".join(pieces)  # noqa: SLF001 - see the comment above
 
     # Reading an invitation is open, because the token in the link is the
     # secret: somebody deciding whether to make an account should be able to see
@@ -2913,6 +2994,52 @@ _CLIENT_WRITE_ROUTES = {"submit", "revise", "finalize"}
 #: leaves wide margin for that without coming close to admitting a
 #: deliberately oversized body.
 _MAX_CLIENT_BODY_BYTES = 200_000
+
+#: What both halves of that cap answer with - the declared-length refusal and
+#: the streamed one. One sentence, no number in it: a caller who is being told
+#: their body is too large has no business being told exactly where the line
+#: is, and a client who hit it by accident is helped by the form's own copy
+#: rather than by this.
+_TOO_LARGE = "That request is too large."
+
+
+def _client_body_limit(request: Request, route: str) -> int:
+    """How many bytes this client write may weigh on the wire.
+
+    A JSON submit and a file upload cannot share one number. `/submit` carries
+    four text fields today and `_MAX_CLIENT_BODY_BYTES` is sized for exactly
+    that; the same route carrying a scope in Word and a photograph of a site is
+    three orders of magnitude past it. So the wider allowance is granted on two
+    conditions together, not one: the content type is `multipart/form-data`,
+    *and* the route is `/submit`. `/revise` and `/finalize` will never carry a
+    file - one takes a sentence and the other takes nothing at all - and a
+    caller who simply declares a multipart content type on either of them must
+    not thereby buy a hundredfold more room than the route could ever use.
+
+    The wide allowance is the two numbers added rather than a third constant,
+    because a multipart submit is literally the two things added: the same four
+    fields a JSON submit sends, plus the files, plus a boundary line and a
+    couple of headers per part. `config.MAX_CLIENT_UPLOAD_TOTAL_BYTES` is what
+    the files themselves are allowed to be, and the handler checks them against
+    it again once `/submit` accepts files - so the slack left here for the
+    envelope buys a caller nothing except the right to be refused later by a
+    message that names the real reason. Until then this is the only place that
+    number is enforced, and it is enforced on the wire, which is the half that
+    had to exist first.
+
+    Matched on the type alone, with the parameters cut off first: the boundary
+    is a `; boundary=...` parameter on every real multipart request, and a
+    naive `==` against the whole header would take the wider allowance away
+    from every browser on earth while leaving it available to anyone who sent
+    the bare type by hand.
+    """
+    if route != "submit":
+        return _MAX_CLIENT_BODY_BYTES
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type == "multipart/form-data":
+        return config.MAX_CLIENT_UPLOAD_TOTAL_BYTES + _MAX_CLIENT_BODY_BYTES
+    return _MAX_CLIENT_BODY_BYTES
+
 
 #: Per-IP, per-route courtesy limiter for the three routes above. What this is
 #: **not**: a defence against a determined or distributed attacker. It is a

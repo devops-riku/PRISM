@@ -63,17 +63,17 @@
 
 This task ships **before** any upload route exists, because both defects it closes get materially worse the moment one does. Neither is hypothetical: the first was measured at 200 MiB buffered on a single request against a bogus token, the second is reachable by any `.docx` an anonymous caller sends.
 
-- [ ] **Step 1: Write the failing check — a chunked body is refused.** `_gate` currently reads `content-length` and does nothing when the header is absent, so `Transfer-Encoding: chunked` skips the cap entirely and Starlette buffers the whole body before the handler runs. Assert that a chunked POST to `/api/client/<bogus>/submit` carrying more than the cap is refused **before** the body is fully read.
+- [x] **Step 1: Write the failing check — a chunked body is refused.** `_gate` currently reads `content-length` and does nothing when the header is absent, so `Transfer-Encoding: chunked` skips the cap entirely and Starlette buffers the whole body before the handler runs. Assert that a chunked POST to `/api/client/<bogus>/submit` carrying more than the cap is refused **before** the body is fully read.
 
-- [ ] **Step 2: Make it pass.** The declared-length check stays — it is the cheap path and it already works. Add the undeclared case: read the body in bounded chunks and refuse at the limit. `request.stream()` is the hook; the handler must still be able to read the body afterwards, so whatever is consumed has to be replayed or the refusal has to happen without consuming. Say in a comment which you chose and why.
+- [x] **Step 2: Make it pass.** The declared-length check stays — it is the cheap path and it already works. Add the undeclared case: read the body in bounded chunks and refuse at the limit. `request.stream()` is the hook; the handler must still be able to read the body afterwards, so whatever is consumed has to be replayed or the refusal has to happen without consuming. Say in a comment which you chose and why.
 
-- [ ] **Step 3: Raise the cap for multipart, and only for multipart.** A JSON submit and a 20 MB upload cannot share one number. Gate on `content-type`: `multipart/form-data` gets `MAX_CLIENT_UPLOAD_TOTAL_BYTES`, everything else keeps the existing JSON cap.
+- [x] **Step 3: Raise the cap for multipart, and only for multipart.** A JSON submit and a 20 MB upload cannot share one number. Gate on `content-type`: `multipart/form-data` gets `MAX_CLIENT_UPLOAD_TOTAL_BYTES`, everything else keeps the existing JSON cap.
 
-- [ ] **Step 4: Write the failing check — a zip bomb is refused.** `attachments.py` hands client bytes straight to `docx.Document()` and `openpyxl.load_workbook()`; both are zip readers with no decompression bound, so a 1 MB upload can expand to gigabytes. Build a small zip whose uncompressed size is far past any sane document and assert it is refused rather than read.
+- [x] **Step 4: Write the failing check — a zip bomb is refused.** `attachments.py` hands client bytes straight to `docx.Document()` and `openpyxl.load_workbook()`; both are zip readers with no decompression bound, so a 1 MB upload can expand to gigabytes. Build a small zip whose uncompressed size is far past any sane document and assert it is refused rather than read.
 
-- [ ] **Step 5: Make it pass.** Before opening a `.docx`/`.xlsx`, inspect `zipfile.ZipFile(...).infolist()` and sum `file_size`; refuse past a bound. Report it the way this module reports everything — an `Attachment` carrying the reason, not an exception.
+- [x] **Step 5: Make it pass.** Before opening a `.docx`/`.xlsx`, inspect `zipfile.ZipFile(...).infolist()` and sum `file_size`; refuse past a bound. Report it the way this module reports everything — an `Attachment` carrying the reason, not an exception.
 
-- [ ] **Step 6: Run both scripts and `smoke.py`, then commit**
+- [x] **Step 6: Run both scripts and `smoke.py`, then commit**
 
 ---
 
