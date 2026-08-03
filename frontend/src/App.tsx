@@ -454,6 +454,22 @@ export default function App() {
   const shouldScroll = useRef(false)
   // The quotation the address bar is currently pointing at.
   const shownId = useRef('')
+  // Which `restore()` load is outstanding, as a number rather than an id, and
+  // 0 when none is. `shownId` alone cannot be mistaken for evidence that the
+  // bundle it names was ever actually received; this is what tells the two
+  // apart.
+  //
+  // A counter and not the id, and the difference is the whole correctness
+  // argument. Two successive loads of the *same* quotation - which is exactly
+  // what a StrictMode teardown produces - carry the same id, so an id-keyed
+  // flag lets the first load's `finally`, arriving late and already discarded,
+  // clear the flag belonging to the second load that is still in flight. The
+  // next teardown then reads "nothing outstanding", leaves `shownId` set, and
+  // the instance after it early-returns without fetching: the original hang,
+  // one remount further along. A monotonic token is unique per load, so a
+  // stale load can only ever clear its own.
+  const loadSeq = useRef(0)
+  const inFlightLoad = useRef(0)
   // Where the reader is right now, readable from inside a job callback that was
   // created a minute and a half ago. A finished job must not drag someone off
   // the page they walked to while it ran.
@@ -476,6 +492,11 @@ export default function App() {
       if (!match || match[1] === shownId.current) return
       shownId.current = match[1]
 
+      // Which load is in flight, so the cleanup below can tell "this instance
+      // already has the bundle" apart from "this instance asked and never got
+      // an answer it was allowed to keep". Both look identical in `shownId`.
+      const load = ++loadSeq.current
+      inFlightLoad.current = load
       setRestoring(true)
       Promise.resolve()
         .then(() => fetchBundle(shownId.current))
@@ -493,6 +514,13 @@ export default function App() {
           setError(describeError(failure))
         })
         .finally(() => {
+          // Cleared whether or not this instance is still live: it records
+          // that *this* load finished, and the cleanup reads it to decide
+          // whether the ref above is describing a bundle on screen or one
+          // nobody ever received. Guarded on this load's own token, so a
+          // discarded load resolving late cannot retire a newer one that is
+          // still in flight for the same quotation.
+          if (inFlightLoad.current === load) inFlightLoad.current = 0
           if (live) setRestoring(false)
         })
     }
@@ -508,6 +536,29 @@ export default function App() {
     return () => {
       live = false
       window.removeEventListener('hashchange', followRoute)
+      // `shownId` is a ref and outlives this instance; `live` is a closure
+      // variable and does not. That mismatch is a hang, not a nicety.
+      //
+      // A load still in flight here is about to be discarded by the `live`
+      // guards above - including the one on `setRestoring(false)`. But the
+      // ref still holds the id that load was for, so the next instance's
+      // `restore()` sees `match[1] === shownId.current`, decides the
+      // quotation is already on screen, and returns without fetching. The
+      // discarded load never clears `restoring`, the skipped load never sets
+      // it, and the page sits on "Retrieving quotation" for ever with a 200
+      // in the server log saying the bundle came back fine.
+      //
+      // React StrictMode does exactly this teardown on every mount in
+      // development, so it fires on any direct load of `#/q/<id>` - a
+      // reload, a pasted link, a restored tab. In-app navigation is
+      // unaffected, because that arrives by `hashchange` on an instance that
+      // is already live, which is why the path most used is the path that
+      // hid it.
+      //
+      // Clearing the ref is what re-arms the next instance: it re-fetches,
+      // which is a cheap idempotent GET, and every flag ends up describing
+      // the load that actually happened.
+      if (inFlightLoad.current) shownId.current = ''
     }
   }, [])
 
