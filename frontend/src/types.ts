@@ -991,6 +991,28 @@ export type ClientIssuedView = {
 }
 
 /**
+ * One file the client attached, as much of it as they are shown.
+ *
+ * Two fields, and the absences are the design. `clientview.of` builds this by
+ * hand from an `intakefiles.save()` entry, which also carries `id`, `kind` and
+ * `note` - none of which is here. No `id`, because an id is what would address
+ * the file, and there is no anonymous route that reads one back: a client who
+ * attached the wrong thing needs to know it arrived, which is a different need
+ * from being able to fetch it. No `note`, because that is
+ * `attachments.read`'s warning in the studio's own words - a sentence about how
+ * PRISM will price the job, not one for the person who sent the file.
+ *
+ * Adding a field here would be inventing one the wire does not carry. Adding a
+ * field *there* is a review of `clientview.of`'s own dict literal, which is
+ * exactly the gate that module exists to be.
+ */
+export type ClientAttachment = {
+  /** The client's own filename, verbatim - never the server's stored key. */
+  name: string
+  bytes: number
+}
+
+/**
  * One identical face for `submitted`, `preparing`, `quoted` and
  * `quote_failed` - `clientview._WAITING`. All four collapse to this single
  * shape, with `state` itself normalised to the literal `'waiting'` rather
@@ -1014,6 +1036,11 @@ export type ClientWaitingView = {
   /** The client's own address, masked to its first letter and domain. */
   email: string
   scope_length: number
+  /** What they attached, by name and size. Empty when they attached nothing,
+   *  which is the server's way of saying nothing rather than an absent key -
+   *  `clientview.of` always builds the list, even when `intake.attachments`
+   *  is empty. */
+  attachments: ClientAttachment[]
 }
 
 /**

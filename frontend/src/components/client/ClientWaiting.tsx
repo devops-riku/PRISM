@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { formatDate } from '../../lib/format'
+import { formatBytes, formatDate } from '../../lib/format'
 import { DISPLAY, MONO_LABEL } from '../tokens'
 import type { ClientWaitingView } from '../../types'
 
@@ -71,6 +71,37 @@ export default function ClientWaiting({ view }: { view: ClientWaitingView }) {
             {view.scope_length} character{view.scope_length === 1 ? '' : 's'}
           </dd>
         </div>
+        {/* Only when there are any. A row reading "What you sent — nothing" on
+            every intake without attachments would turn an optional field into
+            an omission, on the one screen whose whole job is reassurance.
+            Listed by name and size, which is the entire point: a client who
+            attached the wrong version of a document finds out here, and there
+            is nothing else on this page or behind it that would ever tell them
+            - `clientview.of` sends no id and no link, so the file cannot be
+            fetched back, only recognised. */}
+        {view.attachments.length > 0 ? (
+          <div className="flex items-baseline justify-between gap-4 py-2.5">
+            <dt className="shrink-0 text-void">
+              What you sent{view.attachments.length > 1 ? ` (${view.attachments.length})` : ''}
+            </dt>
+            {/* Every file, never a truncated "and 2 more". Six is the ceiling
+                (`config.MAX_CLIENT_FILES`), so the longest this can get is six
+                short rows, and a list that hides the one file the client is
+                worried about is worse than no list. */}
+            <dd className="min-w-0 text-ink">
+              <ul className="space-y-0.5 text-right">
+                {view.attachments.map((file, index) => (
+                  <li key={`${index}-${file.name}`} className="truncate">
+                    {file.name}{' '}
+                    <span className="font-label text-[12px] tabular-nums text-faint">
+                      {formatBytes(file.bytes)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       <p className="mt-6 font-body text-[13px] leading-[1.6] text-faint">

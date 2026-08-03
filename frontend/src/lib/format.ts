@@ -263,6 +263,39 @@ export function secondsSince(iso: string, now: number): number {
   return Math.max(0, Math.floor((now - started) / 1000))
 }
 
+/**
+ * A file size a person can read, in the units they would say it in.
+ *
+ *   formatBytes(0)         -> '0 KB'
+ *   formatBytes(900)       -> '1 KB'
+ *   formatBytes(412_000)   -> '402 KB'
+ *   formatBytes(6_500_000) -> '6.2 MB'
+ *
+ * Binary units, because that is what every cap this is shown beside is counted
+ * in - `config.MAX_CLIENT_FILE_BYTES` is 6 MiB, not 6,000,000 - and a file the
+ * server refuses as "over the 6 MB limit" must not have been printed as 6.1 MB
+ * by a formatter that divided by a thousand.
+ *
+ * Rounded up below a kilobyte rather than down, so a small file is never
+ * described as '0 KB'. Nothing here is ever handed a negative or a NaN in
+ * practice - every caller reads `File.size` or a manifest entry the server
+ * wrote as an int - but both are clamped anyway rather than printed.
+ *
+ * Lives here rather than in the one component that first needed it because two
+ * client-facing screens show the same sizes: the picker, before a file is sent,
+ * and the waiting face, after it arrived. A client comparing the two is
+ * entitled to see the same number twice.
+ */
+export function formatBytes(bytes: number): string {
+  const size = Number.isFinite(bytes) && bytes > 0 ? bytes : 0
+  // Zero is its own answer rather than the floor below: an empty file is a
+  // thing the server refuses by name, and rounding it up to '1 KB' would print
+  // a size that disagrees with the refusal.
+  if (size === 0) return '0 KB'
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
 // --- typed money fields ------------------------------------------------------
 
 /**

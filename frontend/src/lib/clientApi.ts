@@ -30,10 +30,37 @@ const API_ROOT = '/api/client'
 /** What every call takes: a way for the caller to give up on it. */
 type CallOptions = { signal?: AbortSignal }
 
-/** None of these calls run a Gemini pass - `/submit`, `/revise` and
+/** None of these calls run a Gemini pass - the read, `/revise` and
  * `/finalize` are plain, synchronous state writes on the server - so one
- * timeout covers reads and writes alike. */
+ * timeout covers all of them. Fifteen seconds is generous for a request whose
+ * body is a few hundred bytes and whose server-side work is a file write: past
+ * that, something is wrong rather than slow, and saying so beats a spinner
+ * that never resolves. */
 const REQUEST_TIMEOUT_MS = 15_000
+
+/**
+ * `/submit`, and `/submit` alone, because it is the one call on this door that
+ * carries files.
+ *
+ * The two numbers differ for a reason worth writing down rather than tuning by
+ * feel. An `AbortController` here bounds the *whole* request, not the gap
+ * between packets - there is no idle timeout in `fetch` - so a limit shorter
+ * than the transfer aborts a request that is making perfectly good progress,
+ * and the client is told "that took too long" about an upload that was three
+ * quarters done. The server's own ceiling is
+ * `config.MAX_CLIENT_UPLOAD_TOTAL_BYTES`, 20 MiB, so the question is how long
+ * 20 MiB legitimately takes *upstream*, which is the direction consumer
+ * connections are slowest in and the one nobody quotes: hotel wifi, a phone on
+ * a train, a fixed line sold as "100 Mbps down". At 1 Mbps up - not a
+ * pathological number, it is an ordinary bad afternoon - 20 MiB is about 170
+ * seconds. Fifteen would abort every one of them.
+ *
+ * Three minutes, then, which covers that case with a little room and still
+ * ends. It is deliberately not "no timeout": a request with no bound at all
+ * leaves the form spinning forever when a proxy silently drops the connection,
+ * which is the failure this constant exists to convert into a sentence.
+ */
+const UPLOAD_TIMEOUT_MS = 180_000
 
 /** Which way a call to this door failed. What a caller branches on. */
 export type ClientApiErrorKind = 'network' | 'http' | 'parse' | 'timeout' | 'aborted' | 'validation'
@@ -148,6 +175,10 @@ type RequestOptions = {
   body?: BodyInit
   signal?: AbortSignal
   headers?: Record<string, string>
+  /** How long this one call may take before it is abandoned. Defaults to
+   * `REQUEST_TIMEOUT_MS`; only `/submit` passes anything else, and
+   * `UPLOAD_TIMEOUT_MS`'s own comment is why. */
+  timeoutMs?: number
 }
 
 /**
@@ -161,7 +192,7 @@ async function request<T>(token: string, suffix: string, options: RequestOptions
     throw new ClientApiError('No link to read - the token is empty.', { kind: 'validation' })
   }
 
-  const { method = 'GET', body, signal, headers } = options
+  const { method = 'GET', body, signal, headers, timeoutMs = REQUEST_TIMEOUT_MS } = options
   const url = `${API_ROOT}/${encodeURIComponent(trimmedToken)}${suffix}`
 
   const controller = new AbortController()
@@ -169,7 +200,7 @@ async function request<T>(token: string, suffix: string, options: RequestOptions
   const timer = setTimeout(() => {
     timedOut = true
     controller.abort()
-  }, REQUEST_TIMEOUT_MS)
+  }, timeoutMs)
   const forwardAbort = () => controller.abort()
   if (signal) {
     if (signal.aborted) controller.abort()
@@ -255,18 +286,69 @@ export type ClientSubmitBody = {
   client_kind_label: string
 }
 
-/** The client's own words, written once. Legal only from `issued` - a
- * second call, or one from any later state, gets the same opaque refusal an
- * unknown token would. */
+/**
+ * What the client attached, already split the way the server's two file fields
+ * are named.
+ *
+ * The split is made at pick time by `ClientDropzone`, not here and not on the
+ * server: by the time a multipart body has been parsed, the order the person
+ * chose their files in is gone and only the field name survives. Which field a
+ * file arrives in is a *hint* the server does not trust - `_read_client_files`
+ * walks both lists as one and decides what each file is from its own declared
+ * type - so a picker that got the split wrong would be corrected rather than
+ * obeyed. It is still worth sending correctly: it is the same shape the
+ * studio's own upload routes use, so one picker's decision reads the same on
+ * both sides.
+ */
+export type ClientSubmitFiles = {
+  images: File[]
+  documents: File[]
+}
+
+/** The client's own words and their own files, written once. Legal only from
+ * `issued` - a second call, or one from any later state, gets the same opaque
+ * refusal an unknown token would.
+ *
+ * Multipart, not JSON, since the route grew file fields: every text field is a
+ * `Form(...)` on the server now, and a JSON body reaches it as a 422 with no
+ * field it recognises. Nothing sets `Content-Type` here on purpose - `fetch`
+ * derives it from the `FormData` body, including the boundary parameter that
+ * makes the body parseable at all, and a hand-written
+ * `multipart/form-data` header would arrive without one and take the whole
+ * submission down. The other two writes on this door stay JSON; they have
+ * nothing to attach.
+ */
 export async function submitClientIntake(
   token: string,
   body: ClientSubmitBody,
+  files: ClientSubmitFiles = { images: [], documents: [] },
   options: CallOptions = {},
 ): Promise<ClientIntakeView> {
+  const form = new FormData()
+  // Written out one key at a time rather than looped over `Object.entries`,
+  // for the reason `clientview.py` gives about its own dict literals: these
+  // names are a contract with six `Form(...)` parameters in `main.py`, and a
+  // loop would carry a seventh key there silently the day one is added to
+  // `ClientSubmitBody` for some other purpose.
+  form.append('client_email', body.client_email)
+  form.append('client_phone', body.client_phone)
+  form.append('scope', body.scope)
+  form.append('budget_text', body.budget_text)
+  form.append('client_kind', body.client_kind)
+  form.append('client_kind_label', body.client_kind_label)
+
+  // Repeated parts under one name, which is what `List[UploadFile]` reads. A
+  // client with nothing to attach appends nothing at all: the server's two
+  // fields default to `[]`, and an empty part with no filename is exactly the
+  // shape `submit_client_intake`'s loose typing exists to survive rather than
+  // something to go out of the way to send.
+  files.images.forEach((file) => form.append('images', file))
+  files.documents.forEach((file) => form.append('documents', file))
+
   return request<ClientIntakeView>(token, '/submit', {
     method: 'POST',
-    body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json' },
+    body: form,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
     signal: options.signal,
   })
 }

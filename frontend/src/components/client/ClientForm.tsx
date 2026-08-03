@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FieldLabel } from '../FieldRow'
 import ErrorNotice from '../ErrorNotice'
 import KindPicker from '../KindPicker'
+import ClientDropzone from './ClientDropzone'
 import { ACTION_PRIMARY, DISPLAY, MONO_LABEL, WELL, WELL_TEXTAREA } from '../tokens'
 import { ClientApiError, submitClientIntake } from '../../lib/clientApi'
-import type { ClientSubmitBody } from '../../lib/clientApi'
+import type { ClientSubmitBody, ClientSubmitFiles } from '../../lib/clientApi'
 import type { ClientIntakeView, ClientIssuedView, QuotationKind } from '../../types'
 
 /**
@@ -33,12 +34,25 @@ import type { ClientIntakeView, ClientIssuedView, QuotationKind } from '../../ty
  * and the server only strips and bounds it, so a shape check has to happen
  * here or nowhere.
  *
- * The submit button is never `disabled` on account of incomplete fields -
- * only while a request is actually in flight. A grey, unclickable button
- * with no reachable explanation is a dead end for a user who filled in two
- * of three fields and cannot tell which one is missing; this form instead
- * lets the click happen and answers it with a summary naming exactly what's
- * left, each entry wired to the field it names via `aria-describedby`.
+ * The submit button is never `disabled` - not for incomplete fields, and, since
+ * this form grew a file picker, not while a request is in flight either. A
+ * grey, unclickable button with no reachable explanation is a dead end for a
+ * user who filled in two of three fields and cannot tell which one is missing;
+ * this form instead lets the click happen and answers it with a summary naming
+ * exactly what's left, each entry wired to the field it names via
+ * `aria-describedby`.
+ *
+ * The in-flight half of that used to be a real `disabled`, and it was a defect
+ * rather than a nicety. Disabling the focused element removes it from the
+ * accessibility tree, and the browser drops focus to `<body>` - so a client on
+ * a screen reader pressed Send and landed nowhere, with nothing announced for
+ * the whole width of the request. That was survivable when the request was a
+ * few hundred bytes of JSON and lasted a moment. With up to 20 MiB of
+ * attachments behind it the window is now long enough to read as broken, so
+ * `pending` is carried by `aria-disabled` plus the `if (pending) return` guard
+ * in `handleSubmit`: the button stays focusable and stays the thing focus is
+ * on, and the live region below it says what is happening. Assistive tech is
+ * told the control is unavailable; nothing is told to throw focus away.
  */
 
 /** A shape check, not a deliverability one: local part, an `@`, a domain
@@ -105,6 +119,11 @@ export default function ClientForm({
   // a client whose work is a website answers nothing at all.
   const [kind, setKind] = useState<QuotationKind>('software')
   const [kindLabel, setKindLabel] = useState('')
+  // Already split into the server's two file fields by `ClientDropzone`, which
+  // is the only thing in the browser that decides what a file is. This
+  // component never inspects a `File`: it holds what the picker handed it and
+  // passes it on, so there is exactly one place the image/document rule lives.
+  const [files, setFiles] = useState<ClientSubmitFiles>({ images: [], documents: [] })
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<{ headline: string; next?: string } | null>(null)
   // Flips true on the first submit attempt that finds something missing, and
@@ -138,6 +157,12 @@ export default function ClientForm({
   else if (emailInvalid) missing.push('Email - that doesn’t look like a full address')
   if (scopeMissing) missing.push('Scope')
   if (budgetMissing) missing.push('Budget')
+
+  // Stable, so the picker's own `useCallback`s are not rebuilt on every
+  // keystroke in the three fields above it.
+  const handleFiles = useCallback((picked: ClientSubmitFiles) => setFiles(picked), [])
+
+  const attachedCount = files.images.length + files.documents.length
 
   const summaryRef = useRef<HTMLDivElement | null>(null)
   // The summary box only enters the DOM once `attempted` first flips true -
@@ -178,7 +203,7 @@ export default function ClientForm({
       client_kind_label: kind === 'other' ? trimmedKindLabel : '',
     }
 
-    submitClientIntake(token, body)
+    submitClientIntake(token, body, files)
       .then((next) => onUpdate(next))
       .catch((failure: unknown) => {
         const described = describeWriteFailure(failure)
@@ -364,6 +389,21 @@ export default function ClientForm({
           ) : null}
         </div>
 
+        {/* Last, and optional, which is why it is here rather than beside the
+            scope it belongs to conceptually: a client with nothing to attach
+            walks past it, and a client who has a brief on disk finds it at the
+            moment they have finished describing the work and are looking for
+            the Send button. Its own refusals render inside it, under the plate
+            - a file this door will not take never touches the four answers
+            above, which is the whole reason the picker owns that state instead
+            of raising it to this form. */}
+        <div>
+          <FieldLabel htmlFor="client-files">
+            Attachments <span className="normal-case tracking-normal text-faint">(optional)</span>
+          </FieldLabel>
+          <ClientDropzone id="client-files" onChange={handleFiles} disabled={pending} />
+        </div>
+
         {attempted && missing.length > 0 ? (
           // `role="status"` (polite), not `role="alert"` (implicitly
           // assertive) - this box stays mounted for as long as anything is
@@ -391,14 +431,48 @@ export default function ClientForm({
           <ErrorNotice headline={error.headline} next={error.next} onDismiss={() => setError(null)} />
         ) : null}
 
-        <button
-          type="submit"
-          disabled={pending}
-          aria-disabled={pending}
-          className={`${ACTION_PRIMARY} mt-1 w-full justify-center ${pending ? 'cursor-wait' : ''}`}
-        >
-          {pending ? 'Sending' : `Send to ${studio}`}
-        </button>
+        <div className="mt-1">
+          {/* No `disabled` - see this file's own docstring. `aria-disabled`
+              says the same thing to assistive tech without taking the element
+              out of the accessibility tree, `handleSubmit`'s `if (pending)
+              return` is what actually refuses the second press, and the
+              opacity is a plain utility rather than `.action-primary:disabled`,
+              which no longer matches. */}
+          <button
+            type="submit"
+            aria-disabled={pending}
+            className={`${ACTION_PRIMARY} w-full justify-center ${
+              pending ? 'cursor-wait opacity-70' : ''
+            }`}
+          >
+            {pending ? 'Sending' : `Send to ${studio}`}
+          </button>
+
+          {/* Mounted always, with text that changes - not mounted when the
+              upload starts. The distinction is the difference between a region
+              that announces and one that does not: this form already knows
+              that its validation summary "announces only because focus moves
+              to it," and there is no focus move to spare here, because the
+              whole point is that focus stays on the button. A live region that
+              is already in the document when its content changes is the case
+              every screen reader actually handles.
+
+              The margin is conditional rather than the element, so the empty
+              paragraph contributes no height on a screen this form is measured
+              to fit, while still being present in the DOM to be announced. */}
+          <p
+            role="status"
+            className={`font-body text-[13px] leading-[1.5] text-void ${pending ? 'mt-2.5' : ''}`}
+          >
+            {pending
+              ? attachedCount > 0
+                ? `Sending your answers and ${attachedCount} file${
+                    attachedCount === 1 ? '' : 's'
+                  } to ${studio}. Files can take a minute on a slow connection — this page will move on by itself.`
+                : `Sending your answers to ${studio}.`
+              : ''}
+          </p>
+        </div>
       </form>
     </div>
   )
