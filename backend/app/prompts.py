@@ -711,7 +711,7 @@ def build_brief(
     # into `brief` itself would.
     #
     # `currency`, `region`, `project_name` and `timeline_hint` have no such
-    # path today - `ClientSubmitRequest` (Task 4) and the pad's own auto-seed
+    # path today - `POST /api/client/{token}/submit` and the pad's own auto-seed
     # (`App.tsx`) between them account for exactly `scope`, `budget_text`,
     # `client_email` and `client_phone`, and none of those four reaches these
     # four fields. But `strip_sentinels` documents itself as applying

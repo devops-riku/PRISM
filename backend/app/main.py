@@ -28,7 +28,7 @@ import re
 import threading
 import time
 from collections import deque
-from typing import Callable, List, Union
+from typing import Callable, List, NamedTuple, Union
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi import WebSocketDisconnect
@@ -52,6 +52,7 @@ from app import (
     config,
     hub,
     inbox,
+    intakefiles,
     intakes,
     mailer,
     members,
@@ -3186,23 +3187,6 @@ def _client_advance(intake_id: str, to: str, **fields) -> intakes.Intake:
         raise _client_write_refused() from None
 
 
-class ClientSubmitRequest(BaseModel):
-    """What the client fills in once, from `issued`."""
-
-    client_email: str = ""
-    client_phone: str = ""
-    scope: str = ""
-    budget_text: str = ""
-    #: Which discipline the client says this is, and - for `other` alone -
-    #: their own word for it. Plain `str` rather than an enum for the same
-    #: reason `Intake.state` is: the closed set lives in `kinds.BY_ID` and is
-    #: enforced by `_normalise_client_kind` below, not by Pydantic on the way
-    #: in, so an unknown id is answered as the empty string rather than as a
-    #: 422 naming every kind this build happens to know.
-    client_kind: str = ""
-    client_kind_label: str = ""
-
-
 def _normalise_client_kind(raw: str) -> str:
     """One of `kinds.BY_ID`, or empty for anything else.
 
@@ -3230,6 +3214,312 @@ def _normalise_client_kind_label(raw: str) -> str:
     return _CONTROL_CHARS.sub("", raw or "").strip()[: kinds.MAX_LABEL]
 
 
+# --- What a stranger may attach, which is not what a studio may -------------
+#
+# `_read_images` and `_read_documents`, above, are the studio's own readers and
+# this route deliberately does not call them. Three reasons, and none of them is
+# a preference:
+#
+#   * `_read_images` hands back `(bytes, mime)` and drops the filename on the
+#     floor. A manifest entry is `{id, name, kind, bytes, note}` and the name is
+#     the only thing in it a studio can recognise the file by.
+#   * `_read_documents` hands back an `Attachment` - name, kind, extracted text
+#     - and drops the *bytes*. There is nothing left to store.
+#   * `MAX_CLIENT_FILES` is one number across both fields. Neither reader can
+#     see the other's list, so a cap that spans them cannot be enforced from
+#     inside either, and splitting six files into three and three would buy a
+#     caller twelve.
+#
+# What is reused is every idiom they established, because those were right and
+# were arrived at the hard way: the loose `List[Union[UploadFile, str]]` typing
+# (see `_read_images`' docstring for the two shapes of "no file was chosen" that
+# reach a handler), the `BaseUploadFile` filter, refusing on the declared size
+# before allocating anything, then reading one byte past the limit so an
+# understated size cannot get past it either, and closing every upload in a
+# `finally`.
+
+
+class _ClientFile(NamedTuple):
+    """One file a client attached, as far as this door is concerned: what they
+    called it, what PRISM decided it is, and the bytes that arrived."""
+
+    name: str
+    #: The canonical content type from `intakefiles._resolve_type` - never the
+    #: raw `Content-Type` the browser sent, and never a bare extension.
+    kind: str
+    data: bytes
+
+
+#: Every content type a client's own file may be stored as. Derived from
+#: `intakefiles.CONTENT_TYPES` rather than written out again beside it: that
+#: table is what the store knows how to keep, hand back and label, and a second
+#: copy here would be a thing to forget. `application/octet-stream` is
+#: subtracted because it is not a type - it is `intakefiles`' word for "no
+#: idea", the answer `_resolve_type` gives when neither the declared type nor
+#: the extension said anything it recognised. A file arriving as "no idea" is
+#: precisely what an anonymous door should not be storing, so on this path the
+#: fallback *is* the refusal.
+#:
+#: The raster half of the set is `intakefiles.INLINE_TYPES`, imported rather
+#: than restated for the same reason, and it is the closed allowlist the plan
+#: requires: `_read_images` admits anything matching `image/`, which includes
+#: `image/svg+xml`, and an SVG is a script document that the studio will later
+#: open. The gate is on the **declared** type and structurally cannot be on a
+#: resolved-from-filename one, because `_resolve_type` refuses to let a suffix
+#: resolve into `INLINE_TYPES` at all - see its docstring. So a file only ever
+#: reaches the raster set by being declared one of them, and `_looks_like`
+#: below is what decides whether the declaration was true.
+_CLIENT_TYPES = frozenset(intakefiles.CONTENT_TYPES) - {intakefiles.FALLBACK_TYPE}
+
+#: What each of those types actually begins with: a tuple of `(offset,
+#: alternatives)` pairs, all of which must match.
+#:
+#: This is the check that refuses an `.exe` renamed `.pdf`, and it is here
+#: rather than left to `attachments.py` on purpose. Both the filename and the
+#: `Content-Type` on a multipart part are chosen by whoever is uploading -
+#: neither is evidence of anything - so without this, the only thing standing
+#: between a client and a Windows executable stored as `application/pdf` is that
+#: the studio has to double-click it. `attachments.read` would notice the file
+#: was unopenable, but it reports rather than refuses (its module docstring is
+#: explicit, and that rule is right for a studio's own tender pack), and reading
+#: its answer back out of a message string is exactly the string-matching
+#: `_client_advance` was careful not to do.
+#:
+#: Deliberately container markers only - the thing that says "this is a PNG at
+#: all", not a survey of encoders. It is a door check, not a validator: what it
+#: has to stop is a file whose bytes are a different *kind of thing* from what
+#: it claims, and anything subtler than that is the reader's problem downstream
+#: where it is already handled.
+#:
+#: The three text types are absent, and that is the whole rule for them: plain
+#: text, CSV and Markdown have no signature to check, so there is nothing here
+#: that could be true or false about them. What that lets through is an
+#: executable renamed `.txt`, which is a file that downloads as `.txt`, opens in
+#: a text editor and runs nowhere - the case this table exists for is the one
+#: where the extension makes it double-clickable.
+_SIGNATURES: dict[str, tuple[tuple[int, tuple[bytes, ...]], ...]] = {
+    "image/png": ((0, (b"\x89PNG\r\n\x1a\n",)),),
+    "image/jpeg": ((0, (b"\xff\xd8\xff",)),),
+    "image/gif": ((0, (b"GIF87a", b"GIF89a")),),
+    # RIFF container, with the form type four bytes after the length.
+    "image/webp": ((0, (b"RIFF",)), (8, (b"WEBP",))),
+    # ISO base media, whose box header puts `ftyp` at offset 4. The brand that
+    # follows (`heic`, `heix`, `mif1`) is not checked: the brands are a moving
+    # list and the container is the part that decides what the file is.
+    "image/heic": ((4, (b"ftyp",)),),
+    "application/pdf": ((0, (b"%PDF-",)),),
+    # A `.docx`/`.xlsx` is a zip, and a real one always begins with a local file
+    # header. The empty-archive and spanned-archive markers are not accepted:
+    # neither could carry a document, and `attachments.py`'s own bound is what
+    # deals with an archive that is real but hostile.
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (
+        (0, (b"PK\x03\x04",)),
+    ),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ((0, (b"PK\x03\x04",)),),
+    "application/vnd.ms-excel.sheet.macroEnabled.12": ((0, (b"PK\x03\x04",)),),
+}
+
+
+def _looks_like(kind: str, data: bytes) -> bool:
+    """Whether these bytes begin the way this content type has to.
+
+    A type with no entry in `_SIGNATURES` has no signature to disagree with and
+    is let through - see that table's own comment for which types those are and
+    why that is the right answer for them rather than an omission.
+    """
+    for offset, markers in _SIGNATURES.get(kind, ()):
+        if not any(data[offset : offset + len(marker)] == marker for marker in markers):
+            return False
+    return True
+
+
+def _suffix_of(name: str) -> str:
+    return ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+
+
+#: What a file this route will not take is answered with. It names the file,
+#: because a client with four attachments needs to know which one to remove, and
+#: it names what would be taken instead rather than only what would not - the
+#: person reading it is filling in a form, not debugging a mime type.
+_WRONG_KIND = (
+    "'{name}' is not a file PRISM can take. Attach a PDF, a Word document, a "
+    "spreadsheet, a CSV or a text file - or a photo or screenshot as PNG, JPEG, "
+    "WebP, GIF or HEIC."
+)
+
+
+async def _read_client_files(
+    images: List[Union[UploadFile, str]] | None,
+    documents: List[Union[UploadFile, str]] | None,
+) -> List[_ClientFile]:
+    """Everything a client attached, validated, or the 400 that says why not.
+
+    Both fields are walked as one list. Which input a file arrived in is a hint
+    from a picker this server did not write and cannot trust - what decides how
+    a file is treated is what it resolves to, and the caps are counted across
+    the pair because a cap counted per field is two caps.
+
+    Unlike `_read_documents`, this refuses rather than reports. That is not a
+    contradiction of `attachments.py`'s rule and the difference is worth being
+    precise about: an unreadable file is still *reported* here, on the manifest
+    entry's `note`, exactly as that module requires. What is refused is a file
+    of a kind this route will not store at all - which is a decision about the
+    door, made while there is still a person standing at it to be told.
+    """
+    # Images before documents, matching this route's own signature and
+    # `create_proposal`'s reading order. It has to be *some* order and it cannot
+    # be the client's: a browser sends one interleaved sequence of parts and
+    # FastAPI has already split it into two lists by the time a handler sees it,
+    # so the order somebody picked their files in is gone before this line.
+    candidates = [
+        upload
+        for field in (images, documents)
+        for upload in (field or [])
+        if isinstance(upload, BaseUploadFile) and (upload.filename or "").strip()
+    ]
+    if not candidates:
+        return []
+
+    if len(candidates) > config.MAX_CLIENT_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{len(candidates)} files attached. You can send up to "
+                f"{config.MAX_CLIENT_FILES} - remove the rest and submit again."
+            ),
+        )
+
+    files: List[_ClientFile] = []
+    total = 0
+    limit_mb = config.MAX_CLIENT_FILE_BYTES / (1024 * 1024)
+    total_mb = config.MAX_CLIENT_UPLOAD_TOTAL_BYTES / (1024 * 1024)
+
+    for upload in candidates:
+        name = (upload.filename or "attachment").strip()
+        declared = (upload.content_type or "").split(";")[0].strip().lower()
+        # The store's own resolution, not a second copy of it: the declared type
+        # wins when PRISM knows it, the extension is consulted only when it said
+        # nothing, and an extension can never resolve into the raster allowlist.
+        # Reached through the module's private name knowingly - it is the one
+        # function that decides what a file is, and a route deciding it
+        # differently is how a file gets stored under one type and served under
+        # another.
+        kind, _stored_as = intakefiles._resolve_type(declared, name)  # noqa: SLF001
+
+        # Two refusals with one message, because they are one thing to the person
+        # reading it: PRISM does not take that. The second clause is the
+        # document-with-no-usable-extension case - `attachments.read` keys its
+        # reader off the suffix, so a scope called `scope` with no extension at
+        # all would be stored as a PDF and extracted as nothing, and the note on
+        # its manifest entry would contradict its own `kind`.
+        if kind not in _CLIENT_TYPES or (
+            kind not in intakefiles.INLINE_TYPES
+            and _suffix_of(name) not in attachments_module.SUFFIXES
+        ):
+            await upload.close()
+            raise HTTPException(status_code=400, detail=_WRONG_KIND.format(name=name))
+
+        # Refused on what the part declares before anything is allocated for it,
+        # exactly as `_read_images` does and for the reason its own comment
+        # gives.
+        declared_size = getattr(upload, "size", None)
+        if declared_size is not None and declared_size > config.MAX_CLIENT_FILE_BYTES:
+            await upload.close()
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{name}' is {declared_size / (1024 * 1024):.1f} MB. The limit is "
+                    f"{limit_mb:.0f} MB per file."
+                ),
+            )
+
+        try:
+            # One byte past the limit is all the check below needs, and a part
+            # that understated its own size does not get past it either.
+            data = await upload.read(config.MAX_CLIENT_FILE_BYTES + 1)
+        except Exception as exc:  # noqa: BLE001 - whatever the spool did, the client hears one thing
+            logger.warning("Could not read the client's upload %s: %s", name, exc)
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{name}' could not be read. Attach it again and submit.",
+            ) from exc
+        finally:
+            await upload.close()
+
+        if not data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{name}' is empty. Attach it again and submit.",
+            )
+        if len(data) > config.MAX_CLIENT_FILE_BYTES:
+            # The read stopped one byte over, so the real size is not known here
+            # - say so rather than quote the cut-off as if it were a measurement.
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{name}' is larger than the {limit_mb:.0f} MB limit per file.",
+            )
+
+        # The aggregate, measured on what actually arrived. `_gate` already
+        # bounded the *body* against this same number, and this is deliberately
+        # not a duplicate of that check: the body is the envelope and this is
+        # what is inside it, so a caller cannot get past the second by arranging
+        # the first. See `config.MAX_CLIENT_UPLOAD_TOTAL_BYTES`'s own comment.
+        total += len(data)
+        if total > config.MAX_CLIENT_UPLOAD_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Those files come to more than {total_mb:.0f} MB together. Send fewer, "
+                    "or smaller ones."
+                ),
+            )
+
+        if not _looks_like(kind, data):
+            raise HTTPException(status_code=400, detail=_WRONG_KIND.format(name=name))
+
+        files.append(_ClientFile(name, kind, data))
+
+    return files
+
+
+def _store_client_files(intake_id: str, files: List[_ClientFile]) -> List[dict]:
+    """Extract, save, manifest - in that order, and all of it off the loop.
+
+    Every line of this is blocking, which is why it is a plain `def` called
+    through `asyncio.to_thread` (the idiom this file already uses for
+    `mailer.send_invite`) rather than inlined into an `async def`.
+    `attachments.read` opens a PDF or unpacks a zip, which is CPU-bound and can
+    be seconds on a large one; `intakefiles.save` is a network round trip per
+    file once Spaces is configured, and six files is six of them. Held on the
+    event loop that would park every other request this worker has, including
+    another client's `/submit`.
+
+    One hop for the whole batch rather than one per file: the borrow is a
+    `ContextVar` and `to_thread` runs the call in a copy of the current context,
+    so the workspace this was borrowed under is what the thread saves into.
+
+    Raises `intakefiles.IntakeFileError` - the caller turns it into a 500,
+    because a client whose file did not reach the bucket has had their
+    submission lost, not refused.
+    """
+    manifest: List[dict] = []
+    for entry in files:
+        # The extraction warning, and only for the kinds there is one for.
+        # `attachments.read` keys on the suffix and would answer "not a file
+        # type PRISM can read" for a photograph, which is true and useless: an
+        # image reaches the model as an image, and nothing was ever going to
+        # read text out of it.
+        note = (
+            ""
+            if entry.kind in intakefiles.INLINE_TYPES
+            else attachments_module.read(entry.name, entry.data).problem
+        )
+        manifest.append(
+            intakefiles.save(intake_id, entry.name, entry.data, entry.kind, note=note)
+        )
+    return manifest
+
+
 class ClientReviseRequest(BaseModel):
     """What the client asked to change, in their own words."""
 
@@ -3237,58 +3527,162 @@ class ClientReviseRequest(BaseModel):
 
 
 @app.post("/api/client/{token}/submit", response_model=None, tags=["client"])
-async def submit_client_intake(token: str, body: ClientSubmitRequest) -> dict:
-    """The client's own words, written once, from `issued` alone.
+async def submit_client_intake(
+    token: str,
+    client_email: str = Form(""),
+    client_phone: str = Form(""),
+    scope: str = Form(""),
+    budget_text: str = Form(""),
+    #: Which discipline the client says this is, and - for `other` alone -
+    #: their own word for it. Plain `str` for the same reason `Intake.state`
+    #: is: the closed set lives in `kinds.BY_ID` and is enforced by
+    #: `_normalise_client_kind`, not on the way in, so an unknown id is
+    #: answered as the empty string rather than as a 422 naming every kind
+    #: this build happens to know.
+    client_kind: str = Form(""),
+    client_kind_label: str = Form(""),
+    #: Typed as loosely as the studio's own upload routes, and for the reason
+    #: `_read_images`' docstring gives: a browser posts an empty file input as
+    #: a part with no filename, and a strict `List[UploadFile]` makes FastAPI
+    #: refuse the whole request with an unreadable 422 before any handler runs
+    #: - which on this route would be a client with nothing attached being told
+    #: their form is malformed.
+    images: List[Union[UploadFile, str]] = File(default=[]),
+    documents: List[Union[UploadFile, str]] = File(default=[]),
+) -> dict:
+    """The client's own words and their own files, written once, from `issued`.
 
-    There is no studio identity behind this call - just whoever is holding
-    the link - so `intakes.advance`'s transition table is the entire abuse
-    control: a second call, from `submitted` or anywhere past it, is refused
-    exactly as a call against a token that never resolved is. All four fields
-    are bounded: `_normalise_scope`/`_normalise_budget_text` are the same the
+    Multipart rather than JSON since Task 3: the four fields are `Form`, and the
+    two file lists are the studio's own field names so one picker's split - what
+    goes to the model as an image, what goes as text - reads the same on both
+    sides. Which of the two a file arrived in is only a hint, though; see
+    `_read_client_files`.
+
+    There is no studio identity behind this call - just whoever is holding the
+    link - so `intakes.advance`'s transition table is the entire abuse control:
+    a second call, from `submitted` or anywhere past it, is refused exactly as a
+    call against a token that never resolved is. All four text fields are
+    bounded: `_normalise_scope`/`_normalise_budget_text` are the same the
     studio's own `/api/intakes` route uses, and `_normalise_client_email`/
-    `_normalise_client_phone` apply the identical idiom to the two fields
-    that used to get only a bare `.strip()` - see their own docstrings.
+    `_normalise_client_phone` apply the identical idiom to the two fields that
+    used to get only a bare `.strip()` - see their own docstrings.
 
-    No `Request` parameter, and no `_enforce_rate_limit` call here - unlike
-    the first cut of this route. `_gate` (main.py, well above this point)
-    now makes that check itself, ahead of routing, so it runs before FastAPI
-    reads or parses this request's body at all rather than after. See the
-    comment on that clause for why a check placed here, inside the handler,
-    can never be truly first.
+    No `Request` parameter, and no `_enforce_rate_limit` call here - unlike the
+    first cut of this route. `_gate` (main.py, well above this point) now makes
+    that check itself, ahead of routing, so it runs before FastAPI reads or
+    parses this request's body at all rather than after. See the comment on that
+    clause for why a check placed here, inside the handler, can never be truly
+    first.
     """
     found = tokens.resolve(token)
     if found is None:
         raise _client_write_refused()
 
-    client_email = _normalise_client_email(body.client_email)
-    client_phone = _normalise_client_phone(body.client_phone)
-    scope = _normalise_scope(body.scope)
-    budget_text = _normalise_budget_text(body.budget_text)
-    client_kind = _normalise_client_kind(body.client_kind)
+    # The words first, and the files after. Deliberately in that order: an
+    # over-length scope is refused by a string comparison, and doing it before a
+    # single byte is copied out of the multipart spool means the commonest
+    # refusal costs nothing and - the part that matters - cannot leave anything
+    # behind in storage.
+    said_email = _normalise_client_email(client_email)
+    said_phone = _normalise_client_phone(client_phone)
+    said_scope = _normalise_scope(scope)
+    said_budget = _normalise_budget_text(budget_text)
+    said_kind = _normalise_client_kind(client_kind)
     # Read for `other` alone, exactly as `prompts.kind_block` reads it: every
     # other kind carries its own name already, so a label sent alongside one
     # of them is a word nothing will ever use, and storing it would put a
     # discipline on the record that the studio would reasonably believe was
     # chosen. Dropped rather than stored-and-ignored.
-    client_kind_label = (
-        _normalise_client_kind_label(body.client_kind_label)
-        if client_kind == kinds.OTHER.id
-        else ""
+    said_label = (
+        _normalise_client_kind_label(client_kind_label) if said_kind == kinds.OTHER.id else ""
     )
 
     workspace_id, intake_id = found
     borrowed = workspaces.borrow(workspace_id)
     try:
-        moved = _client_advance(
-            intake_id,
-            intakes.SUBMITTED,
-            client_email=client_email,
-            client_phone=client_phone,
-            scope=scope,
-            budget_text=budget_text,
-            client_kind=client_kind,
-            client_kind_label=client_kind_label,
-        )
+        files = await _read_client_files(images, documents)
+        manifest: List[dict] = []
+
+        if files:
+            # An orphan filter, and explicitly **not** a second authority on
+            # whether this write may happen. `_client_advance`'s own docstring
+            # says why a duplicated state check is a bad idea and it still
+            # holds: `intakes.advance` makes that decision atomically under its
+            # own lock, this does not, and the refusal below is
+            # `_client_write_refused()` - the identical opaque 404 - precisely
+            # so no caller can tell which of the two answered.
+            #
+            # What it buys is the thing storage made new. Bytes are written
+            # before the record can be moved (see below for why that order and
+            # not the other), so a submit that was always going to be refused -
+            # a used link, a closed intake, a second click - would otherwise put
+            # up to six files in a bucket with nothing on any record pointing at
+            # them, on an anonymous route, as often as the rate limit allows.
+            # Reading the state first turns the overwhelming majority of that
+            # into no write at all. The residual is a genuine race - two submits
+            # that both read `issued` - which is rare, bounded to one loser's
+            # files, and logged.
+            entry = intakes.get(intake_id)
+            if entry is None or entry.state != intakes.ISSUED:
+                raise _client_write_refused()
+
+            try:
+                manifest = await asyncio.to_thread(_store_client_files, intake_id, files)
+            except intakefiles.IntakeFileError as exc:
+                # Not this door's opaque 404. Their submission was lost, not
+                # refused, and the two must not read the same - the same
+                # distinction `_client_advance` draws for a failed `_write`.
+                #
+                # A batch that failed halfway leaves whatever landed before it
+                # did, and those are orphans too. They are not re-listed here
+                # because `intakefiles.save` logs every file it stores, by id
+                # and by intake, so the log already has them - and this
+                # function never learns their ids, since the exception is what
+                # came back instead of the manifest.
+                logger.exception("Could not store a client's files for intake %s", intake_id)
+                raise HTTPException(
+                    status_code=500,
+                    detail="That could not be saved. Wait a moment and try again.",
+                ) from exc
+
+        try:
+            moved = _client_advance(
+                intake_id,
+                intakes.SUBMITTED,
+                client_email=said_email,
+                client_phone=said_phone,
+                scope=said_scope,
+                budget_text=said_budget,
+                client_kind=said_kind,
+                client_kind_label=said_label,
+                attachments=manifest,
+            )
+        except HTTPException:
+            # Save, then advance - and this is the failure that ordering leaves.
+            # The other order is worse: a manifest written first would point at
+            # files that then failed to arrive, on a record that can never be
+            # re-submitted, and the client would be told everything went fine.
+            # An orphan is bytes nobody is looking at; the alternative is a
+            # record that lies.
+            #
+            # Nothing is deleted here, and that is deliberate rather than
+            # unfinished. `intakefiles.forget()` is the only removal the store
+            # offers and it deletes the intake's **whole prefix** - so calling
+            # it on the path that actually reaches this line, which is
+            # overwhelmingly "somebody else already submitted", would delete the
+            # legitimate submission's files. Cleaning up would need a per-file
+            # delete that Task 2's interface does not have; until it does, the
+            # ids are logged so a bucket audit has something to match against.
+            if manifest:
+                logger.error(
+                    "Orphaned %d stored file(s) for intake %s - the submission was refused "
+                    "after they were saved: %s",
+                    len(manifest),
+                    intake_id,
+                    ", ".join(entry["id"] for entry in manifest),
+                )
+            raise
+
         # `submitted` is one of `clientview.of`'s waiting states, which needs
         # no bundle - passing none is correct, exactly as it is for `issued`.
         return clientview.of(moved)

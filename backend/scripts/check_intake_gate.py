@@ -39,6 +39,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intake-gate-")
@@ -680,6 +681,12 @@ if hasattr(config, "MAX_CLIENT_UPLOAD_TOTAL_BYTES"):
 # ways: with a `Content-Length` (the ordinary browser case) and without one (a
 # chunked body small enough to be legal, which is the path that actually has to
 # be consumed and replayed).
+#
+# Form-encoded rather than JSON since Stage 2 Task 3, which made `/submit` take
+# `Form` fields so it could carry files. The property under test is unchanged
+# and so is the shape of the test: a body with a declared length and a body
+# without one, both of which have to arrive at the handler word for word. The
+# encoding is only what the route parses.
 
 workspaces.use(made.id)
 declared_submit = intakes.create(
@@ -692,14 +699,14 @@ declared_submit = intakes.create(
 )
 declared_response = client.post(
     f"/api/client/{declared_submit.token}/submit",
-    json={
+    data={
         "client_email": "buyer@client.com",
         "client_phone": "+63 917 000 0000",
         "scope": "An ordinary submission, with a length the client declared.",
         "budget_text": "around 300k",
     },
 )
-ok("an ordinary JSON submit still answers 200", declared_response.status_code == 200)
+ok("an ordinary submit with a declared length still answers 200", declared_response.status_code == 200)
 declared_stored = intakes.get(declared_submit.id)
 ok(
     "and every word of it reached disk intact - the body survived the gate",
@@ -727,7 +734,7 @@ def _in_pieces(payload: bytes, size: int = 16):
         yield payload[start : start + size]
 
 
-chunked_payload = json.dumps(
+chunked_payload = urlencode(
     {
         "client_email": "chunked@client.com",
         "client_phone": "",
@@ -739,7 +746,7 @@ chunked_payload = json.dumps(
 chunked_response = client.post(
     f"/api/client/{chunked_submit.token}/submit",
     content=_in_pieces(chunked_payload),
-    headers={"Content-Type": "application/json"},
+    headers={"Content-Type": "application/x-www-form-urlencoded"},
 )
 ok(
     "the chunked submit really did travel without a declared length - otherwise "
@@ -747,7 +754,7 @@ ok(
     "content-length" not in chunked_response.request.headers
     and chunked_response.request.headers.get("transfer-encoding") == "chunked",
 )
-ok("a legal chunked JSON submit still answers 200", chunked_response.status_code == 200)
+ok("a legal chunked submit still answers 200", chunked_response.status_code == 200)
 chunked_stored = intakes.get(chunked_submit.id)
 ok(
     "and its words reached disk too - what the gate consumed was replayed to the "

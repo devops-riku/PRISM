@@ -709,7 +709,21 @@ def _cv_forbidden_present(term: str, haystack: str) -> bool:
 # because its substring sweep was written against `intake.error`'s contents
 # and never against `state` itself.
 
-CV_WAITING_KEYS = {"state", "studio_name", "sent_at", "email", "scope_length"}
+CV_WAITING_KEYS = {"state", "studio_name", "sent_at", "email", "scope_length", "attachments"}
+
+#: A manifest entry in the shape `intakefiles.save()` actually returns, poisoned
+#: in the two fields the waiting face must not forward. The client is shown what
+#: they attached so they can tell they sent the wrong file; the id is how the
+#: file is *addressed*, which is a different thing and belongs to the studio's
+#: own authed route, and the note is `attachments.read`'s warning written in the
+#: studio's terms about how the job will be priced.
+CV_ATTACHMENT = {
+    "id": "abcdef123456",
+    "name": "scope of work.pdf",
+    "kind": "application/pdf",
+    "bytes": 20_481,
+    "note": "NOTELEAK - nothing from it reached the quotation.",
+}
 
 
 def _reference_masked(email: str) -> str:
@@ -736,6 +750,7 @@ for cv_state in (intakes.SUBMITTED, intakes.PREPARING, intakes.QUOTED, intakes.Q
         scope="x" * 137,
         budget_text="BUDGETLEAK-777k",
         error="Gemini answered with no usable JSON." if cv_state == intakes.QUOTE_FAILED else "",
+        attachments=[CV_ATTACHMENT],
     )
     CV_WAITING_VIEWS.append(clientview.of(cv_waiting))
 
@@ -760,8 +775,22 @@ ok(
     cv_waiting_view["email"] == _reference_masked("waiting@client.com"),
 )
 ok("waiting: scope_length matches what they wrote", cv_waiting_view["scope_length"] == 137)
+ok(
+    "waiting: what they attached, by name and size and nothing else",
+    cv_waiting_view["attachments"] == [{"name": "scope of work.pdf", "bytes": 20_481}],
+)
 
 cv_waiting_dumped = json.dumps(cv_waiting_view)
+ok(
+    "waiting: never the file id - the client is told their file arrived, not "
+    "handed the thing that addresses it",
+    CV_ATTACHMENT["id"] not in cv_waiting_dumped,
+)
+ok(
+    "waiting: never the extraction note, which is written to the studio about "
+    "how the job will be priced",
+    "NOTELEAK" not in cv_waiting_dumped,
+)
 ok(
     "waiting: never the budget",
     "BUDGETLEAK" not in cv_waiting_dumped and "budget" not in cv_waiting_dumped.lower(),

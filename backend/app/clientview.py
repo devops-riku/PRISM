@@ -111,12 +111,35 @@ def of(intake: Intake, bundle: Optional[ProposalBundle] = None) -> dict:
         # normalised to `_WAITING_LABEL` for exactly that reason, not left as
         # `intake.state`, so `preparing` and `quote_failed` produce the exact
         # same bytes as `submitted` and `quoted`, not merely the same shape.
+        #
+        # And what they attached, by name and size. A client who sent the
+        # wrong file needs to know it arrived, which is a different need
+        # from being able to fetch it back - so the id is not here, and
+        # neither is anything else that addresses the file. There is no
+        # anonymous read route for a client's own attachment and this
+        # projection is what keeps it that way structurally: with no id on
+        # the wire, one could not be built without adding a field to this
+        # literal, which is a review.
+        #
+        # Built by hand from the two keys, not filtered out of the entry -
+        # the same rule as `payment_schedule` and `revisions` below. An
+        # entry is `intakefiles.save()`'s dict and it carries `kind` and
+        # `note` as well; `note` is `attachments.read`'s warning in the
+        # studio's own words ("nothing from it reached the quotation"),
+        # which is a sentence about how PRISM will price the job, not one
+        # for the person who sent the file.
+        attached = [
+            {"name": str(entry.get("name", "")), "bytes": int(entry.get("bytes", 0) or 0)}
+            for entry in intake.attachments
+        ]
+
         return {
             "state": _WAITING_LABEL,
             "studio_name": settings.load().studio_name,
             "sent_at": intake.created_at,
             "email": _masked(intake.client_email),
             "scope_length": len(intake.scope),
+            "attachments": attached,
         }
 
     if intake.state in _QUOTED_FACE:

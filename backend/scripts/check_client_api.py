@@ -539,6 +539,16 @@ with TestClient(app) as client:
         return intakes.get(entry.id), bundle
 
     # --- /submit: only from `issued`, and only once --------------------------
+    #
+    # `data=` rather than `json=` throughout this section, and only in this
+    # section: `/submit` takes `Form` fields since it began carrying files
+    # (Stage 2 Task 3), while `/revise` and `/finalize` are still JSON bodies
+    # and are still posted as such below. Nothing else about these assertions
+    # changes - `Form` accepts `application/x-www-form-urlencoded` as readily as
+    # `multipart/form-data`, and `_client_body_limit` grants the wider upload
+    # cap to multipart alone, so every body-size assertion further down still
+    # measures against the same `_MAX_CLIENT_BODY_BYTES` it always did. What
+    # `/submit` does with files of its own is `check_client_upload.py`.
 
     submit_client = _client_for("203.0.113.11")
 
@@ -558,7 +568,7 @@ with TestClient(app) as client:
 
     submitted = submit_client.post(
         f"/api/client/{fresh.token}/submit",
-        json={
+        data={
             "client_email": "real@client.com",
             "client_phone": "+63 917 000 0000",
             "scope": "A booking site for three branches.",
@@ -589,7 +599,7 @@ with TestClient(app) as client:
 
     second = submit_client.post(
         f"/api/client/{fresh.token}/submit",
-        json={
+        data={
             "client_email": "attacker@evil.example",
             "client_phone": "000",
             "scope": "OVERWRITE ATTEMPT",
@@ -658,7 +668,7 @@ with TestClient(app) as client:
         )
         _walk(candidate.id, *steps)
         resp = submit_client.post(
-            f"/api/client/{candidate.token}/submit", json={"scope": "x", "budget_text": "y"}
+            f"/api/client/{candidate.token}/submit", data={"scope": "x", "budget_text": "y"}
         )
         ok(
             f"submit from {label}: refused with the same opaque body as an unknown token",
@@ -672,7 +682,7 @@ with TestClient(app) as client:
     )
     intakes.close(closed_candidate.id, "admin@neptune.ph")
     resp = submit_client.post(
-        f"/api/client/{closed_candidate.token}/submit", json={"scope": "x", "budget_text": "y"}
+        f"/api/client/{closed_candidate.token}/submit", data={"scope": "x", "budget_text": "y"}
     )
     ok(
         "submit from closed: refused with the same opaque body as an unknown token",
@@ -694,7 +704,7 @@ with TestClient(app) as client:
 
     over_scope = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        json={"client_email": "x@y.com", "scope": LONG_TEXT, "budget_text": "fine"},
+        data={"client_email": "x@y.com", "scope": LONG_TEXT, "budget_text": "fine"},
     )
     ok("submit: an over-length scope is refused with 400", over_scope.status_code == 400)
     ok(
@@ -715,7 +725,7 @@ with TestClient(app) as client:
 
     over_budget = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        json={"client_email": "x@y.com", "scope": "fine", "budget_text": LONG_TEXT},
+        data={"client_email": "x@y.com", "scope": "fine", "budget_text": LONG_TEXT},
     )
     ok("submit: an over-length budget is refused with 400", over_budget.status_code == 400)
     ok(
@@ -743,7 +753,7 @@ with TestClient(app) as client:
 
     over_email = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        json={"client_email": LONG_CONTACT, "client_phone": "fine", "scope": "fine", "budget_text": "fine"},
+        data={"client_email": LONG_CONTACT, "client_phone": "fine", "scope": "fine", "budget_text": "fine"},
     )
     ok("submit: an over-length email is refused with 400", over_email.status_code == 400)
     ok(
@@ -759,7 +769,7 @@ with TestClient(app) as client:
 
     over_phone = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        json={"client_email": "fine", "client_phone": LONG_CONTACT, "scope": "fine", "budget_text": "fine"},
+        data={"client_email": "fine", "client_phone": LONG_CONTACT, "scope": "fine", "budget_text": "fine"},
     )
     ok("submit: an over-length phone number is refused with 400", over_phone.status_code == 400)
     ok(
@@ -788,7 +798,7 @@ with TestClient(app) as client:
     )
     scrubbed = submit_client.post(
         f"/api/client/{control_char_fixture.token}/submit",
-        json={
+        data={
             "client_email": "weird\x07@client.com",
             "client_phone": "09\x0017\x08000",
             "scope": "fine",
@@ -836,7 +846,7 @@ with TestClient(app) as client:
         main_module.intakes.advance = _advance_that_cannot_save
         save_failed = submit_client.post(
             f"/api/client/{save_failure_fixture.token}/submit",
-            json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+            data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
         )
     finally:
         main_module.intakes.advance = _real_advance
@@ -860,7 +870,7 @@ with TestClient(app) as client:
         main_module.intakes.advance = _advance_that_cannot_save_reworded
         save_failed_reworded = submit_client.post(
             f"/api/client/{reworded_fixture.token}/submit",
-            json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+            data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
         )
     finally:
         main_module.intakes.advance = _real_advance
@@ -885,7 +895,7 @@ with TestClient(app) as client:
     intakes.close(ordinary_refusal_fixture.id, "admin@neptune.ph")
     ordinary_refusal = submit_client.post(
         f"/api/client/{ordinary_refusal_fixture.token}/submit",
-        json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+        data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
     )
     ok(
         "a plain IntakeError (illegal move) still answers the ordinary opaque 404, not 500",
@@ -1231,7 +1241,7 @@ with TestClient(app) as client:
     rate_body = {"client_email": "rate@client.com", "scope": "x", "budget_text": "y"}
 
     rate_statuses = [
-        rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", json=rate_body).status_code
+        rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", data=rate_body).status_code
         for _ in range(20)
     ]
     ok(
@@ -1241,10 +1251,10 @@ with TestClient(app) as client:
         rate_statuses[0] == 200 and all(status == 404 for status in rate_statuses[1:]),
     )
 
-    rate_21st = rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", json=rate_body)
+    rate_21st = rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", data=rate_body)
     ok("the rate limit: the 21st attempt from that same IP is refused with 429", rate_21st.status_code == 429)
 
-    rate_other_ip = rate_ip_b.post(f"/api/client/{rate_fixture.token}/submit", json=rate_body)
+    rate_other_ip = rate_ip_b.post(f"/api/client/{rate_fixture.token}/submit", data=rate_body)
     ok(
         "the rate limit: a different IP hitting the same token right after is unaffected - "
         "still judged on the merits (404, already submitted), not swept into the first "
@@ -1256,10 +1266,10 @@ with TestClient(app) as client:
     # --- The rate limit runs before FastAPI ever parses the body -------------
     #
     # `rate_ip_a` is already over budget on `submit` from the block above.
-    # Sent a deliberately malformed body - not valid JSON at all - and if the
-    # limiter genuinely runs first, the answer is still 429; if it ran from
-    # inside the handler (where it used to live, behind `body:
-    # ClientSubmitRequest` as a parameter), FastAPI would have already
+    # Sent a deliberately malformed body - not valid JSON at all, and not a
+    # form either - and if the limiter genuinely runs first, the answer is
+    # still 429; if it ran from inside the handler (where it used to live,
+    # behind a Pydantic body model as a parameter), FastAPI would have already
     # rejected the malformed body with a 422 before the handler - and this
     # check - ever ran.
     malformed_but_over_budget = rate_ip_a.post(
@@ -1283,7 +1293,7 @@ with TestClient(app) as client:
         "budget_text": "y",
     }
     oversized_resp = oversized_client.post(
-        f"/api/client/{rate_fixture.token}/submit", json=oversized_body
+        f"/api/client/{rate_fixture.token}/submit", data=oversized_body
     )
     ok(
         "a body whose declared Content-Length exceeds the cap is refused with 413",
@@ -1300,7 +1310,7 @@ with TestClient(app) as client:
     )
     under_cap_resp = oversized_client.post(
         f"/api/client/{under_cap_fixture.token}/submit",
-        json={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+        data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
     )
     ok(
         "a body comfortably inside the cap is unaffected by it - the same address's "
@@ -1330,7 +1340,7 @@ with TestClient(app) as client:
         for eviction_client in eviction_clients:
             eviction_client.post(
                 f"/api/client/{eviction_fixture.token}/submit",
-                json={"scope": "x", "budget_text": "y"},
+                data={"scope": "x", "budget_text": "y"},
             )
         ok(
             "the rate limiter's dict reached its tracked-key cap rather than growing to one "
