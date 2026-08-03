@@ -41,7 +41,7 @@ from app.renderers import (  # noqa: E402
     render_developer_requirements,
     render_print_html,
 )
-from app.renderers.money import currency_decimals  # noqa: E402
+from app.renderers.money import currency_decimals, format_amount  # noqa: E402
 from app.schemas import (  # noqa: E402
     ApiEndpoint,
     ClientNarrative,
@@ -781,6 +781,101 @@ def check_roles_stay_out_of_the_investment(estimate: Estimate) -> list[str]:
     return proved
 
 
+def _investment_rows(document: str) -> list[list[str]]:
+    """Every row of the client Investment table, split into its cells.
+
+    Splits on unescaped pipes only, exactly as `_cell` escapes them, and drops
+    the two empty strings a leading and trailing pipe produce. The alignment
+    row (`|---|---:|`) is dropped; the header row is kept as row 0, because the
+    caller below is checking the header.
+    """
+    import re
+
+    lines = document.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("## Investment"))
+    rows: list[list[str]] = []
+    for line in lines[start:]:
+        if not line.startswith("|"):
+            if rows:
+                break
+            continue
+        cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line)[1:-1]]
+        if cells and all(re.fullmatch(r":?-{2,}:?", cell) for cell in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def check_rates_stay_out_of_the_investment(estimate: Estimate) -> list[str]:
+    """The client's Investment table prices the work, never the hour.
+
+    A rate printed beside a quantity turns the quotation into a timesheet to be
+    argued down line by line - "why is this nine hours" - when what is being
+    bought is the delivered thing. The quantity and the unit stay, because the
+    shape of the effort is part of what the client is agreeing to. Only the
+    price-per-unit goes, and it goes structurally: the column is not rendered,
+    so there is no formatting path that can put it back.
+
+    This is a shape check on the rendered document, not on the object, because
+    that is where the column would reappear.
+    """
+    proved: list[str] = []
+
+    proposal = render_client_proposal(estimate)
+    rows = _investment_rows(proposal)
+    assert rows, "no Investment table found in the client proposal"
+
+    header, body = rows[0], rows[1:]
+    assert len(header) == 4, f"the Investment table has {len(header)} columns, expected 4: {header}"
+    assert header[:3] == ["Description", "Qty", "Unit"], f"unexpected leading columns: {header[:3]}"
+    assert header[3].startswith("Amount ("), f"the last column is {header[3]!r}, not an Amount"
+    assert not any(cell.startswith("Rate") for cell in header), f"a Rate column survived: {header}"
+    proved.append(f"the Investment table is exactly {' / '.join(header)}")
+
+    ragged = [row for row in body if len(row) != 4]
+    assert not ragged, f"{len(ragged)} Investment rows are not 4 cells wide, e.g. {ragged[0]}"
+    proved.append(f"all {len(body)} rows carry 4 cells - no column was dropped from the header only")
+
+    # The leak check. A rate whose quantity is 1 is indistinguishable from that
+    # line's own amount, and a rate that happens to format identically to some
+    # figure the table legitimately prints would fail this for the wrong reason.
+    # Both are skipped, and the fixture is asserted to still leave a candidate -
+    # otherwise this check would pass while proving nothing.
+    currency = (estimate.currency or CURRENCY).strip().upper()
+    legitimate = {format_amount(item.subtotal, currency) for item in estimate.line_items}
+    legitimate |= {
+        format_amount(value, currency)
+        for value in (
+            estimate.cost.subtotal,
+            estimate.cost.total,
+            estimate.cost.tax_amount,
+            estimate.cost.contingency_amount,
+            -abs(estimate.cost.discount_amount),
+        )
+    }
+    printed = {cell.replace("**", "").strip() for row in rows for cell in row}
+    candidates = [
+        item
+        for item in estimate.line_items
+        if abs(item.quantity - 1.0) > 1e-9
+        and item.unit_rate > 0
+        and format_amount(item.unit_rate, currency) not in legitimate
+    ]
+    assert candidates, (
+        "every line item in the fixture either has quantity 1 or a rate that formats like a "
+        "figure the table legitimately prints - this check would prove nothing"
+    )
+    leaked = [
+        (item.id, format_amount(item.unit_rate, currency))
+        for item in candidates
+        if format_amount(item.unit_rate, currency) in printed
+    ]
+    assert not leaked, f"unit rates reached the client Investment table: {leaked}"
+    proved.append(f"none of {len(candidates)} distinguishable unit rates appear anywhere in it")
+
+    return proved
+
+
 def check_printed_cost_reconciles(estimate: Estimate) -> list[str]:
     """The Investment table's own rows must add up to the total printed under them.
 
@@ -1053,6 +1148,10 @@ def main() -> int:
 
     print("\nThe Investment table names work, not people")
     for line in check_roles_stay_out_of_the_investment(estimate):
+        print(f"  ok  {line}")
+
+    print("\nThe Investment table prices the work, not the hour")
+    for line in check_rates_stay_out_of_the_investment(estimate):
         print(f"  ok  {line}")
 
     print("\nTax exclusive and inclusive")

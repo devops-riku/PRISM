@@ -14,9 +14,11 @@ across the requirements it names, in the developer sheet. Nothing else is
 derived, and no figure is ever recomputed from ``quantity * unit_rate``.
 
 The client's Investment table is one unbroken list of work. It carries neither
-the role that performs a line nor the category it belongs to, because both read
-as a staffing plan and the client is buying an outcome. Both stay in the
-developer sheet, where they are engineering decisions.
+the role that performs a line, nor the category it belongs to, nor the rate the
+line was priced at: the first two read as a staffing plan and the third as a
+timesheet, and the client is buying an outcome. The role and the category stay
+in the developer sheet, where they are engineering decisions; the rate stays in
+the studio's own screen, where it is a pricing decision.
 """
 
 from __future__ import annotations
@@ -393,18 +395,26 @@ def _investment_section(estimate: Estimate, currency: str) -> str:
     if not has_figures:
         return ""
 
-    # The currency is named once, in the headings, and the figures under them
-    # are bare. Twenty rows each carrying the same peso sign is twenty
+    # The currency is named once, in the Amount heading, and the figures under
+    # it are bare. Twenty rows each carrying the same peso sign is twenty
     # repetitions of one fact; the symbol earns its place on the rows a reader
     # actually stops at, which are the totals below.
+    #
+    # There is no rate column. A rate printed beside a quantity turns the
+    # document into a timesheet to be argued down line by line - "why is this
+    # nine hours" - when what is being bought is the delivered thing. The
+    # quantity and the unit stay, because the shape of the effort is part of
+    # what the client is agreeing to; only the price-per-unit goes. The rate is
+    # still on the studio's own screen (`LineItemTable` in the frontend) and
+    # still what every amount here was computed from - it is simply not in the
+    # document that leaves the building.
     headers = [
         "Description",
         "Qty",
         "Unit",
-        f"Rate ({currency})",
         f"Amount ({currency})",
     ]
-    aligns = [LEFT, RIGHT, LEFT, RIGHT, RIGHT]
+    aligns = [LEFT, RIGHT, LEFT, RIGHT]
     rows: List[List[str]] = []
 
     # One unified list of work, with no headings above it and no per-group
@@ -422,24 +432,23 @@ def _investment_section(estimate: Estimate, currency: str) -> str:
                 _cell(item.description) or _cell(item.id) or "Work item",
                 format_qty(item.quantity),
                 _cell(format_unit(item.unit, item.quantity)),
-                format_amount(item.unit_rate, currency),
                 format_amount(item.subtotal, currency),
             ]
         )
 
     if rows:
-        rows.append(["", "", "", "", ""])
+        rows.append(["", "", "", ""])
 
-    rows.append(["**Subtotal**", "", "", "", f"**{format_money(cost.subtotal, currency)}**"])
+    rows.append(["**Subtotal**", "", "", f"**{format_money(cost.subtotal, currency)}**"])
 
     if cost.contingency_amount or cost.contingency_pct:
         label = "Contingency"
         if cost.contingency_pct:
             label = f"Contingency ({format_pct(cost.contingency_pct)})"
-        rows.append([label, "", "", "", format_amount(cost.contingency_amount, currency)])
+        rows.append([label, "", "", format_amount(cost.contingency_amount, currency)])
 
     if cost.discount_amount:
-        rows.append(["Discount", "", "", "", format_amount(-abs(cost.discount_amount), currency)])
+        rows.append(["Discount", "", "", format_amount(-abs(cost.discount_amount), currency)])
 
     tax_label = _cell(cost.tax_label)
     has_tax = bool(cost.tax_amount or cost.tax_pct or tax_label)
@@ -447,18 +456,18 @@ def _investment_section(estimate: Estimate, currency: str) -> str:
     if cost.tax_pct:
         label = f"{label} ({format_pct(cost.tax_pct)})"
 
-    # Inclusive pricing puts the tax *inside* the rates, so adding it as a row
+    # Inclusive pricing puts the tax *inside* the amounts, so adding it as a row
     # here would make the column stop summing to the total it sits under. It
     # becomes a memo below the table instead: still stated, never added twice.
     if has_tax and not cost.tax_inclusive:
-        rows.append([label, "", "", "", format_amount(cost.tax_amount, currency)])
+        rows.append([label, "", "", format_amount(cost.tax_amount, currency)])
 
-    rows.append(["**Total**", "", "", "", f"**{format_money(cost.total, currency)}**"])
+    rows.append(["**Total**", "", "", f"**{format_money(cost.total, currency)}**"])
 
     if has_tax and cost.tax_inclusive:
         basis = (
             f"The total is inclusive of {label}, which accounts for "
-            f"{format_money(cost.tax_amount, currency)} of it. Every rate above already "
+            f"{format_money(cost.tax_amount, currency)} of it. Every amount above already "
             f"contains the tax; nothing further is added at invoicing."
         )
     elif has_tax:
@@ -466,12 +475,12 @@ def _investment_section(estimate: Estimate, currency: str) -> str:
     else:
         basis = "No consumption tax is applied to this quotation."
 
-    # `cost.rate_basis` is deliberately absent. It explains where the rates came
-    # from - a published card, a market band, a blended squad - and that is an
-    # answer to a question the client has not asked. Stating it invites a
-    # negotiation about the derivation instead of a decision about the work. It
-    # is in the developer sheet, where it is useful context rather than an
-    # opening bid.
+    # `cost.rate_basis` is deliberately absent, and now doubly so: it explains
+    # where the rates came from - a published card, a market band, a blended
+    # squad - and this table no longer prints a rate for it to explain. Stating
+    # it invites a negotiation about the derivation instead of a decision about
+    # the work. It is in the developer sheet, where it is useful context rather
+    # than an opening bid.
     body = [
         "\n".join(_table(headers, rows, aligns)),
         f"All amounts are stated in {currency}. {basis}",
