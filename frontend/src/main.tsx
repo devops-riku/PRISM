@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
 import AuthGate from './components/AuthGate'
+import ClientShell from './components/client/ClientShell'
 
 /**
  * The boot screen's second milestone, reported at the first moment it is true.
@@ -88,6 +89,32 @@ class RootErrorBoundary extends Component<RootErrorBoundaryProps, RootErrorBound
   }
 }
 
+/**
+ * Where a client's own link points - `#/c/<token>`, minted by
+ * `backend/app/main.py`'s `_client_link` and handed out nowhere else. Read
+ * once, here, before anything downstream of `AuthGate` gets a chance to run.
+ *
+ * This is the one structural rule this file exists to keep: `App.tsx` fires
+ * `listWorkspaces()` and `fetchSettings()` unconditionally from its own
+ * `useEffect`s the moment it mounts, and both answer a signed-out caller
+ * with 401. `AuthGate` fires its own sign-in check the same way. A client
+ * holding this link has no studio session and is not signed in to anything -
+ * so `<ClientShell>` has to stand in for `<AuthGate><App/></AuthGate>`
+ * *before* either one is ever mounted, not be admitted past the gate by an
+ * allowlist inside it. An allowlist runs too late: by the time `AuthGate`
+ * would decide to let a client-shaped hash through, `App` has already
+ * mounted somewhere beneath it and its effects have already fired the two
+ * calls this rule exists to prevent.
+ *
+ * The token's own character set is `secrets.token_urlsafe(24)`'s - see
+ * `backend/app/tokens.py` - which never emits anything outside
+ * `[A-Za-z0-9_-]`. This match is intentionally on the raw hash, computed
+ * once at load: like the rest of this file, boot is a one-time decision, not
+ * something that re-runs as the hash changes later.
+ */
+const CLIENT_LINK = /^#\/c\/([A-Za-z0-9_-]{1,300})$/
+const clientToken = CLIENT_LINK.exec(window.location.hash || '')?.[1] || ''
+
 const container = document.getElementById('root')
 
 if (!container) {
@@ -97,11 +124,18 @@ if (!container) {
 createRoot(container).render(
   <StrictMode>
     <RootErrorBoundary>
-      {/* Who is asking, before anything is shown - on the installs that ask.
-          Where no project is configured the gate renders the app untouched. */}
-      <AuthGate>
-        <App />
-      </AuthGate>
+      {clientToken ? (
+        // A stranger's own link, resolved with no session at all - see
+        // CLIENT_LINK's own comment above for why this branch has to come
+        // ahead of AuthGate rather than live inside it.
+        <ClientShell token={clientToken} />
+      ) : (
+        // Who is asking, before anything is shown - on the installs that ask.
+        // Where no project is configured the gate renders the app untouched.
+        <AuthGate>
+          <App />
+        </AuthGate>
+      )}
     </RootErrorBoundary>
   </StrictMode>,
 )

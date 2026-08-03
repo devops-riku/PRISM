@@ -807,6 +807,129 @@ export type Intake = {
   closed_by: string
 }
 
+// --- the client's own view of an intake ---------------------------------------
+//
+// What `GET /api/client/{token}` (and the three write routes beside it)
+// answer with - `clientview.of`'s output, in `backend/app/clientview.py`,
+// mirrored exactly: one dict literal per state there, one type per state
+// here. That module's own docstring is explicit about why it is built this
+// way - never a filtered `Intake` or `ProposalBundle` - so nothing here is
+// derived from the types above by picking fields; each was copied by hand
+// off `of()`'s own source, the same discipline that file itself insists on.
+
+/**
+ * One payment instalment, exactly as `clientview.of` builds it from
+ * `PaymentMilestone` - by hand, one field at a time, never `model_dump()`.
+ * A separate type from the studio-side `PaymentMilestone` above on purpose,
+ * even though the four fields match today: that type mirrors
+ * `schemas.PaymentMilestone`, and a field added there for the studio's own
+ * screens must not silently widen what this file claims a client is sent -
+ * the exact drift `clientview.py` exists to prevent, reproduced here at the
+ * type level.
+ */
+export type ClientPaymentMilestone = {
+  label: string
+  percent: number
+  amount: number
+  trigger: string
+}
+
+/** One entry of a client's revision log, as `clientview.of` narrows every
+ * `intake.revisions` entry to just these two keys - never whatever else a
+ * third key might someday carry. */
+export type ClientRevisionEntry = {
+  asked: string
+  at: string
+}
+
+/**
+ * The form has not been submitted yet. The studio's name is the whole face -
+ * nothing about the client's own words exists yet to leak.
+ */
+export type ClientIssuedView = {
+  state: 'issued'
+  studio_name: string
+}
+
+/**
+ * One identical face for `submitted`, `preparing`, `quoted` and
+ * `quote_failed` - `clientview._WAITING`. All four collapse to this single
+ * shape, with `state` itself normalised to the literal `'waiting'` rather
+ * than passed through, so a client can never tell a model is running right
+ * now from one that has already failed once.
+ *
+ * `sent_at` here is `intake.created_at` - when the studio issued this link,
+ * not when the client submitted the form that put them in this state. The
+ * two dates are already different by the time this shape is ever shown (a
+ * client cannot reach `waiting` without having submitted), and nothing on
+ * the wire carries a true submission timestamp to show instead - Task 8's
+ * copy has to read this field as "we've had a way to reach you since," not
+ * as "you told us on." Compare `ClientQuotationView.sent_at`, which really
+ * is `intake.sent_at` - when the studio sent the quotation. Never the
+ * budget - see that field's absence, not an omission.
+ */
+export type ClientWaitingView = {
+  state: 'waiting'
+  studio_name: string
+  sent_at: string
+  /** The client's own address, masked to its first letter and domain. */
+  email: string
+  scope_length: number
+}
+
+/**
+ * `sent`, `revision_requested` and `finalized` - `clientview._QUOTED_FACE`.
+ * All three read the *current* quotation (a second Generate replaces rather
+ * than appends to `bundle_ids`), so this is one shape for all three; only
+ * `state` itself tells them apart.
+ *
+ * `sent_at` here is `intake.sent_at` - when the studio actually sent this
+ * quotation. Compare `ClientWaitingView.sent_at`, which is
+ * `intake.created_at`.
+ */
+export type ClientQuotationView = {
+  state: 'sent' | 'revision_requested' | 'finalized'
+  studio_name: string
+  reference: string
+  total: number
+  currency: string
+  validity: number
+  payment_schedule: ClientPaymentMilestone[]
+  /** The client-facing markdown narrative, already rendered server-side -
+   * never the developer spec, and nothing here can reach it (see
+   * `clientview.of`'s own comment on `render_client_proposal`'s signature). */
+  narrative: string
+  sent_at: string
+  revisions: ClientRevisionEntry[]
+  can_revise: boolean
+  can_finalize: boolean
+}
+
+/**
+ * A withdrawn request. This is not what a client's own token ever resolves
+ * to in practice: `main.py`'s anonymous route refuses a closed intake with
+ * the same opaque 404 an unknown token gets, before `clientview.of` runs
+ * for it at all (see that function's own docstring on `CLOSED`). It stays
+ * in this union for the same reason it stays in `of()` itself - parity with
+ * a caller that has a legitimate reason to ask, which nothing in this
+ * codebase builds today but could - not because `GET /api/client/{token}`
+ * can actually answer it.
+ */
+export type ClientClosedView = {
+  state: 'closed'
+}
+
+/**
+ * What a client's own link answers with. Every write route
+ * (`/submit`, `/revise`, `/finalize`) answers with this too, since each one
+ * ends by calling `clientview.of` on the intake it just moved.
+ */
+export type ClientIntakeView =
+  | ClientIssuedView
+  | ClientWaitingView
+  | ClientQuotationView
+  | ClientClosedView
+
 // --- small reference shapes ---------------------------------------------------
 
 /**
