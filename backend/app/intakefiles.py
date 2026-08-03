@@ -152,40 +152,106 @@ INLINE_TYPES = frozenset(
 
 
 def configured() -> bool:
-    """True when all four Spaces credentials are set. Read live, like `mailer`'s.
+    """True when the four Spaces settings that matter are set. Read live, like
+    `mailer.configured()` is.
 
-    All four or none: three of them is a misconfiguration that would fail on the
+    Four or none: three of them is a misconfiguration that would fail on the
     first upload rather than at startup, and answering "configured" for it would
     take the local fallback away from a studio who had merely typed one name
     wrong in `.env`.
+
+    `DO_SPACES_ENDPOINT` is deliberately not one of the four. It has a correct
+    derivation from the region (see `endpoint()`), so a studio who set the two
+    credentials, the region and the bucket has configured Spaces whether or not
+    they also wrote down a hostname this module can work out for itself.
     """
     return bool(
-        config.SPACES_KEY.strip()
-        and config.SPACES_SECRET.strip()
-        and config.SPACES_REGION.strip()
-        and config.SPACES_BUCKET.strip()
+        config.DO_SPACES_ACCESS_KEY.strip()
+        and config.DO_SPACES_SECRET_KEY.strip()
+        and config.DO_SPACES_REGION.strip()
+        and config.DO_SPACES_BUCKET.strip()
     )
 
 
 def endpoint() -> str:
-    """`https://<region>.digitaloceanspaces.com`.
+    """Where the S3 API is, configured or derived.
 
-    Derived rather than configured as a fifth variable. The endpoint is a pure
-    function of the region for every Space there is, and a separate setting is
-    one more thing to get subtly wrong in a way that only shows up as a signature
-    mismatch nobody can read.
+    `DO_SPACES_ENDPOINT` wins when it is set. When it is not,
+    `https://<region>.digitaloceanspaces.com` is correct for every Space there
+    is, and deriving it means the ordinary case has nothing to configure and
+    nothing to get subtly wrong in a way that surfaces as a signature mismatch
+    nobody can read. The configured form is what reaches the cases the
+    derivation cannot: a CDN hostname, a region newer than this file, or an
+    S3-compatible store that is not DigitalOcean.
     """
-    region = config.SPACES_REGION.strip().lower()
+    configured_endpoint = config.DO_SPACES_ENDPOINT.strip()
+    if configured_endpoint:
+        return configured_endpoint.rstrip("/")
+    region = config.DO_SPACES_REGION.strip().lower()
     return f"https://{region}.digitaloceanspaces.com" if region else ""
 
 
+#: How long any one call to Spaces may spend connecting, and how long it may
+#: then wait for bytes; and how many times botocore may try before giving up.
+#:
+#: These exist because of where `forget()` is called from, and the reason is
+#: worth having in full. botocore's defaults are a 60-second connect timeout, a
+#: 60-second read timeout and `retries={"mode": "legacy"}`, which is five
+#: attempts. `_spaces_forget` makes two round trips - a `list_objects_v2` and a
+#: `delete_objects` - so a black-holed endpoint costs on the order of ten
+#: minutes. `intakes._write` calls `forget()` the moment a record becomes
+#: `closed`, and `main.py`'s `close_intake` is an `async def` that calls
+#: `intakes.close()` inline, so those ten minutes are spent **blocking the event
+#: loop** - not merely holding `intakes._lock`. Every request that worker holds
+#: is parked, including an anonymous client's `POST /api/client/{token}/submit`,
+#: which cannot even be routed. That client's browser times out, they retry, and
+#: the retry lands on an intake that is already `submitted`, which `/submit`
+#: refuses for ever. One admin closing an unrelated enquiry would cost a
+#: different client their one shot at the link.
+#:
+#: The numbers, and what they actually buy, both measured rather than reasoned.
+#: Against the live `sgp1` Space every operation this module performs - put,
+#: get, list, presign, delete - returned in under 1.5 seconds, so a 5-second
+#: connect is roughly five times the headroom the real path needs. Against a
+#: black-holed address `forget()` returns in about 18 seconds instead of about
+#: ten minutes, and `close()` completes.
+#:
+#: Eighteen and not ten, which is worth writing down because the arithmetic is
+#: not the obvious one: botocore makes **two** TCP connection attempts per retry
+#: attempt, so the wall clock is about `2 x connect_timeout x max_attempts` plus
+#: standard-mode backoff. Measured at 4.0s for one attempt at a 2-second connect
+#: and 10.7s for one at a 5-second connect - a stable 2x - against a raw socket
+#: that honours its own 5-second timeout exactly. Anyone tightening these should
+#: expect the total to move at twice the rate they expect.
+#:
+#: Eighteen seconds of blocked event loop is still eighteen seconds. It is 33x
+#: better than the default and it is on a rare, hand-pressed admin action
+#: against an endpoint that is dropping packets rather than answering - an
+#: endpoint that merely errors comes back immediately. Taking it to zero means
+#: running `close()` off the loop, which is `main.py`'s to do (this codebase
+#: already has the pattern: `asyncio.to_thread(mailer.send_invite, ...)`). That
+#: is a refinement on top of this bound, not a substitute for it: threaded and
+#: unbounded, the wait simply moves onto `intakes._lock`, where the next
+#: `advance()` inherits it.
+SPACES_CONNECT_TIMEOUT_SECONDS = 5
+SPACES_READ_TIMEOUT_SECONDS = 10
+SPACES_MAX_ATTEMPTS = 2
+
+
 def _client():
-    """The S3 client Spaces speaks to.
+    """The S3 client Spaces speaks to, with its failure bounded.
 
     The one place `boto3` is imported, and the reason it is imported here: see
-    this module's docstring. It is also the seam the check script replaces to
-    exercise this branch offline, which is a happy side effect of the import
-    rule rather than the reason for it.
+    this module's docstring. `botocore.config.Config` is imported here for the
+    same reason and not a weaker one - botocore arrives with boto3 and is just as
+    absent without it. This is also the seam the check script replaces to
+    exercise this branch offline, which is a happy side effect of the import rule
+    rather than the reason for it.
+
+    `retries` is set to `standard` explicitly rather than left at botocore's
+    `legacy` default: the two differ in how many attempts they make and in which
+    errors they consider retryable, and a bound nobody wrote down is a bound that
+    changes when the library does.
 
     A client is built per call. boto3 clients are reusable and caching one is the
     obvious optimisation, but a cache keyed on credentials that can change
@@ -193,18 +259,24 @@ def _client():
     enough yet to pay for it.
     """
     import boto3  # noqa: PLC0415 - lazily, on purpose; see the docstring above
+    from botocore.config import Config  # noqa: PLC0415 - as above
 
     return boto3.session.Session().client(
         "s3",
-        region_name=config.SPACES_REGION.strip(),
+        region_name=config.DO_SPACES_REGION.strip(),
         endpoint_url=endpoint(),
-        aws_access_key_id=config.SPACES_KEY.strip(),
-        aws_secret_access_key=config.SPACES_SECRET.strip(),
+        aws_access_key_id=config.DO_SPACES_ACCESS_KEY.strip(),
+        aws_secret_access_key=config.DO_SPACES_SECRET_KEY.strip(),
+        config=Config(
+            connect_timeout=SPACES_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=SPACES_READ_TIMEOUT_SECONDS,
+            retries={"mode": "standard", "max_attempts": SPACES_MAX_ATTEMPTS},
+        ),
     )
 
 
 def _bucket() -> str:
-    return config.SPACES_BUCKET.strip()
+    return config.DO_SPACES_BUCKET.strip()
 
 
 # --- Names, types and the gate every id goes through -------------------------
@@ -234,21 +306,33 @@ def _suffix_of(name: str) -> str:
 def _resolve_type(kind: str, name: str) -> Tuple[str, str]:
     """The canonical content type and the suffix it is stored under.
 
-    The declared type wins when PRISM knows it. When it does not, the filename's
-    own suffix is consulted - not as a second opinion but for the reason
-    `attachments.SUFFIXES` is keyed on suffixes in the first place: browsers
-    disagree about the mime for `.docx` and `.xlsx`, and several send
-    `application/octet-stream` for both. A `.docx` that arrives with no usable
-    type is still a `.docx`, and treating it as one loses nothing, because what
-    the type decides here is the extension and the disposition, and the
-    disposition for every non-raster is `attachment` either way.
+    The declared type wins when PRISM knows it and it says anything at all.
+    `application/octet-stream` does not: it is a key of `CONTENT_TYPES` only so
+    that `.bin` has something to map back to, and treating it as a real answer
+    here is precisely the bug this function had. Browsers disagree about the mime
+    for `.docx` and `.xlsx` - which is why `attachments.SUFFIXES` is keyed on
+    suffixes in the first place - and several send `application/octet-stream` for
+    both. A `.docx` that arrives that way is still a `.docx`, and storing it as
+    `<id>.bin` with `kind: application/octet-stream` would show the studio a
+    generic blob and lose the one clue the record had about what it is.
+
+    The suffix is consulted only when the declared type says nothing, and it may
+    only ever resolve to something **outside** `INLINE_TYPES`. That asymmetry is
+    the point rather than an oversight: an extension is chosen by whoever
+    uploaded the file, and letting one earn `Content-Disposition: inline` would
+    mean a client naming their file `payload.png` decides that it renders.
+    Recognising a document by its suffix costs nothing, because everything
+    outside the raster allowlist is written `attachment` either way. Nothing
+    legitimate is lost - `/submit` gates images on the *declared* type, so an
+    image that arrives without one is refused at the route before it ever reaches
+    here.
     """
     declared = (kind or "").split(";")[0].strip().lower()
-    if declared in CONTENT_TYPES:
+    if declared in CONTENT_TYPES and declared != FALLBACK_TYPE:
         return declared, CONTENT_TYPES[declared]
 
     guessed = _TYPE_FOR_SUFFIX.get(_suffix_of(name))
-    if guessed:
+    if guessed and guessed not in INLINE_TYPES:
         return guessed, CONTENT_TYPES[guessed]
 
     return FALLBACK_TYPE, CONTENT_TYPES[FALLBACK_TYPE]
@@ -669,6 +753,18 @@ _DELETE_BATCH = 1000
 
 
 def _spaces_forget(intake_id: str) -> int:
+    """Delete everything under one intake's prefix, in `_DELETE_BATCH` batches.
+
+    This deletes while it is still paginating, which is safe and is worth saying
+    why rather than leaving to be rediscovered. `list_objects_v2` continues from
+    a *key position*, not from a snapshot or an offset into a result set, so
+    removing keys the walk has already passed cannot make it skip keys it has
+    not - the next page still resumes after the last key returned. Deleting
+    *ahead* of the cursor would be the unsafe direction, and nothing here does
+    that. The alternative, collecting every key before deleting any, buys
+    nothing at the six files `config.MAX_CLIENT_FILES` allows and would hold the
+    whole listing in memory for an intake that somehow had more.
+    """
     prefix = _prefix(intake_id)
     if prefix is None:
         return 0

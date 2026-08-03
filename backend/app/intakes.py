@@ -341,12 +341,30 @@ def _write(entry: Intake) -> Intake:
         # never has to be waited on for correctness, so a bucket that cannot be
         # reached costs a log line and some storage, not the close.
         #
-        # It does mean this call happens while `_lock` is held, since both
-        # callers write under it - a few hundred milliseconds of `delete_objects`
-        # blocking other intake writes in this worker, on an action a studio
-        # takes by hand and rarely. That is the cheaper of the two costs on
-        # offer; the other is `advance(id, CLOSED)` silently leaving a withdrawn
-        # client's files in a bucket forever.
+        # What this costs, stated correctly rather than as first drafted. It is
+        # not `_lock`: every caller of `close()` and `advance()` is inside an
+        # `async def` handler or a task started from one, so the lock is
+        # effectively uncontended and holding it longer costs nothing. What a
+        # slow `forget()` blocks is the **event loop**. `main.py`'s
+        # `close_intake` is `async def` and calls `close()` inline, so a
+        # blocking socket here parks every request this worker holds - including
+        # an anonymous client's `POST /api/client/{token}/submit`, which cannot
+        # even be routed. That client's browser gives up, they retry, and the
+        # retry lands on an intake that is already `submitted`, which `/submit`
+        # refuses for ever: one admin closing an unrelated enquiry costing a
+        # different client their one shot at the link.
+        #
+        # Which is why `intakefiles._client()` is built with an explicit connect
+        # timeout, read timeout and retry bound rather than botocore's defaults
+        # (60s/60s/5 attempts, roughly ten minutes across `forget()`'s two round
+        # trips). Bounded, the worst case here is seconds. See
+        # `intakefiles.SPACES_CONNECT_TIMEOUT_SECONDS` and its comment.
+        #
+        # Moving this to a thread would not have fixed it on its own - it would
+        # only have moved the wait onto `_lock`, where it would block the next
+        # `advance()` instead of the loop. Bounding is the fix; a threadpool
+        # hand-off on top of it is a reasonable later refinement, not a
+        # substitute.
         intakefiles.forget(entry.id)
     return entry
 

@@ -60,16 +60,20 @@ os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intakefiles-")
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_ANON_KEY"] = ""
 os.environ["SUPABASE_JWT_SECRET"] = ""
-# And the four Spaces credentials, for a sharper reason than the three above:
-# the local backend is only under test at all while `intakefiles.configured()`
-# is False, so a developer who has since put real credentials in `backend/.env`
-# would otherwise silently retarget half of this file at a live bucket. Blanked
-# here, before `app.config` reads the environment, so what runs is what this
-# file claims to be running.
-os.environ["SPACES_KEY"] = ""
-os.environ["SPACES_SECRET"] = ""
-os.environ["SPACES_REGION"] = ""
-os.environ["SPACES_BUCKET"] = ""
+# And all five Spaces settings, for a sharper reason than the three above, and
+# one that is no longer hypothetical: `backend/.env` on this machine holds real
+# DigitalOcean credentials for a real bucket. The local backend is only under
+# test at all while `intakefiles.configured()` is False, so without these four
+# lines half of this file would silently retarget at that bucket - and the half
+# in question saves objects and then deletes prefixes. Blanked here, before
+# `app.config` reads the environment, so what runs is what this file says it
+# runs. Do not remove them to "test against the real thing"; write a separate
+# script for that, under a prefix of its own.
+os.environ["DO_SPACES_ACCESS_KEY"] = ""
+os.environ["DO_SPACES_SECRET_KEY"] = ""
+os.environ["DO_SPACES_REGION"] = ""
+os.environ["DO_SPACES_BUCKET"] = ""
+os.environ["DO_SPACES_ENDPOINT"] = ""
 
 import docx  # noqa: E402
 import openpyxl  # noqa: E402
@@ -363,11 +367,12 @@ ok(
 from app import config, intakefiles, intakes, storage, workspaces  # noqa: E402
 
 ok(
-    "importing app.intakefiles does not import boto3 - every check in this "
-    "directory runs offline with no credentials, and a module-level import "
-    "would make intakes.py, and so the whole app, unimportable on a machine "
-    "that has not installed it yet",
-    "boto3" not in sys.modules,
+    "importing app.intakefiles imports neither boto3 nor botocore - every check "
+    "in this directory runs offline with no credentials, and a module-level "
+    "import would make intakes.py, and so the whole app, unimportable on a "
+    "machine that has not installed them yet. Both, not just boto3: the retry "
+    "and timeout bound is a botocore.config.Config, and it is just as absent",
+    "boto3" not in sys.modules and "botocore" not in sys.modules,
 )
 
 
@@ -422,7 +427,21 @@ ok(
 FIRST = new_intake("A booking site for two clinics.")
 SECOND = new_intake("A different client entirely.")
 
-shot = intakefiles.save(FIRST.id, "site photo.png", PNG, "image/png")
+#: Every entry saved against FIRST, in the order they were saved. The listing
+#: and deletion assertions below compare against this rather than against a
+#: hand-counted number: a section added in the middle of this file should not
+#: silently make "listing() reports one row per file" assert the wrong count, and
+#: when it does drift it should be obvious which side is wrong.
+FIRST_FILES: list[dict] = []
+
+
+def save_to_first(name: str, data: bytes, kind: str, **extra) -> dict:
+    entry = intakefiles.save(FIRST.id, name, data, kind, **extra)
+    FIRST_FILES.append(entry)
+    return entry
+
+
+shot = save_to_first("site photo.png", PNG, "image/png")
 
 ok(
     "save() returns exactly the five keys the record holds and no sixth",
@@ -453,7 +472,7 @@ ok(
 ok(
     "and a note travels when the caller has one - it is where attachments.read's "
     "warning about a scan with no text layer ends up",
-    intakefiles.save(FIRST.id, "scan.pdf", PDF, "application/pdf", note="no text layer")["note"]
+    save_to_first("scan.pdf", PDF, "application/pdf", note="no text layer")["note"]
     == "no text layer",
 )
 ok(
@@ -470,14 +489,63 @@ ok(
 )
 
 
+# --- Resolving what a file actually is ---------------------------------------
+#
+# The declared type wins when it says something. `application/octet-stream` does
+# not say anything - it is in `CONTENT_TYPES` only so `.bin` has a type to map
+# back to - and treating it as an answer was a real defect rather than a
+# hypothetical one. It is reachable through Task 3: `_read_documents` gates on
+# the filename suffix and never inspects `content_type`, so any browser that
+# declares octet-stream for a `.docx` (several do) would have had it stored as
+# `<id>.bin` with `kind: application/octet-stream`, and Task 5 would show the
+# studio a generic blob where a Word document was sent. Text extraction survived
+# only because `attachments.read` dispatches on the name - luck, not design.
+
+octet_docx = save_to_first("scope.docx", PLAIN_DOCX, "application/octet-stream")
+ok(
+    "a .docx that a browser declared as application/octet-stream is stored as a "
+    ".docx, not as a nameless blob",
+    octet_docx["kind"] == DOCX_MIME,
+)
+ok(
+    "and comes back that way, so the studio is shown a Word document",
+    intakefiles.read(FIRST.id, octet_docx["id"])[1] == DOCX_MIME,
+)
+ok(
+    "a file with no recognisable type at all is still stored, as octet-stream - "
+    "refusing a type is the upload route's job, where there is a person to tell",
+    save_to_first("mystery.zzz", PDF, "")["kind"] == "application/octet-stream",
+)
+
+# The other half of that fallback, which is an asymmetry on purpose. A suffix is
+# chosen by whoever uploaded the file, so it may earn a *document* type but never
+# a raster one - `inline` is the only thing in this module a client could
+# otherwise talk their way into, and `payload.png` should not be the argument
+# that wins it. Task 3 gates images on the declared type, so nothing legitimate
+# takes this path; the assertion is here so that a later task changing that gate
+# finds this decision already made rather than making it by accident.
+ok(
+    "a suffix alone cannot earn a raster type, and so cannot earn inline: an "
+    "executable named payload.png is stored as octet-stream and as an attachment",
+    save_to_first("payload.png", PDF, "application/x-msdownload")["kind"]
+    == "application/octet-stream",
+)
+ok(
+    "while a genuinely declared image still gets one",
+    intakefiles.disposition_for("image/png") == "inline"
+    and intakefiles.disposition_for("application/octet-stream") == "attachment"
+    and intakefiles.disposition_for("image/svg+xml") == "attachment",
+)
+
+
 # --- The client's filename is a string, never a path -------------------------
 
-sneaky = intakefiles.save(FIRST.id, "../../../../etc/passwd", PDF, "application/pdf")
+sneaky = save_to_first("../../../../etc/passwd", PDF, "application/pdf")
 ok(
     "a filename that is a traversal is kept as a name and never used as one",
     sneaky["name"] == "passwd" and storage.is_valid_id(sneaky["id"]),
 )
-windows = intakefiles.save(FIRST.id, r"C:\Users\someone\scope.docx", PDF, "application/pdf")
+windows = save_to_first(r"C:\Users\someone\scope.docx", PDF, "application/pdf")
 ok(
     "and a drive-absolute one is the same story",
     windows["name"] == "scope.docx",
@@ -520,8 +588,9 @@ ok(
 
 rows = intakefiles.listing(FIRST.id)
 ok(
-    "listing() reports one row per file actually stored",
-    len(rows) == 4,
+    "listing() reports one row per file actually stored, and one per file saved",
+    {row["id"] for row in rows} == {entry["id"] for entry in FIRST_FILES}
+    and len(rows) == len(FIRST_FILES),
 )
 ok(
     "as {id, kind, bytes} and not the manifest's five - the client's filename "
@@ -529,8 +598,10 @@ ok(
     all(set(row) == {"id", "kind", "bytes"} for row in rows),
 )
 ok(
-    "with the sizes storage itself holds",
-    sorted(row["bytes"] for row in rows) == sorted([len(PNG), len(PDF), len(PDF), len(PDF)]),
+    "with the size and the type storage itself holds, matching what save() "
+    "recorded for each - the third place that one canonical type has to agree",
+    {row["id"]: (row["kind"], row["bytes"]) for row in rows}
+    == {entry["id"]: (entry["kind"], entry["bytes"]) for entry in FIRST_FILES},
 )
 
 ok(
@@ -551,6 +622,12 @@ BAD_INTAKE_IDS = [
     "..",
     "../../secret",
     "..\\..\\secret",
+    # A drive-absolute segment. `Path("x") / "C:/Windows/..."` discards the left
+    # side entirely on Windows, so ungated this reaches a real system path and
+    # the call raises `PermissionError` rather than answering anything - which
+    # is why the loop below catches: a mutation of the gate should print a clean
+    # FAIL, not take the whole report down with a traceback three sections
+    # before the end.
     "C:/Windows/System32/config/sam",
     "/etc/passwd",
     "",
@@ -561,37 +638,76 @@ BAD_INTAKE_IDS = [
     FIRST.id + "0",
 ]
 
-gate_holds = True
-for bad in BAD_INTAKE_IDS:
-    gate_holds = gate_holds and intakefiles.read(bad, shot["id"]) is None
-    gate_holds = gate_holds and intakefiles.listing(bad) == []
-    gate_holds = gate_holds and intakefiles.view_url(bad, shot["id"]) == ""
-    gate_holds = gate_holds and intakefiles.forget(bad) == 0
+
+def answers_nothing(intake_id: str) -> bool:
+    """Every read-side function turns this id away, and none of them raises."""
+    try:
+        return (
+            intakefiles.read(intake_id, shot["id"]) is None
+            and intakefiles.listing(intake_id) == []
+            and intakefiles.view_url(intake_id, shot["id"]) == ""
+            and intakefiles.forget(intake_id) == 0
+        )
+    except Exception as exc:  # noqa: BLE001 - a raise here is a failure, not a crash
+        print(f"      ({intake_id!r} raised {exc.__class__.__name__}: {exc})")
+        return False
+
+
 ok(
     "an intake id that is not a bare 12-hex string - a traversal, a drive-absolute "
     "segment, an empty string, a near miss - reads nothing, lists nothing, mints "
     "no URL and deletes nothing",
-    gate_holds,
+    all(answers_nothing(bad) for bad in BAD_INTAKE_IDS),
 )
 refuses(
     "and save() refuses it outright rather than inventing somewhere to put the bytes",
     lambda: intakefiles.save("../../secret", "scope.pdf", PDF, "application/pdf"),
 )
 
-# The traversal above is a weak assertion on its own, and it is worth saying why
-# rather than leaving a reader to assume otherwise: `_intake_files/../nonsense`
-# resolves to a directory that does not exist, so "returns None" would hold even
-# with no gate at all. This one lands somewhere real. `_intakes/` is the sibling
-# directory holding one `<intake_id>.json` per record, an intake id is itself a
-# perfectly valid 12-hex *file* id so the lookup's glob matches it, and an intake
-# record carries `token` - the client's live bearer credential, the one thing in
-# this codebase that is deliberately kept off every response. Ungate
-# `_intake_key` and this line hands it over; that is what it is here to catch.
+# Everything above is a weak assertion and it is worth saying so rather than
+# letting it read as proof. Eleven of those twelve ids resolve to a directory
+# that does not exist, so "answers nothing" holds with no gate at all - remove
+# `storage.is_valid_id` from `_intake_key` and they all still pass. They are kept
+# because they are cheap and they document the shape being refused; they are not
+# what proves the gate.
+#
+# This is. `_intakes/` is one sibling up from `_intake_files/`, it really does
+# exist, and it holds one `<intake_id>.json` per record. An intake id is itself a
+# perfectly valid 12-hex *file* id, so the lookup's glob matches it. And an
+# intake record carries `token` - the client's live bearer credential, the one
+# field in this codebase deliberately excluded from every response.
+#
+# Ungated, measured: `read` returns that record with the token in it; `listing`
+# returns every intake in the workspace with its size; and `forget` unlinks every
+# intake record and rmdirs the directory - every client's token, every state,
+# every quotation pointer, gone. That last one is the worst thing this gate
+# prevents, and until now nothing asserted it.
+
+ESCAPE = f"../{intakes.DIRNAME}"
+records_before = {entry.id for entry in intakes.listing()}
+
 ok(
-    "a traversal that lands on a directory which really does exist - _intakes/, "
-    "one sibling up, where every client's live link token is stored - still reads "
-    "nothing",
-    intakefiles.read(f"../{intakes.DIRNAME}", FIRST.id) is None,
+    "a traversal that lands somewhere real - _intakes/, where every client's live "
+    "link token is stored - reads nothing",
+    intakefiles.read(ESCAPE, FIRST.id) is None,
+)
+ok(
+    "and lists nothing, rather than enumerating every intake in the workspace",
+    intakefiles.listing(ESCAPE) == [],
+)
+ok(
+    "and mints no URL to one",
+    intakefiles.view_url(ESCAPE, FIRST.id) == "",
+)
+ok(
+    "and deletes nothing - ungated, this call unlinks every intake record in the "
+    "workspace and removes the directory with them",
+    intakefiles.forget(ESCAPE) == 0,
+)
+ok(
+    "with every record still on disk after all four, which is the assertion that "
+    "actually names the damage",
+    {entry.id for entry in intakes.listing()} == records_before and len(records_before) >= 2,
 )
 
 BAD_FILE_IDS = ["../../../etc/passwd", "..", "", "   ", "not-hex", shot["id"][:11], "*"]
@@ -639,8 +755,11 @@ ok(
     and config.MAX_CLIENT_FILE_BYTES < config.MAX_DOCUMENT_BYTES,
 )
 ok(
-    "with no second aggregate cap invented beside the one Task 1 already added",
-    config.MAX_CLIENT_FILE_BYTES <= config.MAX_CLIENT_UPLOAD_TOTAL_BYTES,
+    "and there are exactly three MAX_CLIENT_* names, so no second aggregate cap "
+    "was invented beside the one Task 1 already added - enumerated rather than "
+    "inferred from an inequality that would have held either way",
+    {name for name in vars(config) if name.startswith("MAX_CLIENT_")}
+    == {"MAX_CLIENT_FILES", "MAX_CLIENT_FILE_BYTES", "MAX_CLIENT_UPLOAD_TOTAL_BYTES"},
 )
 
 
@@ -673,15 +792,18 @@ refuses(
     lambda: intakes.advance(FOURTH.id, intakes.SUBMITTED, attachments=["scope.pdf"]),
 )
 ok(
+    "and the intake those two were refused against is untouched - still issued, "
+    "with nothing attached. Asserted here, between the refusals and the write "
+    "below, because after that write it would only be measuring the write",
+    intakes.get(FOURTH.id).state == intakes.ISSUED
+    and intakes.get(FOURTH.id).attachments == [],
+)
+ok(
     "but List[dict] is the whole of what the model enforces: the five keys are a "
     "convention held by intakefiles.save() being their only producer, not "
     "something the record checks, and this assertion is here to say so out loud",
     intakes.advance(FOURTH.id, intakes.SUBMITTED, attachments=[{"unrelated": 1}]).attachments
     == [{"unrelated": 1}],
-)
-ok(
-    "the intake FOURTH's refused writes were made against is untouched by them",
-    intakes.get(FOURTH.id).state == intakes.SUBMITTED,
 )
 
 
@@ -714,7 +836,7 @@ ok(
 
 ok(
     "forget() counts what it removed",
-    intakefiles.forget(FIRST.id) == 4,
+    intakefiles.forget(FIRST.id) == len(FIRST_FILES),
 )
 ok(
     "and a second call over the same intake is a no-op, not a failure",
@@ -737,13 +859,31 @@ ok(
 
 
 class StubSpaces:
-    """As much of the S3 client as the Spaces branch actually calls."""
+    """As much of the S3 client as the Spaces branch actually calls.
+
+    It pages, and it can refuse individual keys on a delete. Both of those exist
+    because the first version of this stub did neither, and so three code paths
+    in `intakefiles.py` - the continuation loop, the `_DELETE_BATCH` flush and
+    `_delete_batch`'s per-key error accounting - were in the diff and executed by
+    nothing. `MAX_CLIENT_FILES` is 6, so none of the three is reachable in
+    production; they are still exactly the kind of place an off-by-one or a
+    `KeyError` waits, and untested code in a diff is untested code.
+    """
+
+    #: Small enough that three objects page. The real service returns up to a
+    #: thousand and the number is not what is being tested - the loop is.
+    PAGE = 2
 
     def __init__(self) -> None:
         self.objects: dict[str, dict] = {}
         self.puts: list[dict] = []
         self.presigned: list[tuple] = []
+        self.pages_served = 0
+        self.delete_calls: list[list[str]] = []
         self.fail_delete = False
+        #: Keys this Space will report as undeletable, the way a real one does:
+        #: a 200 whose body carries an `Errors` list, not an exception.
+        self.undeletable: set[str] = set()
 
     def put_object(self, **kwargs):
         self.puts.append(dict(kwargs))
@@ -752,12 +892,20 @@ class StubSpaces:
 
     def list_objects_v2(self, **kwargs):
         prefix = kwargs.get("Prefix", "")
-        contents = [
-            {"Key": key, "Size": len(entry["Body"])}
-            for key, entry in sorted(self.objects.items())
-            if key.startswith(prefix)
-        ]
-        return {"Contents": contents, "KeyCount": len(contents), "IsTruncated": False}
+        after = kwargs.get("ContinuationToken", "")
+        matching = sorted(key for key in self.objects if key.startswith(prefix))
+        remaining = [key for key in matching if key > after] if after else matching
+        page = remaining[: self.PAGE]
+        truncated = len(remaining) > len(page)
+        self.pages_served += 1
+        answer = {
+            "Contents": [{"Key": key, "Size": len(self.objects[key]["Body"])} for key in page],
+            "KeyCount": len(page),
+            "IsTruncated": truncated,
+        }
+        if truncated:
+            answer["NextContinuationToken"] = page[-1]
+        return answer
 
     def get_object(self, **kwargs):
         entry = self.objects.get(kwargs["Key"])
@@ -769,9 +917,15 @@ class StubSpaces:
         if self.fail_delete:
             raise ConnectionError("Spaces could not be reached.")
         keys = [item["Key"] for item in kwargs["Delete"]["Objects"]]
+        self.delete_calls.append(list(keys))
+        deleted, errors = [], []
         for key in keys:
+            if key in self.undeletable:
+                errors.append({"Key": key, "Code": "AccessDenied", "Message": "no"})
+                continue
             self.objects.pop(key, None)
-        return {"Deleted": [{"Key": key} for key in keys]}
+            deleted.append({"Key": key})
+        return {"Deleted": deleted, "Errors": errors} if errors else {"Deleted": deleted}
 
     def generate_presigned_url(self, operation, Params=None, ExpiresIn=None):  # noqa: N803
         self.presigned.append((operation, dict(Params or {}), ExpiresIn))
@@ -785,29 +939,56 @@ def unreachable_client():
 STUB = StubSpaces()
 _real_client = intakefiles._client
 _real_credentials = (
-    config.SPACES_KEY,
-    config.SPACES_SECRET,
-    config.SPACES_REGION,
-    config.SPACES_BUCKET,
+    config.DO_SPACES_ACCESS_KEY,
+    config.DO_SPACES_SECRET_KEY,
+    config.DO_SPACES_REGION,
+    config.DO_SPACES_BUCKET,
+    config.DO_SPACES_ENDPOINT,
 )
 
 try:
-    config.SPACES_KEY = "stub-access-key"
-    config.SPACES_SECRET = "stub-secret-never-logged"
-    config.SPACES_REGION = "sgp1"
-    config.SPACES_BUCKET = "prism-test"
+    config.DO_SPACES_ACCESS_KEY = "stub-access-key"
+    config.DO_SPACES_SECRET_KEY = "stub-secret-never-logged"
+    config.DO_SPACES_REGION = "sgp1"
+    config.DO_SPACES_BUCKET = "prism-test"
+    config.DO_SPACES_ENDPOINT = ""
     intakefiles._client = lambda: STUB
 
     ok(
-        "with all four set, configured() is True - read live off config on every "
-        "call, exactly as mailer.configured() is, so nothing caches a boolean "
-        "taken at import time",
+        "with the four that matter set, configured() is True - read live off "
+        "config on every call, exactly as mailer.configured() is, so nothing "
+        "caches a boolean taken at import time",
         intakefiles.configured() is True,
     )
     ok(
-        "and the endpoint is derived from the region rather than configured as a "
-        "fifth variable somebody can get wrong",
+        "and the endpoint is not one of the four: a studio who set the credentials, "
+        "the region and the bucket has configured Spaces whether or not they also "
+        "wrote down a hostname this module can derive",
+        intakefiles.configured() is True and config.DO_SPACES_ENDPOINT == "",
+    )
+    ok(
+        "with nothing configured, the endpoint is derived from the region, so the "
+        "ordinary case has nothing to get wrong",
         intakefiles.endpoint() == "https://sgp1.digitaloceanspaces.com",
+    )
+    config.DO_SPACES_ENDPOINT = "https://sgp1.cdn.digitaloceanspaces.com/"
+    ok(
+        "and a configured one wins, trailing slash trimmed - for the cases the "
+        "derivation cannot reach: a CDN hostname, a region newer than that line, "
+        "or an S3-compatible store that is not DigitalOcean",
+        intakefiles.endpoint() == "https://sgp1.cdn.digitaloceanspaces.com",
+    )
+    config.DO_SPACES_ENDPOINT = ""
+
+    ok(
+        "the client is built with an explicit connect timeout, read timeout and "
+        "retry bound rather than botocore's 60s/60s/5-attempt defaults - forget() "
+        "runs inline on an async close route, so an unreachable bucket would park "
+        "the event loop for roughly ten minutes across its two round trips, and "
+        "every anonymous /submit with it",
+        intakefiles.SPACES_CONNECT_TIMEOUT_SECONDS <= 10
+        and intakefiles.SPACES_READ_TIMEOUT_SECONDS <= 30
+        and intakefiles.SPACES_MAX_ATTEMPTS <= 3,
     )
 
     SEVENTH = new_intake("Filed in Spaces.")
@@ -913,6 +1094,66 @@ try:
         intakefiles.forget(SEVENTH.id) == 2,
     )
 
+    # --- The three paths that were in the diff and executed by nothing --------
+    #
+    # `MAX_CLIENT_FILES` is 6 and a page is a thousand, so none of these is
+    # reachable in production. They are still code, and code nothing runs is
+    # where an off-by-one waits. The instrument is the stub's own page size and
+    # the module's `_DELETE_BATCH`, both moved rather than fixtures of a
+    # thousand files built to reach them.
+
+    PAGED = new_intake("Enough files to page.")
+    paged_ids = sorted(
+        intakefiles.save(PAGED.id, f"file{index}.pdf", PDF, "application/pdf")["id"]
+        for index in range(5)
+    )
+    STUB.pages_served = 0
+    ok(
+        "listing() follows the continuation token across pages rather than "
+        "returning only the first - five objects, two per page",
+        [row["id"] for row in intakefiles.listing(PAGED.id)] == paged_ids
+        and STUB.pages_served == 3,
+    )
+    ok(
+        "and a single-object lookup still resolves through the same paged walk",
+        intakefiles.read(PAGED.id, paged_ids[0]) == (PDF, "application/pdf"),
+    )
+
+    _real_batch = intakefiles._DELETE_BATCH
+    try:
+        intakefiles._DELETE_BATCH = 2
+        STUB.delete_calls = []
+        removed = intakefiles.forget(PAGED.id)
+        ok(
+            "forget() flushes a full batch mid-walk instead of accumulating every "
+            "key - five objects at two per call is three calls, and every one of "
+            "them is deleted",
+            removed == 5
+            and [len(call) for call in STUB.delete_calls] == [2, 2, 1]
+            and intakefiles.listing(PAGED.id) == [],
+        )
+    finally:
+        intakefiles._DELETE_BATCH = _real_batch
+
+    REFUSED = new_intake("One key the Space will not give up.")
+    stubborn = intakefiles.save(REFUSED.id, "stuck.pdf", PDF, "application/pdf")
+    fine = intakefiles.save(REFUSED.id, "fine.pdf", PDF, "application/pdf")
+    STUB.undeletable = {
+        key for key in STUB.objects if key.endswith(f"{stubborn['id']}.pdf")
+    }
+    ok(
+        "a Space that refuses one key reports it in the response body rather than "
+        "raising, and forget() counts what actually went - one of two, not two, "
+        "and not zero",
+        intakefiles.forget(REFUSED.id) == 1,
+    )
+    ok(
+        "with the key it could not remove still there, and the one it could gone",
+        [row["id"] for row in intakefiles.listing(REFUSED.id)] == [stubborn["id"]]
+        and fine["id"] not in {row["id"] for row in intakefiles.listing(REFUSED.id)},
+    )
+    STUB.undeletable = set()
+
     STUB.fail_delete = True
     ok(
         "a delete that cannot reach the network is logged and counted as nothing "
@@ -942,10 +1183,11 @@ try:
 finally:
     intakefiles._client = _real_client
     (
-        config.SPACES_KEY,
-        config.SPACES_SECRET,
-        config.SPACES_REGION,
-        config.SPACES_BUCKET,
+        config.DO_SPACES_ACCESS_KEY,
+        config.DO_SPACES_SECRET_KEY,
+        config.DO_SPACES_REGION,
+        config.DO_SPACES_BUCKET,
+        config.DO_SPACES_ENDPOINT,
     ) = _real_credentials
 
 ok(
@@ -954,9 +1196,11 @@ ok(
     intakefiles.configured() is False,
 )
 ok(
-    "and boto3 was never imported, through any of that: the whole Spaces branch "
-    "was exercised through the one seam that would have imported it",
-    "boto3" not in sys.modules,
+    "and neither boto3 nor botocore was imported, through any of that: the whole "
+    "Spaces branch - put, get, list, presign, paginate, batch-delete, and every "
+    "failure mode above - was exercised through the one seam that would have "
+    "imported them",
+    "boto3" not in sys.modules and "botocore" not in sys.modules,
 )
 
 

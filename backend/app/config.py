@@ -121,24 +121,37 @@ if not GENERATED_DIR.is_absolute():
 
 
 #: DigitalOcean Spaces, where a client's own uploaded files go when there is
-#: somewhere to put them. All four or none: `app.intakefiles.configured()` is
-#: the predicate, and with any of them missing the same bytes go to the
+#: somewhere to put them. Four of these or none: `app.intakefiles.configured()`
+#: is the predicate, and with any of the four missing the same bytes go to the
 #: workspace's own `_intake_files/` instead. That fallback is not a stub - it is
 #: what a studio running PRISM on one machine should be using, and it is what
 #: keeps every `check_*.py` offline and network-free.
 #:
+#: Named `DO_SPACES_*` because that is what is already in this install's `.env`
+#: and because it says whose object store this is, which `SPACES_KEY` did not.
+#:
 #: Server-side only, exactly as `GEMINI_API_KEY` above is. Nothing reads these
 #: onto the wire: `/api/health` may say *whether* Spaces is configured, the same
 #: way it already reports `key_configured` for Gemini, and never more than that.
-SPACES_KEY: str = _env_str("SPACES_KEY", "")
-SPACES_SECRET: str = _env_str("SPACES_SECRET", "")
+DO_SPACES_ACCESS_KEY: str = _env_str("DO_SPACES_ACCESS_KEY", "")
+DO_SPACES_SECRET_KEY: str = _env_str("DO_SPACES_SECRET_KEY", "")
 
-#: The Space's region slug - `sgp1`, `nyc3`, `fra1`. The API endpoint is derived
-#: from it (`app.intakefiles.endpoint`) rather than configured separately: it is
-#: a pure function of the region for every Space there is, and a fifth variable
-#: would only be a fifth thing to get subtly wrong.
-SPACES_REGION: str = _env_str("SPACES_REGION", "")
-SPACES_BUCKET: str = _env_str("SPACES_BUCKET", "")
+#: The Space's region slug - `sgp1`, `nyc3`, `fra1` - and its bucket. These two
+#: with the two credentials above are the four `configured()` requires.
+DO_SPACES_REGION: str = _env_str("DO_SPACES_REGION", "")
+DO_SPACES_BUCKET: str = _env_str("DO_SPACES_BUCKET", "")
+
+#: The API endpoint, and the one of the five that is genuinely optional.
+#: `https://<region>.digitaloceanspaces.com` is the correct answer for every
+#: Space there is, so `app.intakefiles.endpoint()` derives exactly that when this
+#: is empty and there is nothing to configure in the ordinary case. It is still
+#: read rather than only derived, for the cases the derivation cannot reach: a
+#: CDN edge hostname, a region DigitalOcean adds after this line was written, or
+#: an S3-compatible store that is not DigitalOcean at all being pointed at for a
+#: dry run. `configured()` deliberately does not require it - a studio who set
+#: the four that matter and not this one should get Spaces, not the local
+#: fallback.
+DO_SPACES_ENDPOINT: str = _env_str("DO_SPACES_ENDPOINT", "")
 
 
 # --- HTTP --------------------------------------------------------------------

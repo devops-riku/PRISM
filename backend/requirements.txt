@@ -36,4 +36,13 @@ pypdf>=4.0
 # back to the workspace's own folder when no credentials are configured, so the
 # app imports and every check script runs on a machine that has never installed
 # this.
-boto3>=1.34
+#
+# The floor is 1.36 rather than 1.34 for a specific reason: botocore 1.36
+# changed `request_checksum_calculation` to default to `when_supported`, so
+# PutObject - the one operation this module performs on the write path - began
+# carrying `x-amz-checksum-crc32`. A `>=1.34` floor would have permitted both
+# behaviours on the same line of code, and this repo has no lockfile to settle
+# which one a given machine gets. Nothing here claims DigitalOcean refuses a
+# checksummed put; the point is that a request shape should not depend on which
+# side of a documented default change pip happened to resolve.
+boto3>=1.36
