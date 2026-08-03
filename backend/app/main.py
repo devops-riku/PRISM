@@ -3187,12 +3187,47 @@ def _client_advance(intake_id: str, to: str, **fields) -> intakes.Intake:
 
 
 class ClientSubmitRequest(BaseModel):
-    """The client's own four fields, filled in once from `issued`."""
+    """What the client fills in once, from `issued`."""
 
     client_email: str = ""
     client_phone: str = ""
     scope: str = ""
     budget_text: str = ""
+    #: Which discipline the client says this is, and - for `other` alone -
+    #: their own word for it. Plain `str` rather than an enum for the same
+    #: reason `Intake.state` is: the closed set lives in `kinds.BY_ID` and is
+    #: enforced by `_normalise_client_kind` below, not by Pydantic on the way
+    #: in, so an unknown id is answered as the empty string rather than as a
+    #: 422 naming every kind this build happens to know.
+    client_kind: str = ""
+    client_kind_label: str = ""
+
+
+def _normalise_client_kind(raw: str) -> str:
+    """One of `kinds.BY_ID`, or empty for anything else.
+
+    Membership, never a cast, and never trusted from the wire: this arrives
+    from a stranger holding a link, and an id outside the set would reach
+    `kinds.resolve` - which falls back to the default - and be stored on the
+    record as a discipline nobody offers. Empty is the honest answer for "they
+    did not choose", and `App.tsx`'s `readPreset` treats it exactly as it
+    treats an absent one: the studio's own preset kind stands.
+    """
+    return (raw or "").strip().lower() if (raw or "").strip().lower() in kinds.BY_ID else ""
+
+
+def _normalise_client_kind_label(raw: str) -> str:
+    """The client's own word for an `other` discipline, bounded at
+    `kinds.MAX_LABEL`.
+
+    Bounded here as well as in the browser, because the browser's `maxLength`
+    is a courtesy to whoever is typing and not a control on whoever is
+    posting. The value is *sanitised* far downstream, in `prompts.kind_block`,
+    which is where it meets the model - deliberately not here, so there is one
+    place that decides what is safe to put in a prompt rather than two that
+    have to agree.
+    """
+    return _CONTROL_CHARS.sub("", raw or "").strip()[: kinds.MAX_LABEL]
 
 
 class ClientReviseRequest(BaseModel):
@@ -3229,6 +3264,17 @@ async def submit_client_intake(token: str, body: ClientSubmitRequest) -> dict:
     client_phone = _normalise_client_phone(body.client_phone)
     scope = _normalise_scope(body.scope)
     budget_text = _normalise_budget_text(body.budget_text)
+    client_kind = _normalise_client_kind(body.client_kind)
+    # Read for `other` alone, exactly as `prompts.kind_block` reads it: every
+    # other kind carries its own name already, so a label sent alongside one
+    # of them is a word nothing will ever use, and storing it would put a
+    # discipline on the record that the studio would reasonably believe was
+    # chosen. Dropped rather than stored-and-ignored.
+    client_kind_label = (
+        _normalise_client_kind_label(body.client_kind_label)
+        if client_kind == kinds.OTHER.id
+        else ""
+    )
 
     workspace_id, intake_id = found
     borrowed = workspaces.borrow(workspace_id)
@@ -3240,6 +3286,8 @@ async def submit_client_intake(token: str, body: ClientSubmitRequest) -> dict:
             client_phone=client_phone,
             scope=scope,
             budget_text=budget_text,
+            client_kind=client_kind,
+            client_kind_label=client_kind_label,
         )
         # `submitted` is one of `clientview.of`'s waiting states, which needs
         # no bundle - passing none is correct, exactly as it is for `issued`.
