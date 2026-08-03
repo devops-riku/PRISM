@@ -875,6 +875,27 @@ export type IntakeAttachment = {
 }
 
 /**
+ * `intakefiles.INLINE_TYPES`, mirrored - the raster allowlist and nothing
+ * else. The plan is explicit that this set has exactly one source of truth
+ * and that a second file writing it out again, even correctly, is the same
+ * drift an earlier draft of the plan itself caused when it wrote the
+ * allowlist as four types while Task 3 wrote five: "Import it; do not
+ * restate it." There is nothing to import across a language boundary, so
+ * this is that restatement, made once, here, rather than left for whichever
+ * component happens to need "is this one of the pictures" to invent its own
+ * version - `file.kind.startsWith('image/')`, say, which only coincides with
+ * this set because `intakefiles.CONTENT_TYPES` happens to have no other
+ * `image/*` entries today.
+ */
+export const INLINE_KINDS: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+])
+
+/**
  * One client request and everything that has happened to it - `intakes.Intake`.
  *
  * Storage-side and workspace-scoped, like `Member` and `Invite`: it never

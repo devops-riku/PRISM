@@ -5,6 +5,7 @@ import { formatBytes, formatDate } from '../lib/format'
 import RowMenu from './RowMenu'
 import { useRole } from '../lib/role'
 import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
+import { INLINE_KINDS } from '../types'
 import type { Intake, IntakeAttachment, IntakeRevision, IntakeState } from '../types'
 
 /**
@@ -452,56 +453,64 @@ type AttachmentsProps = {
  *
  * A count line rather than a bare list: a queue row is scanned, not read,
  * and "3 files attached" answers "did they send anything" before anyone has
- * to look further. The list itself is never cut to the first few to make it
- * fit - it is bounded by height and scrolls instead, the same treatment this
- * file already gives a long revision request (`asked.asked`, in `IntakeRow`
- * below) - so a request with more files than fit on screen still shows every
- * one of them, just not all at once.
+ * to look further. It sits **outside** the scrolling region below it, on
+ * purpose - it is the thing this whole block exists to answer at a glance,
+ * and a row with enough files to need the scrollbar is exactly the row where
+ * it would otherwise scroll out of view first. The list itself is never cut
+ * to the first few to make it fit - only the list, not the count, is bounded
+ * by height and scrolls instead, the same treatment this file already gives
+ * a long revision request (`asked.asked`, in `IntakeRow` below) - so a
+ * request with more files than fit on screen still shows every one of them,
+ * just not all at once.
  */
 function AttachmentsBlock({ intakeId, attachments, closed }: AttachmentsProps) {
   if (!attachments.length) return null
 
   return (
-    <div className="mt-1 max-h-[9rem] max-w-[52ch] overflow-y-auto border-l-2 border-l-hairline pl-2">
+    <div className="mt-1 max-w-[52ch] border-l-2 border-l-hairline pl-2">
       <p className={MONO_LABEL}>
         {attachments.length === 1 ? '1 file attached' : `${attachments.length} files attached`}
       </p>
-      {closed ? (
-        <p className="mt-0.5 font-body text-[12.5px] leading-[1.5] text-faint">
-          Removed when this request was closed.
-        </p>
-      ) : null}
-      <ul className="mt-0.5 flex flex-col gap-0.5">
-        {attachments.map((file) => {
-          const label = file.name || 'Attachment'
-          const size = formatBytes(file.bytes)
-          if (closed) {
+      <div className="mt-0.5 max-h-[9rem] overflow-y-auto">
+        {closed ? (
+          <p className="font-body text-[12.5px] leading-[1.5] text-faint">
+            Removed when this request was closed.
+          </p>
+        ) : null}
+        <ul className="mt-0.5 flex flex-col gap-0.5">
+          {attachments.map((file) => {
+            const label = file.name || 'Attachment'
+            const size = formatBytes(file.bytes)
+            if (closed) {
+              return (
+                <li key={file.id} className="truncate font-body text-[13px] text-faint">
+                  {label} <span className={MONO_LABEL}>{size}</span>
+                </li>
+              )
+            }
+            const url = intakeFileUrl(intakeId, file.id)
+            // `intakefiles.INLINE_TYPES` is the plan's single source of
+            // truth for the raster allowlist - mirrored once, in
+            // `types.ts`'s `INLINE_KINDS`, and read here rather than
+            // restated as a shape of its own (`kind.startsWith('image/')`
+            // only coincides with the real set today and is exactly the
+            // drift the plan warns about).
+            const isRaster = INLINE_KINDS.has(file.kind)
             return (
-              <li key={file.id} className="truncate font-body text-[13px] text-faint">
-                {label} <span className={MONO_LABEL}>{size}</span>
+              <li key={file.id} className="truncate">
+                <a
+                  href={url}
+                  className="font-body text-[13px] text-ballpoint underline underline-offset-[3px]"
+                  onClick={openAttachment(url, label, !isRaster)}
+                >
+                  {label}
+                </a>{' '}
+                <span className={MONO_LABEL}>{size}</span>
               </li>
             )
-          }
-          const url = intakeFileUrl(intakeId, file.id)
-          // The only `image/*` kinds that ever reach this manifest are the
-          // five in `intakefiles.INLINE_TYPES` - `image/svg+xml` is refused
-          // at the door in Task 3, never stored - so this prefix check is a
-          // safe stand-in for that allowlist without restating it here.
-          const isRaster = file.kind.startsWith('image/')
-          return (
-            <li key={file.id} className="truncate">
-              <a
-                href={url}
-                className="font-body text-[13px] text-ballpoint underline underline-offset-[3px]"
-                onClick={openAttachment(url, label, !isRaster)}
-              >
-                {label}
-              </a>{' '}
-              <span className={MONO_LABEL}>{size}</span>
-            </li>
-          )
-        })}
-      </ul>
+          })}
+        </ul>
+      </div>
     </div>
   )
 }

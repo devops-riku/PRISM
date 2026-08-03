@@ -2789,12 +2789,14 @@ def _attachment_disposition(kind: str, name: str) -> str:
     percent-encoded, and what every current browser actually opens or saves
     the file under.
 
-    A name with no ASCII characters at all - `提案書.pdf` - reduces the
-    fallback to the bare word "attachment" with no extension. That is
-    deliberate, not a gap: `filename*` still carries the real name correctly
-    encoded, which is what every current browser actually reads, and the
-    fallback's only job is to be a legal RFC 6266 token for whatever does
-    not - never to be recognisable in every case.
+    A name with no ASCII characters at all reduces the fallback to whatever
+    ASCII is left over - `提案書.pdf` keeps only its extension and falls back
+    to `.pdf`, and `提案書` alone (no extension survives to keep) falls back
+    to the bare word `attachment`. Both are deliberate, not a gap: `filename*`
+    still carries the real name correctly encoded, which is what every
+    current browser actually reads, and the fallback's only job is to be a
+    legal RFC 6266 token for whatever does not - never to be recognisable in
+    every case.
     """
     disposition = intakefiles.disposition_for(kind)
     original = name or "attachment"
@@ -2862,7 +2864,23 @@ async def read_intake_file(intake_id: str, file_id: str) -> Response:
     # `stored_type` is kept only as a fallback for an entry that somehow
     # lacks one, so this response is never inconsistent with the record that
     # named the file.
+    #
+    # Clamped against `intakefiles.CONTENT_TYPES` rather than trusted outright.
+    # `attachments` is a bare `List[dict]` in `ADVANCE_FIELDS` with no
+    # per-entry model (`Intake.attachments`'s own docstring says so), and
+    # `/submit` is its only writer *today* - but "today" is a convention, not
+    # a check, and `advance()` validates nothing about a dict's contents. An
+    # entry carrying `{"kind": "text/html"}` is accepted by `advance()` right
+    # now, and unclamped this route would answer `Content-Type: text/html` on
+    # the studio's own origin for it. Still `attachment` for anything outside
+    # `INLINE_TYPES`, and still `nosniff` either way, so that is not a live
+    # hole - but the type actually served should be one this module chose to
+    # store things as, not whatever a dict happens to say, on either branch:
+    # `stored_type` is exactly as unclamped when it comes from Spaces' own
+    # reported `ContentType`, which nothing here has verified either.
     content_type = str(record.get("kind") or stored_type or intakefiles.FALLBACK_TYPE)
+    if content_type not in intakefiles.CONTENT_TYPES:
+        content_type = intakefiles.FALLBACK_TYPE
     name = str(record.get("name") or "attachment")
 
     return Response(

@@ -341,6 +341,71 @@ ok(
     == 404,
 )
 
+# The case above is "this workspace's intake, asked from another workspace" -
+# not the same thing as "a file id that belongs to an intake in *another*
+# workspace, asked through *this* workspace's own intake", which is the pair
+# the brief actually named. `intakes.get(intake_a.id)` already 404s from
+# `other`'s workspace (the assertion above), so that half is covered; this is
+# the other half - `intake_a` resolves fine under `headers`, and the foreign
+# id is refused by `_owned_attachment` failing to find it in `intake_a`'s own
+# manifest, not by `intake_a` itself being unreadable.
+workspaces.use(other.id)
+foreign_ws_intake = intakes_module.create(
+    client_email="", client_phone="", scope="", budget_text="", preset={}, created_by="",
+)
+foreign_ws_entry = intakefiles.save(
+    foreign_ws_intake.id, "other-workspace.pdf", FILE_A_BYTES, "application/pdf"
+)
+intakes_module.advance(
+    foreign_ws_intake.id, intakes_module.SUBMITTED, attachments=[foreign_ws_entry]
+)
+workspaces.use(made.id)
+
+ok(
+    "a file id belonging to an intake in a *different workspace*, asked "
+    "through this workspace's own intake, is 404 too - not merely a file id "
+    "from a different intake in the same workspace",
+    client.get(
+        f"/api/intakes/{intake_a.id}/files/{foreign_ws_entry['id']}", headers=headers
+    ).status_code
+    == 404,
+)
+
+# --- A malformed manifest cannot make this route serve an arbitrary type ----
+#
+# `attachments` is a bare `List[dict]` in `intakes.ADVANCE_FIELDS` with no
+# per-entry model - `advance()` validates nothing about a dict's contents, so
+# `kind` being `intakefiles.resolve_type`'s own output is a convention `/submit`
+# happens to follow, not something enforced at the write. Proven reachable
+# directly through `advance()`, the same door `/submit` itself uses.
+mistyped_target = intakes_module.create(
+    client_email="", client_phone="", scope="", budget_text="", preset={}, created_by="",
+)
+mistyped_entry = intakefiles.save(mistyped_target.id, "innocuous.pdf", FILE_A_BYTES, "application/pdf")
+# A `kind` `intakefiles.save()` would never itself produce - stored fine,
+# since storage never re-checks a manifest string, and `advance()` has no
+# model behind `attachments` to refuse it either.
+intakes_module.advance(
+    mistyped_target.id,
+    intakes_module.SUBMITTED,
+    attachments=[dict(mistyped_entry, kind="text/html")],
+)
+mistyped_response = client.get(
+    f"/api/intakes/{mistyped_target.id}/files/{mistyped_entry['id']}", headers=headers
+)
+ok(
+    "a manifest kind outside intakefiles.CONTENT_TYPES is clamped to the "
+    "fallback type, not served as whatever the dict happens to say",
+    mistyped_response.status_code == 200
+    and mistyped_response.headers.get("content-type", "").split(";")[0]
+    == intakefiles.FALLBACK_TYPE,
+)
+ok(
+    "...and still attachment, not inline, for the same reason - a clamped "
+    "type can never land inside INLINE_TYPES",
+    mistyped_response.headers.get("content-disposition", "").startswith("attachment;"),
+)
+
 # --- Mutation proof: which layer is the gate, said plainly rather than implied
 #
 # Be honest about what this proves. The *primary* cross-intake gate on this
