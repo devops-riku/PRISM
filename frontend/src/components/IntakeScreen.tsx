@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createIntake } from '../lib/api'
 import { formatDate } from '../lib/format'
 import { useRole } from '../lib/role'
+import { padDefaults } from './BriefForm'
 import CurrencySelect from './CurrencySelect'
 import Dropdown from './Dropdown'
 import { FieldLabel } from './FieldRow'
@@ -34,7 +35,16 @@ import type {
  * terms here does not set them twice. The exact key set is `IntakePreset` in
  * `types.ts`, and `App.tsx`'s `readPreset` is the other half of it - a key
  * written here that nothing reads back is a control that silently does
- * nothing.
+ * nothing. Both halves are compiler-checked (the preset built below is a whole
+ * `IntakePreset`; `readPreset` returns a `PresetRead` requiring every key), but
+ * the last step - `BriefForm` actually calling a setter for what it receives -
+ * is a rule rather than a type, so a new key has to be followed through all
+ * three files by hand.
+ *
+ * Every field is written on every Generate, empty or not, because empty is a
+ * configuration: clearing the instalment box says something different from
+ * leaving it at three, and the reader carries a present-but-empty string
+ * verbatim so the pad opens on what was actually set.
  *
  * **The link is shown once.** `Intake.token` is excluded from the wire on
  * purpose, so the queue cannot look one up and there is no route that will;
@@ -64,23 +74,26 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
   // Every field below is one key of `IntakePreset`, named the way the pad
   // names it rather than the way the wire does - `submit` is the one place the
   // two vocabularies meet.
-  const [kind, setKind] = useState<QuotationKind>('software')
-  const [kindLabel, setKindLabel] = useState('')
-  const [currency, setCurrency] = useState(defaults.currency || 'PHP')
-  const [marketRegion, setMarketRegion] = useState(defaults.market_region || 'Philippines')
-  // The studio default may still be the older boolean, so the mode falls back
-  // to it rather than to a hard-coded guess - the same ladder `BriefForm`
-  // climbs, and it has to be the same one or a link generated here would open
-  // a pad on a different tax basis than the studio saved.
-  const [taxMode, setTaxMode] = useState<TaxMode>(
-    defaults.tax_mode || (defaults.tax_inclusive ? 'inclusive' : 'exclusive'),
-  )
-  const [pricingBasis, setPricingBasis] = useState<PricingBasis>('rate_card')
-  const [depositPct, setDepositPct] = useState('')
-  const [instalments, setInstalments] = useState('3')
-  const [cadence, setCadence] = useState<PaymentCadence>('monthly')
-  const [depositTrigger, setDepositTrigger] = useState('Signed statement of work')
-  const [tiers, setTiers] = useState('')
+  //
+  // Opened from `padDefaults`, which is the pad's own answer to the same
+  // question, called here rather than restated. Two copies of these eleven
+  // values would agree on the day they were written and then drift, and this
+  // screen writes every key unconditionally - so a stale default here would be
+  // pinned into every new intake permanently and would then override the pad
+  // that had stopped believing it.
+  const opening = padDefaults(defaults)
+
+  const [kind, setKind] = useState<QuotationKind>(opening.kind)
+  const [kindLabel, setKindLabel] = useState(opening.kind_label)
+  const [currency, setCurrency] = useState(opening.currency)
+  const [marketRegion, setMarketRegion] = useState(opening.market_region)
+  const [taxMode, setTaxMode] = useState<TaxMode>(opening.tax_mode)
+  const [pricingBasis, setPricingBasis] = useState<PricingBasis>(opening.pricing_basis)
+  const [depositPct, setDepositPct] = useState(opening.deposit_pct)
+  const [instalments, setInstalments] = useState(opening.instalments)
+  const [cadence, setCadence] = useState<PaymentCadence>(opening.payment_cadence)
+  const [depositTrigger, setDepositTrigger] = useState(opening.deposit_trigger)
+  const [tiers, setTiers] = useState(opening.tiers)
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -88,6 +101,41 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
   // a link exists on screen and nowhere else.
   const [issued, setIssued] = useState<IntakeIssued | null>(null)
   const [copyNote, setCopyNote] = useState('')
+
+  /**
+   * Generating swaps the form out for the link panel, and swapping back is the
+   * same move in reverse. React gives no signal of its own that either
+   * happened: focus was on a button that no longer exists, so it falls to
+   * `<body>`, and nothing announces the new content.
+   *
+   * The same treatment Task 8's four client faces give themselves, and for a
+   * sharper reason here - `role="status"` on the panel so it is announced as
+   * soon as it appears whether or not anything is focused, plus moving focus
+   * to its heading, which is the more reliable of the two on assistive tech
+   * that reads focus moves better than live regions. Belt and suspenders, as
+   * `ClientWaiting`'s own docstring puts it. This is the one screen in the app
+   * where a missed announcement is unrecoverable: what appears is the only
+   * copy of a link that will ever exist.
+   *
+   * Known and accepted: `role="status"` implies `aria-atomic="true"`, so a
+   * reader announcing the panel on arrival reads the token aloud with it.
+   * That is the house pattern, and a link nobody is told about is worse.
+   *
+   * The first run is skipped. Arriving at this screen is a navigation, not a
+   * swap, and stealing focus from the top of a form somebody just opened is a
+   * different and unwelcome behaviour.
+   */
+  const issuedHeadingRef = useRef<HTMLHeadingElement | null>(null)
+  const formHeadingRef = useRef<HTMLHeadingElement | null>(null)
+  const swapped = useRef(false)
+  useEffect(() => {
+    if (!swapped.current) {
+      swapped.current = true
+      return
+    }
+    const landing = issued ? issuedHeadingRef : formHeadingRef
+    landing.current?.focus()
+  }, [issued])
 
   // Distinct, non-empty names. One name is a label, not a tier - and the pad
   // refuses to prepare a quotation from one, so a preset carrying one would
@@ -186,12 +234,18 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
               </a>
             </div>
           ) : issued ? (
-            <div className="max-w-[40rem]">
+            <div role="status" className="max-w-[40rem]">
               <p className={MONO_LABEL}>Link generated</p>
+              <h3
+                ref={issuedHeadingRef}
+                tabIndex={-1}
+                className={`${DISPLAY} focus-landing mt-2 text-[17px]`}
+              >
+                Send this link to the client.
+              </h3>
               <p className="mt-2 max-w-[58ch] font-body text-[15px] leading-[1.6] text-ink">
-                Send this to the client. They open it with no account, describe what they need in
-                their own words, and the request comes back to the queue priced the way you just
-                set it.
+                They open it with no account, describe what they need in their own words, and the
+                request comes back to the queue priced the way you just set it.
               </p>
 
               <div className="mt-4">
@@ -209,6 +263,10 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
                     Copy link
                   </button>
                 </div>
+                {/* Its own live region inside the panel's, deliberately: a
+                    nested one owns its own subtree, so pressing Copy announces
+                    this line alone rather than re-reading the whole atomic
+                    panel - token included - every time. */}
                 <p role="status" className="mt-2 font-body text-[13px] leading-[1.6] text-ballpoint">
                   {copyNote}
                 </p>
@@ -246,7 +304,15 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
           ) : (
             <form onSubmit={submit} className="max-w-[46rem]">
               <section>
-                <h3 className={`${DISPLAY} text-[17px]`}>Kind of work</h3>
+                {/* Where focus lands coming back from the link panel, so
+                    "Generate another" is as announced as generating was. */}
+                <h3
+                  ref={formHeadingRef}
+                  tabIndex={-1}
+                  className={`${DISPLAY} focus-landing text-[17px]`}
+                >
+                  Kind of work
+                </h3>
                 <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
                   It decides what the second document is, and the words the quotation is written
                   in. The client is not asked this &mdash; it is the studio&rsquo;s reading of the

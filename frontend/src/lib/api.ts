@@ -1096,6 +1096,32 @@ function readIntake<T extends Intake>(entry: T): T {
 }
 
 /**
+ * The two calls that mint a link, checked before their answer is handed on.
+ *
+ * `link` is the single string in this feature with no second chance: it is
+ * shown once and no route will ever return it again, so an answer missing it
+ * would put `value={undefined}` in the field and hand `writeText(undefined)`
+ * to the clipboard - a studio staring at an empty box with nothing to copy and
+ * no idea why. `response_model=IntakeIssued` makes that unlikely rather than
+ * impossible, and unlikely is the wrong bar for the one value that cannot be
+ * refetched.
+ *
+ * The message says the request **was** recorded, deliberately. It was: the
+ * server created it before serialising this answer, and a message implying
+ * otherwise gets a studio pressing Generate a second time and ending up with
+ * two intakes for one client.
+ */
+function readIssued(issued: IntakeIssued, what: string): IntakeIssued {
+  if (!issued || typeof issued.id !== 'string' || typeof issued.link !== 'string' || !issued.link) {
+    throw new ApiError(
+      `The request was ${what}, but its link did not come back. Open the queue to find it, then reissue the link.`,
+      { kind: 'parse' },
+    )
+  }
+  return readIntake(issued)
+}
+
+/**
  * The client-request queue, newest first. Readable by any member; generating
  * one, sending it, reissuing its link and closing it are each an admin's call -
  * see the four below.
@@ -1149,7 +1175,7 @@ export async function createIntake(
     headers: { 'Content-Type': 'application/json' },
     signal: options.signal,
   })
-  return readIntake(issued)
+  return readIssued(issued, 'recorded')
 }
 
 /**
@@ -1195,7 +1221,7 @@ export async function relinkIntake(id: string, options: CallOptions = {}): Promi
     method: 'POST',
     signal: options.signal,
   })
-  return readIntake(issued)
+  return readIssued(issued, 'reissued')
 }
 
 /** Not going ahead. Admin-only; 404s when the id is absent or malformed. */

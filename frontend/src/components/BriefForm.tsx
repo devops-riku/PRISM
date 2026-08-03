@@ -75,16 +75,63 @@ type SchedulePreview = {
  * client's own words, always present because `App.tsx` coerces them to strings
  * whether the record carried them or not. The rest is `IntakePreset` - the
  * configuration the studio fixed when it generated the client's link - and
- * every field of it is optional here: absent means nothing was configured, and
- * the form keeps the default it opened with rather than being blanked by a key
- * that was never written. The snake_case is the wire's own, unchanged, exactly
- * as `StudioDefaults` arrives on `defaults` beside it.
+ * every field of it is optional here, under one rule that reads the same way
+ * at every end of this feature: **a key that is present and a string is
+ * carried verbatim; absent or non-string means not configured.** Only the
+ * second of those keeps the default this form opened with. The snake_case is
+ * the wire's own, unchanged, exactly as `StudioDefaults` arrives on `defaults`
+ * beside it.
  */
 type BriefPrefill = {
   scope: string
   budget: string
   clientName: string
 } & Partial<IntakePreset>
+
+/**
+ * The configuration a pad opens on, before anybody has touched it.
+ *
+ * Exported because two screens open on it and there must not be two answers.
+ * `BriefForm` seeds its own state from this, and `IntakeScreen` starts its
+ * preset form from the same call - which matters more than it looks: that
+ * screen writes every key of the preset unconditionally, so a default that
+ * drifted here without drifting there would be pinned into every new intake
+ * permanently, and the pad would then be "corrected" by a value it had itself
+ * stopped believing in. One function, called twice, is what stops that.
+ *
+ * The shape is `IntakePreset` rather than a type of its own because it is
+ * literally the same eleven fields: what a pad opens on is exactly what a
+ * studio can configure ahead of it.
+ *
+ * The pad owns this rather than `types.ts` because `types.ts` carries no
+ * runtime code at all, and rather than `IntakeScreen` because these are the
+ * pad's defaults - a screen configuring a pad reads them from the pad, the
+ * same direction `KINDS` already travels from `KindPicker` to here.
+ */
+export function padDefaults(defaults: Partial<StudioDefaults>): IntakePreset {
+  return {
+    // Asked first because it shapes everything after it - the words the model
+    // writes in, and the whole second document. Software is the default
+    // because it is what PRISM has always quoted, so a studio that only does
+    // one thing never has to think about this step.
+    kind: 'software',
+    kind_label: '',
+    currency: defaults.currency || 'PHP',
+    market_region: defaults.market_region || 'Philippines',
+    // exclusive | inclusive | none. The studio default may still be the older
+    // boolean, so the mode falls back to it rather than to a hard-coded guess.
+    tax_mode: defaults.tax_mode || (defaults.tax_inclusive ? 'inclusive' : 'exclusive'),
+    pricing_basis: 'rate_card',
+    // Empty rather than '0', and the difference is load-bearing: an empty
+    // deposit means "PRISM proposes a schedule", which is not the same
+    // decision as a deposit of nothing.
+    deposit_pct: '',
+    instalments: '3',
+    payment_cadence: 'monthly',
+    deposit_trigger: 'Signed statement of work',
+    tiers: '',
+  }
+}
 
 type BriefFormProps = {
   /** The studio's saved defaults, or `{}` when they could not be read. */
@@ -109,38 +156,36 @@ export default function BriefForm({
   intakeId = '',
   prefill,
 }: BriefFormProps) {
-  // Asked first because it shapes everything after it - the words the model
-  // writes in, and the whole second document. Software is the default because
-  // it is what PRISM has always quoted, so a studio that only does one thing
-  // never has to think about this step.
-  const [kind, setKind] = useState<QuotationKind>('software')
-  const [kindLabel, setKindLabel] = useState('')
+  // What this pad opens on. Only the first render's value is ever used - that
+  // is what `useState` does with an initial value - so recomputing it per
+  // render costs nothing and keeps the eleven defaults in one call rather
+  // than spread across eleven initialisers that could each drift alone.
+  const opening = padDefaults(defaults)
+
+  const [kind, setKind] = useState<QuotationKind>(opening.kind)
+  const [kindLabel, setKindLabel] = useState(opening.kind_label)
   const [brief, setBrief] = useState('')
-  const [currency, setCurrency] = useState(defaults.currency || 'PHP')
-  const [marketRegion, setMarketRegion] = useState(defaults.market_region || 'Philippines')
+  const [currency, setCurrency] = useState(opening.currency)
+  const [marketRegion, setMarketRegion] = useState(opening.market_region)
   const [clientName, setClientName] = useState('')
   const [projectName, setProjectName] = useState('')
   const [budgetHint, setBudgetHint] = useState('')
   const [timelineHint, setTimelineHint] = useState('')
   const [targetTotal, setTargetTotal] = useState('')
-  // exclusive | inclusive | none. The studio default may still be the older
-  // boolean, so the mode falls back to it rather than to a hard-coded guess.
-  const [taxMode, setTaxMode] = useState<TaxMode>(
-    defaults.tax_mode || (defaults.tax_inclusive ? 'inclusive' : 'exclusive'),
-  )
-  const [depositPct, setDepositPct] = useState('')
-  const [instalments, setInstalments] = useState('3')
-  const [cadence, setCadence] = useState<PaymentCadence>('monthly')
-  const [depositTrigger, setDepositTrigger] = useState('Signed statement of work')
+  const [taxMode, setTaxMode] = useState<TaxMode>(opening.tax_mode)
+  const [depositPct, setDepositPct] = useState(opening.deposit_pct)
+  const [instalments, setInstalments] = useState(opening.instalments)
+  const [cadence, setCadence] = useState<PaymentCadence>(opening.payment_cadence)
+  const [depositTrigger, setDepositTrigger] = useState(opening.deposit_trigger)
   const [termsMode, setTermsMode] = useState<'equal' | 'custom'>('equal')
   const [rows, setRows] = useState<PaymentRow[]>([
     { percent: '40', trigger: 'Signed statement of work' },
     { percent: '30', trigger: 'Staging accepted' },
     { percent: '30', trigger: 'Production go-live' },
   ])
-  const [tiers, setTiers] = useState('')
+  const [tiers, setTiers] = useState(opening.tiers)
   const [ceiling, setCeiling] = useState('')
-  const [pricingBasis, setPricingBasis] = useState<PricingBasis>('rate_card')
+  const [pricingBasis, setPricingBasis] = useState<PricingBasis>(opening.pricing_basis)
   const [images, setImages] = useState<File[]>([])
   const [step, setStep] = useState(0)
 
@@ -155,11 +200,15 @@ export default function BriefForm({
   // anywhere but here would simply never be seeded at all, and the form would
   // open half-configured with no second chance at the other half.
   //
-  // The preset half is applied only where it says something. An absent field
-  // means the studio configured nothing there (a request generated before the
-  // preset existed carries `{}`, and `readPreset` drops any value it does not
-  // recognise), so the form keeps the default it opened with — which is the
-  // studio's own saved default, and a better answer than an empty control.
+  // The preset half is applied wherever it is *present*, not wherever it is
+  // truthy, and the difference is a real bug rather than a nicety. A studio
+  // that clears the instalment box on `IntakeScreen` configures an empty one;
+  // `instalments` opens at '3' here, so treating empty as "nothing was
+  // configured" left the two screens previewing different schedules from one
+  // configuration. `readPreset` is what draws the line: a key that arrives as
+  // a string is carried verbatim, empty or not, and only an absent or
+  // non-string key comes through as `undefined` - which does mean "nothing was
+  // configured", and keeps the default this form opened with.
   const seeded = useRef(false)
   useEffect(() => {
     if (!prefill || seeded.current) return
@@ -168,17 +217,17 @@ export default function BriefForm({
     setBudgetHint(prefill.budget)
     setClientName(prefill.clientName)
 
-    if (prefill.kind) setKind(prefill.kind)
-    if (prefill.kind_label) setKindLabel(prefill.kind_label)
-    if (prefill.currency) setCurrency(prefill.currency)
-    if (prefill.market_region) setMarketRegion(prefill.market_region)
-    if (prefill.tax_mode) setTaxMode(prefill.tax_mode)
-    if (prefill.pricing_basis) setPricingBasis(prefill.pricing_basis)
-    if (prefill.deposit_pct) setDepositPct(prefill.deposit_pct)
-    if (prefill.instalments) setInstalments(prefill.instalments)
-    if (prefill.payment_cadence) setCadence(prefill.payment_cadence)
-    if (prefill.deposit_trigger) setDepositTrigger(prefill.deposit_trigger)
-    if (prefill.tiers) setTiers(prefill.tiers)
+    if (prefill.kind !== undefined) setKind(prefill.kind)
+    if (prefill.kind_label !== undefined) setKindLabel(prefill.kind_label)
+    if (prefill.currency !== undefined) setCurrency(prefill.currency)
+    if (prefill.market_region !== undefined) setMarketRegion(prefill.market_region)
+    if (prefill.tax_mode !== undefined) setTaxMode(prefill.tax_mode)
+    if (prefill.pricing_basis !== undefined) setPricingBasis(prefill.pricing_basis)
+    if (prefill.deposit_pct !== undefined) setDepositPct(prefill.deposit_pct)
+    if (prefill.instalments !== undefined) setInstalments(prefill.instalments)
+    if (prefill.payment_cadence !== undefined) setCadence(prefill.payment_cadence)
+    if (prefill.deposit_trigger !== undefined) setDepositTrigger(prefill.deposit_trigger)
+    if (prefill.tiers !== undefined) setTiers(prefill.tiers)
     // `termsMode`, the written `rows`, `targetTotal` and `ceiling` are absent
     // from `IntakePreset` on purpose and so are absent here: each depends on
     // what the client actually asked for, and at the moment a link is

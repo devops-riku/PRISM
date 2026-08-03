@@ -806,7 +806,20 @@ export type IntakeRevision = {
  * Anything added here has to be written by `IntakeScreen` and read by
  * `App.tsx`'s `readPreset` in the same change. A key only one end knows about
  * is a setting that silently does nothing: written and never applied, or
- * applied from a key nothing ever writes.
+ * applied from a key nothing ever writes. Both of those ends are compiler
+ * errors - `IntakeScreen` builds a whole `IntakePreset`, and `readPreset`
+ * returns `PresetRead`, which requires every key to be present rather than
+ * merely permitting it. What is **not** a compiler error is `BriefForm`
+ * failing to call a setter for a key it receives; no type can require a
+ * function call, so that last step is a rule written down in its seed block
+ * rather than a guarantee. Add a key here and follow it through all three.
+ *
+ * How a value travels, and it reads the same way at every end: a key that is
+ * present and a string is carried verbatim, empty or not; absent or non-string
+ * means not configured, and the pad keeps the default `padDefaults` opened it
+ * with. Empty is not the same as absent, because two of these fields
+ * (`instalments`, `deposit_trigger`) open the pad on a non-empty value and a
+ * studio can deliberately clear either.
  */
 export type IntakePreset = {
   kind: QuotationKind

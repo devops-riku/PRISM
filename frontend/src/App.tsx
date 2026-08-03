@@ -35,6 +35,7 @@ import QuotationNotice from './components/QuotationNotice'
 import TierSwitcher from './components/TierSwitcher'
 import ErrorNotice from './components/ErrorNotice'
 import { formatDate } from './lib/format'
+import { MONO_LABEL } from './components/tokens'
 import { prefersReducedMotion } from './components/motion'
 import type {
   Intake,
@@ -287,7 +288,10 @@ const PAYMENT_CADENCES: readonly PaymentCadence[] = ['monthly', 'phase', 'milest
  * differently. A cast would compile and hand `BriefForm` a string outside its
  * own union, which then reaches the pad's dropdowns as a value with no option
  * to match and reads as an empty control nobody chose. `undefined` instead
- * means "not configured", and the form keeps the default it opened with.
+ * means "not configured", and the form keeps the default `padDefaults` opened
+ * it with. No "carried verbatim" case here, unlike `presetText`: every member
+ * of every union below is a non-empty string, so there is no empty value for
+ * this to have to tell apart from an absent one.
  */
 function presetMember<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   const text = typeof value === 'string' ? value : ''
@@ -295,40 +299,90 @@ function presetMember<T extends string>(value: unknown, allowed: readonly T[]): 
 }
 
 /**
- * One text field off the same preset. Empty and absent are the same answer
- * here: a preset carrying `market_region: ''` must not blank the pad's own
- * 'Philippines' default, because nothing was configured either way.
+ * One text field off the same preset, carried verbatim.
+ *
+ * Empty and absent are **not** the same answer, and treating them as one was a
+ * real bug: `instalments` and `deposit_trigger` both open the pad on a
+ * non-empty value ('3' and 'Signed statement of work'), so a studio who
+ * deliberately cleared one on `IntakeScreen` had it silently replaced by the
+ * pad's own default, and the same configuration previewed two different
+ * payment schedules on two screens with no warning.
+ *
+ * So the rule is presence, not truthiness: a string is carried as it stands,
+ * and only a key that is absent or is not a string comes back `undefined`,
+ * which is the single answer that means "nothing was configured here". A
+ * whitespace-only value is a cleared field rather than a configured one -
+ * trimming is what every field on `IntakeScreen` does on the way out, and this
+ * is the same trim on the way back in.
  */
 function presetText(value: unknown): string | undefined {
-  const text = typeof value === 'string' ? value.trim() : ''
-  return text || undefined
+  return typeof value === 'string' ? value.trim() : undefined
 }
+
+/**
+ * The currency, which is a code rather than free text and is checked as one.
+ *
+ * Not `presetMember` against `CURRENCIES`: that list is a 23-entry *fallback*
+ * for first paint and `GET /api/currencies` is authoritative (see its own
+ * docstring in `lib/currencies.ts`), so rejecting anything absent from it
+ * would drop a currency the server genuinely serves. What is checked instead
+ * is the shape the select can actually render an option for - three letters,
+ * upper-cased, exactly as `CurrencySelect.normalise` normalises its own
+ * options and as `main._normalise_currency` normalises this field server-side.
+ * That catches `'php'`, `''` and a number, each of which would otherwise reach
+ * a dropdown with no matching option and render the faint 'Choose' placeholder
+ * while the state underneath held a value nobody picked.
+ *
+ * A well-formed but unlisted code is carried on purpose. The server accepts
+ * one, so refusing it here would only make the two disagree.
+ */
+function presetCurrency(value: unknown): string | undefined {
+  const code = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  return /^[A-Z]{3}$/.test(code) ? code : undefined
+}
+
+/**
+ * Every key of `IntakePreset`, each of which may be `undefined` - but none of
+ * which may be missing.
+ *
+ * Deliberately not `Partial<IntakePreset>`, and this is the difference that
+ * makes the type do work rather than describe it: under `Partial`, adding a
+ * key to `IntakePreset` errors only in `IntakeScreen`, which builds a whole
+ * one, and `readPreset` could quietly go on not reading it - a key written and
+ * never read, which is exactly the hazard this feature's own comments warn
+ * about. Requiring every key means the compiler fails the read side too.
+ *
+ * What it still cannot enforce is that `BriefForm` calls a setter for a key it
+ * receives. No type can require a function call. That half stays a rule
+ * written down in `BriefForm`'s seed block, not a guarantee.
+ */
+type PresetRead = { [K in keyof IntakePreset]: IntakePreset[K] | undefined }
 
 /**
  * The PAD configuration a studio fixed when it generated this request's link,
  * read back for the pad that is about to price it.
  *
  * The other end is `IntakeScreen`'s `submit`, which writes this exact key set
- * as an `IntakePreset`; the two have to agree, and the type is what says so.
- * Every value is optional coming out of here even though it is required going
- * in, for two reasons that are both real: a request generated before this
- * feature shipped carries `preset: {}`, and a preset written by a future build
- * can carry a value this one does not recognise. Both mean the same thing to
- * the form - leave that field on its default.
+ * as an `IntakePreset`. Every value may be `undefined` coming out of here even
+ * though it is required going in, for two reasons that are both real: a
+ * request generated before this feature shipped carries `preset: {}`, and a
+ * preset written by a future build can carry a value this one does not
+ * recognise. Both mean the same thing to the form - leave that field on the
+ * default `padDefaults` opened it with.
  *
  * Not read back: the target cost, the tier cap, and a written per-payment
  * schedule. `IntakeScreen` does not write them, deliberately (see
  * `IntakePreset`'s own docstring), and reading a key nothing writes would be
  * the same mistake in the other direction.
  */
-function readPreset(preset: Record<string, unknown>): Partial<IntakePreset> {
+function readPreset(preset: Record<string, unknown>): PresetRead {
   // `fetchIntake` only checks that `id` is a string, so this field is exactly
   // as trustworthy as `intake.scope` is below - which is to say, not.
   const source = preset && typeof preset === 'object' ? preset : {}
   return {
     kind: presetMember(source.kind, KIND_IDS),
     kind_label: presetText(source.kind_label),
-    currency: presetText(source.currency),
+    currency: presetCurrency(source.currency),
     market_region: presetText(source.market_region),
     tax_mode: presetMember(source.tax_mode, TAX_MODES),
     pricing_basis: presetMember(source.pricing_basis, PRICING_BASES),
@@ -730,10 +784,28 @@ export default function App() {
               sharper reason: the preset this screen writes is read back into a
               pad that has already opened on those same defaults, so a preset
               built before they arrived would hard-code PHP over a studio that
-              quotes in USD. `fetchSettings` falls back to `{}` rather than
-              staying null, so this is a first-paint wait and never a screen
-              that fails to appear. */}
-          {route === 'intakeNew' && defaults ? <IntakeScreen defaults={defaults} /> : null}
+              quotes in USD.
+
+              The wait says so rather than painting an empty page. A blank
+              `<main>` is indistinguishable from a screen that failed, and
+              `fetchSettings` can hang rather than fail - only its `.catch`
+              un-sticks `defaults` from null, so there is no timeout behind
+              this line.
+
+              When settings genuinely fail, `defaults` becomes `{}` - truthy -
+              and this screen opens on PHP/Philippines/exclusive and writes
+              them into the record. Left deliberately: the pad does exactly the
+              same thing with the same `{}`, so a request generated during an
+              outage and a quotation prepared during one at least agree with
+              each other, which is worth more here than refusing to work at
+              all. Say it out loud rather than leave it to be rediscovered. */}
+          {route === 'intakeNew' ? (
+            defaults ? (
+              <IntakeScreen defaults={defaults} />
+            ) : (
+              <p className={`${MONO_LABEL} px-1 py-6`}>Reading your studio&rsquo;s defaults</p>
+            )
+          ) : null}
           {route === 'invite' ? (
             <InviteScreen token={(window.location.hash || '').replace('#/invite/', '')} />
           ) : null}
