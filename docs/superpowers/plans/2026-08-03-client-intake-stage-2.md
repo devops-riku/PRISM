@@ -52,8 +52,13 @@
 | `backend/app/prompts.py` | Framing for client-authored scope |
 | `frontend/src/main.tsx` | Resolve `ClientShell` before `AuthGate` |
 | `frontend/src/components/IntakeScreen.tsx` | Config + Generate link, replacing the four typed fields |
-| `frontend/src/components/IntakeListScreen.tsx` | Copy link, Send to client, Relink; the new states |
+| `frontend/src/components/IntakeListScreen.tsx` | Send to client, Reissue link; the new states |
 | `frontend/src/types.ts` | Token fields; the client-facing view types |
+| `frontend/src/lib/api.ts` | `createIntake` returns the link; `sendIntake`, `relinkIntake` |
+| `frontend/src/App.tsx` | The intake's preset reaches the pad's prefill |
+| `frontend/src/components/BriefForm.tsx` | `BriefPrefill` carries the preset, seeded in one pass |
+
+The last three were absent from this table when the plan was written and are named in the Task 9 amendment below. `api.ts` was a plain omission — nothing could call the new routes without it. `App.tsx` and `BriefForm.tsx` are where the preset is read back, which no task originally claimed.
 
 ---
 
@@ -366,18 +371,57 @@ Start the API and a dev server, create an intake, copy the link, open it in a pr
 
 ---
 
-## Task 9: The studio side catches up
+## Task 9 — amended before dispatch
+
+The original Task 9 was one task of four steps. Two of its instructions were wrong and one whole requirement was missing; it is replaced by **9a** and **9b** below. What changed, and why, so the amendment is auditable rather than silent:
+
+**"`issued` shows Copy link" was impossible as written.** `Intake.token` carries `exclude=True`, and `list_intakes` / `read_intake` both serialise a bare `Intake` — the token never crosses the wire on a read. Only `create_intake` and `relink_intake` return `IntakeIssued`, and `IntakeIssued`'s own docstring records the ruling *against* adding a `GET /api/intakes/{id}/link`. So the link is shown **once**, at Generate, and thereafter is recoverable only by minting a new one. An implementer handed "Copy link" in the queue would either invent the rejected route or copy an empty string.
+
+**Nothing reads `preset` back.** `IntakeScreen` writes `preset: {}`; `api.ts` and `types.ts` only type the field; `App.tsx`'s prefill passes `scope`, `budget` and `clientName` and nothing else. `IntakeRequest`'s docstring defers the read-back to "a later task", and this is the last task. Without it the configuration the studio sets at Generate is decorative. It is 9a's job, and the spec already anticipated the shape: *"`BriefForm.tsx` gains one optional prefill prop beside the defaults it already takes."*
+
+**Step 3's fix was aimed at the wrong field for half the states it covers.** See 9b Step 3.
+
+---
+
+## Task 9a: Configure, generate, and land it on the pad
 
 **Files:**
-- Modify: `frontend/src/components/IntakeScreen.tsx`, `frontend/src/components/IntakeListScreen.tsx`
+- Modify: `frontend/src/types.ts`, `frontend/src/lib/api.ts`, `frontend/src/components/IntakeScreen.tsx`, `frontend/src/App.tsx`, `frontend/src/components/BriefForm.tsx`
 
-- [ ] **Step 1: `IntakeScreen` becomes config + link.** The four typed fields go; in their place, the PAD preset and a **Generate link** button that shows the link with a copy control. The client's words are no longer the studio's to type — say so in the file's docstring, and delete the old docstring's claim that this screen writes down what the client said.
+One walkable story: configure a request, generate its link, copy the link, press Price this, and find the configuration already on the pad.
 
-- [ ] **Step 2: The queue gains the new states.** `issued` shows Copy link and Relink and reads "not opened yet" until first fetch; `quoted` gains **Send to client**, naming which bundle; `sent`, `revision_requested` and `finalized` render with their own chips. A `revision_requested` row shows the client's words.
+- [ ] **Step 1: The wire catches up with the record.** `types.ts`'s `Intake` is missing four fields the server has been sending since Task 1: `token_expires_at`, `revisions`, `sent_bundle_id`, `sent_at`. `revisions` is `List[dict]` server-side with entries of exactly `{"asked", "at"}` — give it a named type, not `unknown[]`, and coerce at the boundary. Add `IntakeIssued = Intake & { link: string }`. `token` is **not** on either type: it is excluded server-side on purpose and must not acquire a name here.
 
-- [ ] **Step 3: Fix the parked Stage 1 finding while you are here.** `firstBundleId` computes only for `quoted`, so a failed *second* pass leaves a row showing an error and a retry with no hint that a good quotation already exists. Extend the guard to any state with a non-empty `bundle_ids`.
+- [ ] **Step 2: `api.ts` gains the two calls and loses a wrong return type.** `createIntake` returns `IntakeIssued`, not `Intake` — today the link it already receives is unreachable from the UI. Its body drops the four client fields and sends `{ preset }` alone, matching `IntakeRequest`. Add `sendIntake(id, bundleId)` → `Intake` and `relinkIntake(id)` → `IntakeIssued`. Both are admin-only server-side; follow `closeIntake`'s existing shape for the empty-id guard and error kinds.
 
-- [ ] **Step 4: Typecheck, build, and walk both sides**
+- [ ] **Step 3: `IntakeScreen` becomes config + link.** The four typed fields go — the client's words are no longer the studio's to type. In their place: the PAD preset (kind, currency, market region, tax basis, payment terms, tiers, per the spec) and a **Generate link** button.
+
+  **On success this screen must not navigate away.** The current `.then()` sets `window.location.hash = '#/intakes'`, which would throw away the only copy of the link that will ever exist. Success stays here and renders the link with a copy control and one sentence saying plainly that it is shown once and reissuing replaces it.
+
+  Rewrite the file's docstring: delete the claim that this screen writes down what the client said.
+
+- [ ] **Step 4: The preset reaches the pad.** `App.tsx` already fetches the intake for `#/pad/<id>` and hands `BriefForm` a `prefill`. Extend `BriefPrefill` with the preset fields and seed them.
+
+  Two traps. **`preset` is `Record<string, unknown>` off the wire**, and `kind`, `taxMode`, `cadence` and `pricingBasis` are typed unions — seed them by membership check against the known set with fallback to the current default, never by cast. This is the same "coerced rather than trusted" discipline the existing `String(intake.scope ?? '')` prefill documents, extended to unions. **The `seeded` latch fires once**: every preset-derived field must be set in that one pass, or the form is left half-configured with no second chance. The `key={intake.id}` remount guarantees `prefill` is present at mount, so a single atomic seed is achievable.
+
+- [ ] **Step 5: Typecheck, build, and walk it.** Configure a request, generate, copy the link, press Price this from the queue, and confirm the configuration is on the pad. Quote what you observed. **Do not run against `backend/generated/` — use a scratch `GENERATED_DIR`.**
+
+- [ ] **Step 6: Commit**
+
+---
+
+## Task 9b: The queue catches up
+
+**Files:**
+- Modify: `frontend/src/components/IntakeListScreen.tsx`
+
+- [ ] **Step 1: The new states get sections and chips.** `STATE_LABEL` already carries all ten. `buildSections` places rows **by elimination** specifically so a state this screen has never heard of still lands somewhere — new sections go *before* the `rest` catch-all, and that invariant is documented in the file. Keep it.
+
+- [ ] **Step 2: The actions each state actually supports.** `quoted` gains **Send to client**, which must name which bundle it is sending — `send_intake` requires an explicit `bundle_id` and refuses one that is not this intake's own. A `revision_requested` row shows the client's words, read off the last `revisions` entry. **Reissue link** replaces the impossible "Copy link": it is destructive — it kills a link the client may be holding right now, and on `sent` / `revision_requested` / `finalized` it kills their access to their own quotation — so it takes the same inline-confirm weight `Close` already has in `IntakeRow`, and you decide which states offer it at all rather than offering it on everything non-closed. The reissued link is shown on the row, once, the same way `IntakeScreen` shows the first one.
+
+- [ ] **Step 3: Fix the parked Stage 1 finding — and aim it at the right field.** `firstBundleId` computes only for `quoted`, so a failed *second* pass leaves a row showing an error and a retry with no hint that a good quotation already exists. Extend it, but **not to `bundle_ids[0]` everywhere**: for `sent`, `revision_requested` and `finalized` the correct target is `sent_bundle_id`, because `bundle_ids[0]` on a re-quoted intake can be a candidate the client never saw. Opening "View quotation" on a sent row and getting a different document than the client is looking at is the same class of bug the parked finding names.
+
+- [ ] **Step 4: Typecheck, build, and walk the queue** through `issued → sent → revision_requested → finalized`. Quote what you observed.
 
 - [ ] **Step 5: Commit**
 
