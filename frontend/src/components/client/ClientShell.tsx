@@ -50,20 +50,40 @@ export default function ClientShell({ token }: ClientShellProps) {
       })
       .catch((failure: unknown) => {
         if (!live) return
-        // Every refusal this door gives - unknown token, expired, closed,
-        // wrong state - is the identical opaque 404 (`ClientApiError`'s own
-        // `isGone`/`kind === 'http'`), and Task 8's own plan is explicit
-        // that all of those read as one page: "the identical page for
-        // closed, expired, wrong and never-existed." A network failure,
-        // a timeout, or an answer that did not parse is a different claim -
-        // not "this link is not valid," but "this page could not ask the
-        // question" - so it gets its own status rather than being folded
-        // into the same bucket, where it would tell someone their link was
-        // dead when the API was simply unreachable.
-        if (failure instanceof ClientApiError && failure.kind === 'http') {
+        // Every refusal `read_client_view` itself gives - unknown token,
+        // expired, closed, wrong state - is the identical opaque 404
+        // (`ClientApiError.isGone`), and Task 8's own plan is explicit that
+        // all of those read as one page: "the identical page for closed,
+        // expired, wrong and never-existed." That is a property of *that
+        // one handler* today, not something this client is entitled to
+        // assume of every HTTP status - branching on `kind === 'http'`
+        // instead of `isGone` would route a 500 from a future code path, or
+        // a 502/503 from any proxy sitting in front of the API, into this
+        // same "your link is dead" bucket. A stranger reading that has no
+        // way to tell a transient outage from an actually-revoked link, so
+        // they stop trying - which is a worse failure than the shell simply
+        // saying it could not ask the question right now.
+        if (failure instanceof ClientApiError && failure.isGone) {
           setStatus('gone')
           return
         }
+        if (failure instanceof ClientApiError && failure.kind === 'http') {
+          // Some other HTTP status - not this door's own "no." Deliberately
+          // *not* `failure.message`: for an HTTP failure that message is
+          // built from the server's own `detail`
+          // (`clientApi.ts`'s `extractDetail`), which for a 404 is the
+          // fixed, public `_CLIENT_LINK_GONE` sentence but for anything
+          // else could be a raw exception message or a proxy's own error
+          // page - never something to print verbatim onto a stranger's
+          // screen.
+          setOfflineMessage('The studio’s system is having trouble right now. Try this link again shortly.')
+          setStatus('offline')
+          return
+        }
+        // Network, timeout, parse or validation failures. `clientApi.ts`
+        // only ever puts a client-authored, already-generic sentence on
+        // these - never server text - so showing `failure.message` here
+        // carries none of the risk the branch above guards against.
         setOfflineMessage(
           failure instanceof Error && failure.message
             ? failure.message
