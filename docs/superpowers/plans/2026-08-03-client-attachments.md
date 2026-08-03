@@ -29,7 +29,17 @@ This is not hedging. It is what lets the feature ship and be tested before crede
 - **The client's filename never becomes a path.** Files are stored as `<12-hex>.<ext>` with the original name kept in the manifest as data. `storage.is_valid_id` is the existing gate for this shape and is reused.
 - **A link buys one upload.** `/submit` is legal only from `issued` and moves the intake to `submitted`, so `intakes.ALLOWED` already bounds an anonymous caller to one submission per token. Do not add a second anonymous write route; that bound is the strongest control in this feature.
 - **Nothing client-supplied is ever served `inline` except a raster image from a closed allowlist.** `image/svg+xml` is refused outright — an SVG is a script document, and the studio opens these on the studio's own origin.
-- **Every response carrying a client file sets `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.**
+- **Every response carrying a client file sets `Cache-Control: no-store`, an explicit `Content-Type`, and `Content-Disposition: attachment` for anything outside the raster allowlist.** `X-Content-Type-Options: nosniff` is added **on the local branch only, and this is a deliberate, reasoned exception rather than an oversight** — see below.
+
+### Why nosniff is not on the Spaces branch
+
+It cannot be. `PutObject` accepts `ACL`, `CacheControl`, `ContentDisposition`, `ContentEncoding`, `ContentLanguage`, `ContentType`, `Expires`, `Metadata` and the SSE members; the presign overrides are the `Response*` set. **No member on either side emits `X-Content-Type-Options`**, and `Metadata` emits `x-amz-meta-*` only. Since a presigned GET is fetched browser→DigitalOcean with this app out of the path, there is nowhere left to add it.
+
+The first draft of this plan asserted the opposite and Task 5 would have collided with it. Recorded here rather than discovered there.
+
+What stands in for it, and why it is adequate: nosniff's job is to stop a browser treating a mislabelled file as HTML or script. Every object is written with an **explicit, server-resolved `Content-Type`** — never absent, never guessed from the bytes — so there is nothing for a browser to sniff *into*. Everything outside the raster allowlist is written `Content-Disposition: attachment`, which is not rendered at all. And the raster allowlist is exactly `image/png`, `image/jpeg`, `image/webp`, `image/gif` — four formats that cannot execute — with `image/svg+xml` refused outright, which is the case nosniff would actually have been protecting against.
+
+The residual is a browser ignoring a correct `Content-Type` on a four-format raster allowlist. That is thin, it is on a different origin from the studio's session, and buying it back would mean streaming every byte through this process and giving up the 307 entirely. **If that trade is ever revisited, revisit it here rather than silently in a route.**
 - **A file that cannot be read is reported, never raised.** This is `attachments.py`'s existing rule (its module docstring states it) and it now applies to a client who is not in the room to be asked.
 - `backend/app/schemas.py` is not modified. TypeScript strict, zero errors, zero `any`/`as`/`@ts-ignore`/`!`. Tailwind v4 CSS-first. No test framework may be added; backend checks are standalone scripts under `backend/scripts/` that exit 0.
 - Branch from `e5b581f` on `feat/client-attachments`.
@@ -175,13 +185,19 @@ This task ships **before** any upload route exists, because both defects it clos
 
   On Spaces it answers `307` to a **presigned URL with a short TTL** (minutes, not hours) rather than streaming the bytes through this process; on local it serves the file. One route, either way, so the frontend has one thing to link to and never learns which backend is behind it.
 
-- [ ] **Step 2: The headers, which are the point of the route.** `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` on every response. `Content-Disposition: inline` only for the raster allowlist Task 3 enforced; `attachment` for everything else. Serve the stored mime, never a sniffed one. For Spaces these are set as **object metadata at `put_object` time**, so a presigned GET carries them without this route being in the path — set them once, on write, where they cannot be forgotten on read.
+- [ ] **Step 2: The headers, which are the point of the route.** `Cache-Control: no-store`, an explicit `Content-Type` from the manifest, `Content-Disposition: inline` only for the raster allowlist Task 3 enforced and `attachment` for everything else. Never a sniffed type.
+
+  For Spaces these are set as **object metadata at `put_object` time** (Task 2 does this), so a presigned GET carries them without this route being in the path. **`X-Content-Type-Options: nosniff` is set on the local branch only** — it cannot be attached to a Spaces object or a presigned URL at all. Do not go looking for a way; read the "Why nosniff is not on the Spaces branch" section above, which settles it and says what stands in for it. If you disagree with that trade, say so in your report rather than changing the design here.
+
+  **Filenames need encoding, not interpolation.** `_clean_name` strips separators and control characters but keeps `"`, so a file called `sco"pe.pdf` would break a naive `Content-Disposition: attachment; filename="…"`. Quote it properly or use RFC 5987 `filename*`.
 
 - [ ] **Step 3: Refuse the cross-intake fetch.** A file id belonging to a different intake, in the same workspace or another, is a 404 — the id pair must be checked together, not each alone. **Check it before minting a presigned URL**, not after: a presigned URL is a bearer credential and handing one out is the disclosure, whatever this route returns next.
 
 - [ ] **Step 4: The studio sees them, and this is the half the user asked for by name.** The queue row lists each attachment by filename, with its size, each one a link to the route above. A `submitted` row whose client attached three files and one with none must be distinguishable without opening either.
 
   The queue row is a summary, so if the full list does not fit it, say how many there are and put the list where the scope already goes. **Do not silently show the first two.**
+
+  **A closed intake still lists its attachments and every one of them is gone.** `close()` deletes the objects but leaves `Intake.attachments` populated, which is per plan — the record is the history of what was sent. A closed row rendered straight from that manifest offers a full set of links that all 404. Decide what a closed row shows and say what you decided.
 
 - [ ] **Step 5: Typecheck, build, and open a client-uploaded file from the queue.** Quote what you observed, including the response headers.
 
