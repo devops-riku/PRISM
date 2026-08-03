@@ -4,9 +4,24 @@
 
 **Goal:** A client attaches documents and images to their intake through the same link they fill the form in; the studio reviews the originals before pricing, and both reach the model when the quotation is generated.
 
-**Architecture:** `POST /api/client/{token}/submit` becomes multipart. Files are written under a new per-workspace `_intake_files/<intake_id>/` directory under server-minted names, never the client's own. The record carries a manifest, not the bytes. A new authed route serves them back to the studio, and `POST /api/proposals` reads them off disk when it is given an `intake_id` — so a client's file never travels browser→server→browser→server.
+**Architecture:** `POST /api/client/{token}/submit` becomes multipart. Files go to **DigitalOcean Spaces** under server-minted keys, never the client's own filename. The record carries a manifest, not the bytes. A new authed route lets the studio see them, and `POST /api/proposals` fetches them itself when given an `intake_id` — so a client's file never travels browser→server→browser→server.
 
-**Tech Stack:** FastAPI + Pydantic v2, React 18 + TypeScript strict, Tailwind v4. No new dependencies — `python-docx`, `openpyxl` and the PDF reader are already present and already used by `attachments.py`.
+**Tech Stack:** FastAPI + Pydantic v2, React 18 + TypeScript strict, Tailwind v4. **One new dependency: `boto3`**, for the S3-compatible API Spaces speaks.
+
+## Storage: Spaces, with local disk as the unconfigured fallback
+
+Two backends behind one interface, the same shape `mailer.py` already uses for Resend: a `configured()` predicate, and a documented degradation when the answer is no.
+
+- **Configured** (`SPACES_KEY`, `SPACES_SECRET`, `SPACES_REGION`, `SPACES_BUCKET` all set) → objects go to Spaces at `intakes/<workspace>/<intake_id>/<file_id>.<ext>`.
+- **Not configured** → the same bytes go to `generated/w/<workspace>/_intake_files/<intake_id>/`, exactly as the first draft of this plan described.
+
+This is not hedging. It is what lets the feature ship and be tested before credentials exist, keeps every `check_*.py` offline and network-free, and means a studio running PRISM on one machine needs no object store at all. The interface is the contract; which backend answers is a deployment fact.
+
+**The upload is proxied through the backend, never presigned-direct from the browser.** A presigned `PUT` handed to an anonymous client is a credential to write arbitrary bytes to the bucket until it expires, with no server-side check of type, size or content in between — and it routes around the body cap Task 1 exists to enforce. The file is validated and text-extracted first, then written.
+
+**The bucket is private. The studio reads through short-lived presigned `GET` URLs, never public-read objects.** A client's scope document must not be readable by anyone who guesses a URL.
+
+**Credentials are read through `config` and never logged, never returned by any route, and never written into the manifest.** `/api/health` may report *whether* Spaces is configured, exactly as it already reports `key_configured` for Gemini — never the key.
 
 ## Global Constraints
 
@@ -81,23 +96,29 @@ This task ships **before** any upload route exists, because both defects it clos
 
 **Files:**
 - Create: `backend/app/intakefiles.py`
-- Modify: `backend/app/intakes.py`, `backend/app/config.py`
+- Modify: `backend/app/intakes.py`, `backend/app/config.py`, `backend/requirements.txt`
 - Test: `backend/scripts/check_intakefiles.py`
 
 **Interfaces:**
-- Produces: `intakefiles.save(intake_id, name, data, kind) -> dict` (the manifest entry), `intakefiles.listing(intake_id) -> List[dict]`, `intakefiles.read(intake_id, file_id) -> tuple[bytes, str] | None`, `intakefiles.forget(intake_id) -> int`. `intakes.Intake.attachments: List[dict]`.
+- Produces: `intakefiles.configured() -> bool`, `intakefiles.save(intake_id, name, data, kind) -> dict` (the manifest entry), `intakefiles.listing(intake_id) -> List[dict]`, `intakefiles.read(intake_id, file_id) -> tuple[bytes, str] | None`, `intakefiles.view_url(intake_id, file_id) -> str` (presigned, or the local route's own path), `intakefiles.forget(intake_id) -> int`. `intakes.Intake.attachments: List[dict]`.
 
-- [ ] **Step 1: The directory, gated like every other caller-supplied id.** `_intake_files/<intake_id>/` beside `_intakes/`, resolved through `storage.is_valid_id` exactly as `intakes._path()` does — the same guard, for the same reason, and `listing()`'s `glob("*.json")` means the new directory is invisible to the intake walk either way. The file id is a fresh 12-hex, minted server-side; the client's filename is stored as a manifest string and never touches a path.
+- [ ] **Step 1: One interface, two backends.** Everything above is defined once and dispatches on `configured()`. Read `backend/app/mailer.py` first — its `configured()` predicate and its documented behaviour when the answer is no are the shape to copy, including that nothing raises merely because an integration is absent.
 
-- [ ] **Step 2: The manifest field.** `Intake.attachments: List[dict] = Field(default_factory=list)`, each entry `{id, name, kind, bytes, note}`. `note` carries the extraction warning when there is one ("this scan has no text layer") and is empty otherwise. Add `attachments` to `ADVANCE_FIELDS` — `/submit` writes it through `_client_advance`, and `advance()` revalidates through `Intake.model_validate`, so a malformed entry is refused at the write rather than at the read.
+  `boto3` is imported **lazily, inside the Spaces backend**, not at module top level. Every `check_*.py` runs offline with no credentials, and a hard import would make the whole module — and so `intakes.py`, and so the app — unimportable on a machine that has not installed it yet.
 
-- [ ] **Step 3: The caps, separate from the studio's.** `config.MAX_CLIENT_FILES`, `MAX_CLIENT_FILE_BYTES`, `MAX_CLIENT_UPLOAD_TOTAL_BYTES`. Deliberately tighter than `MAX_IMAGES`/`MAX_DOCUMENTS`, and deliberately their own names: a studio raising its own limit must not raise a stranger's.
+- [ ] **Step 2: The key, gated like every other caller-supplied id.** Spaces: `intakes/<workspace_id>/<intake_id>/<file_id>.<ext>`. Local: `_intake_files/<intake_id>/` beside `_intakes/`. Both resolve `intake_id` through `storage.is_valid_id` exactly as `intakes._path()` does — the same guard, for the same reason, and `listing()`'s `glob("*.json")` means the local directory is invisible to the intake walk either way. The file id is a fresh 12-hex minted server-side; **the client's filename is a manifest string and never appears in a key or a path.** A bucket key is not a filesystem path and `..` does not traverse it, but the id gate is what stops one intake addressing another's objects, which is the same attack by a different road.
 
-- [ ] **Step 4: Deletion.** `close()` removes the directory. A closed intake blanks its token already (`_write`'s chokepoint); the files are the other half of the same decision. `forget` returns a count and never raises — a file that will not delete is logged, not surfaced to whoever pressed Close.
+- [ ] **Step 3: The Spaces config, on the house pattern.** `SPACES_KEY`, `SPACES_SECRET`, `SPACES_REGION`, `SPACES_BUCKET` via `_env_str(name, "")` in `config.py`, with the endpoint derived as `https://<region>.digitaloceanspaces.com` rather than configured separately. `configured()` is all four non-empty, mirroring `mailer.configured()`. **Objects are written private** (`ACL: private` — Spaces defaults to private, but say it explicitly rather than inherit it) with `ContentType` set from the validated type and `ContentDisposition` set to `attachment` for everything the raster allowlist does not cover.
 
-- [ ] **Step 5: Prove the traversal cases.** `../`, a drive-absolute segment, an id that is not 12-hex, an empty id, a file id from another intake. Each returns `None` rather than reaching a path.
+- [ ] **Step 4: The manifest field.** `Intake.attachments: List[dict] = Field(default_factory=list)`, each entry `{id, name, kind, bytes, note}`. `note` carries the extraction warning when there is one ("this scan has no text layer") and is empty otherwise. **No URL and no bucket key in the manifest** — both are derived from the ids at read time, so a presigned URL cannot go stale on the record and a backend swap does not rewrite history. Add `attachments` to `ADVANCE_FIELDS` — `/submit` writes it through `_client_advance`, and `advance()` revalidates through `Intake.model_validate`, so a malformed entry is refused at the write rather than at the read.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: The caps, separate from the studio's.** `config.MAX_CLIENT_FILES`, `MAX_CLIENT_FILE_BYTES`. (`MAX_CLIENT_UPLOAD_TOTAL_BYTES` already exists — Task 1 added it for the body cap, and it is the same ceiling; do not define a second one.) Deliberately tighter than `MAX_IMAGES`/`MAX_DOCUMENTS`, and deliberately their own names: a studio raising its own limit must not raise a stranger's.
+
+- [ ] **Step 6: Deletion.** `close()` removes the intake's objects. A closed intake blanks its token already (`_write`'s chokepoint); the files are the other half of the same decision. `forget` returns a count and never raises — an object that will not delete is logged, not surfaced to whoever pressed Close. On Spaces that is a `delete_objects` over the listed prefix, and a network failure there must not make `close()` fail: the intake closing is the thing the studio asked for.
+
+- [ ] **Step 7: Prove the id gate both ways.** `../`, a drive-absolute segment, an id that is not 12-hex, an empty id, a file id belonging to another intake. Each returns `None` rather than reaching a path or a key. Run the whole suite against the **local** backend, which is what `configured() == False` gives you offline; that is the point of having it.
+
+- [ ] **Step 8: Commit**
 
 ---
 
@@ -152,11 +173,15 @@ This task ships **before** any upload route exists, because both defects it clos
 
 - [ ] **Step 1: `GET /api/intakes/{intake_id}/files/{file_id}`.** Behind the gate like every other studio route. No admin check — reading the queue is any member's, and `list_intakes`'s own docstring settles that this is the same class of read.
 
-- [ ] **Step 2: The headers, which are the point of the route.** `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` on every response. `Content-Disposition: inline` only for the raster allowlist Task 3 enforced; `attachment` for everything else. Serve the stored mime, never a sniffed one.
+  On Spaces it answers `307` to a **presigned URL with a short TTL** (minutes, not hours) rather than streaming the bytes through this process; on local it serves the file. One route, either way, so the frontend has one thing to link to and never learns which backend is behind it.
 
-- [ ] **Step 3: Refuse the cross-intake fetch.** A file id belonging to a different intake, in the same workspace or another, is a 404 — the id pair must be checked together, not each alone.
+- [ ] **Step 2: The headers, which are the point of the route.** `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` on every response. `Content-Disposition: inline` only for the raster allowlist Task 3 enforced; `attachment` for everything else. Serve the stored mime, never a sniffed one. For Spaces these are set as **object metadata at `put_object` time**, so a presigned GET carries them without this route being in the path — set them once, on write, where they cannot be forgotten on read.
 
-- [ ] **Step 4: The queue shows them.** Filenames on the row, each a link. A `submitted` row whose client attached three files and a `submitted` row with none must be distinguishable without opening either.
+- [ ] **Step 3: Refuse the cross-intake fetch.** A file id belonging to a different intake, in the same workspace or another, is a 404 — the id pair must be checked together, not each alone. **Check it before minting a presigned URL**, not after: a presigned URL is a bearer credential and handing one out is the disclosure, whatever this route returns next.
+
+- [ ] **Step 4: The studio sees them, and this is the half the user asked for by name.** The queue row lists each attachment by filename, with its size, each one a link to the route above. A `submitted` row whose client attached three files and one with none must be distinguishable without opening either.
+
+  The queue row is a summary, so if the full list does not fit it, say how many there are and put the list where the scope already goes. **Do not silently show the first two.**
 
 - [ ] **Step 5: Typecheck, build, and open a client-uploaded file from the queue.** Quote what you observed, including the response headers.
 
@@ -170,6 +195,8 @@ This task ships **before** any upload route exists, because both defects it clos
 - Modify: `backend/app/main.py` (`create_proposal`)
 
 - [ ] **Step 1: Read them server-side when `intake_id` is given.** `POST /api/proposals` already takes `intake_id: str = Form("")`. When it is present and names a real intake in this workspace, load that intake's stored files and merge them with whatever the pad itself uploaded. The client's file must not make a second round trip through the studio's browser.
+
+  On Spaces this is a `get_object` per attachment, which is **network I/O on a request that is otherwise CPU-bound**. `create_proposal` is `async def`; do not block the event loop on it. Fetch inside the threadpool, or before the job is handed off — say which and why.
 
 - [ ] **Step 2: Merge, do not replace.** A studio that attaches its own reference material while pricing a client's request keeps both. The combined set is bounded by the studio's own `MAX_IMAGES`/`MAX_DOCUMENTS`, not the client's tighter caps — say which limit reports the overflow and make its message name the cause.
 
@@ -185,7 +212,9 @@ This task ships **before** any upload route exists, because both defects it clos
 
 **Spec coverage.** The user's choice was "Documents + images, files kept": documents and images both reach the model (Tasks 3, 6), the files are kept (Task 2), and the studio reviews the originals before pricing (Task 5). The security precondition the choice implies is Task 1.
 
-**What this plan deliberately does not do.** No virus scanning — out of scope and there is no scanner in this stack. No retention window beyond `close()` — files live as long as the intake does. No thumbnailing; the queue links files, it does not preview them. No client-side deletion after submit: `/submit` runs once from `issued`, and adding a second anonymous write to undo it would give away the bound that makes this feature safe.
+**What this plan deliberately does not do.** No virus scanning — out of scope and there is no scanner in this stack. No retention window beyond `close()` — files live as long as the intake does. No thumbnailing; the queue links files, it does not preview them. No client-side deletion after submit: `/submit` runs once from `issued`, and adding a second anonymous write to undo it would give away the bound that makes this feature safe. No CDN, no public bucket, no custom domain on the Space — every read is a short-lived presigned URL.
+
+**What Spaces adds that local disk did not, and is now this plan's responsibility.** An upload that reaches Spaces and then fails to land on the record is an orphaned object nobody is paying attention to but the invoice (Task 3 Step 4 owns the ordering). A `close()` that cannot reach the network must still close the intake (Task 2 Step 6). A generation that fetches four files is four network round trips on a path that used to touch no network at all (Task 6 Step 1). And credentials now exist that did not before: they are read through `config`, never logged, never in a response, never in the manifest.
 
 **Type consistency.** `intakefiles.save()`'s returned dict (Task 2) is the entry shape `Intake.attachments` holds, the shape `clientview.of` projects a subset of (Task 3), and the shape `types.ts` mirrors (Task 5). One shape, four places, named in Task 2's Interfaces block.
 
