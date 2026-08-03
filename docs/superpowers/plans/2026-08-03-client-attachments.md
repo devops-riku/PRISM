@@ -231,17 +231,17 @@ This task ships **before** any upload route exists, because both defects it clos
 **Files:**
 - Modify: `backend/app/main.py` (`create_proposal`)
 
-- [ ] **Step 1: Read them server-side when `intake_id` is given.** `POST /api/proposals` already takes `intake_id: str = Form("")`. When it is present and names a real intake in this workspace, load that intake's stored files and merge them with whatever the pad itself uploaded. The client's file must not make a second round trip through the studio's browser.
+- [x] **Step 1: Read them server-side when `intake_id` is given.** `POST /api/proposals` already takes `intake_id: str = Form("")`. When it is present and names a real intake in this workspace, load that intake's stored files and merge them with whatever the pad itself uploaded. The client's file must not make a second round trip through the studio's browser.
 
   On Spaces this is a `get_object` per attachment, which is **network I/O on a request that is otherwise CPU-bound**. `create_proposal` is `async def`; do not block the event loop on it. Fetch inside the threadpool, or before the job is handed off — say which and why.
 
-- [ ] **Step 2: Merge, do not replace.** A studio that attaches its own reference material while pricing a client's request keeps both. The combined set is bounded by the studio's own `MAX_IMAGES`/`MAX_DOCUMENTS`, not the client's tighter caps — say which limit reports the overflow and make its message name the cause.
+- [x] **Step 2: Merge, do not replace.** A studio that attaches its own reference material while pricing a client's request keeps both. The combined set is bounded by the studio's own `MAX_IMAGES`/`MAX_DOCUMENTS`, not the client's tighter caps — say which limit reports the overflow and make its message name the cause.
 
-- [ ] **Step 3: A missing file is reported, not raised.** A file deleted from under a running generation is one line on the finished quotation, exactly as an unreadable PDF already is.
+- [x] **Step 3: A missing file is reported, not raised.** A file deleted from under a running generation is one line on the finished quotation, exactly as an unreadable PDF already is.
 
-- [ ] **Step 4: Walk the whole feature once, end to end.** Generate a link, attach a document and an image as the client, price it as the studio, and confirm both reached the quotation. **This is the one place a live Gemini call is warranted** — one call, on a scratch `GENERATED_DIR`. Quote what you observed.
+- [x] **Step 4: Walk the whole feature once, end to end.** Generate a link, attach a document and an image as the client, price it as the studio, and confirm both reached the quotation. **This is the one place a live Gemini call is warranted** — one call, on a scratch `GENERATED_DIR`. Quote what you observed.
 
-- [ ] **Step 5: Run every `check_*.py` except `check_kind_render.py`, plus `smoke.py`, then commit**
+- [x] **Step 5: Run every `check_*.py` except `check_kind_render.py`, plus `smoke.py`, then commit**
 
 ---
 

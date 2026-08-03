@@ -748,6 +748,253 @@ async def _read_images(
     return images
 
 
+# --- The client's own files, on their way to the model -----------------------
+#
+# `_read_images` and `_read_documents` above read what *this request* uploaded.
+# The four functions below read what a client already sent through their own
+# link, off the manifest on their intake, so that pricing a client's request
+# does not mean the studio re-uploading the client's files - they never make a
+# second trip through anybody's browser.
+
+
+def _client_file_kind(record: dict) -> str:
+    """The content type of one manifest entry, clamped to what PRISM stores.
+
+    Clamped rather than trusted, for the reason `read_intake_file` spells out
+    at length where it does the same thing: `Intake.attachments` is a bare
+    `List[dict]` in `ADVANCE_FIELDS` and `advance()` validates nothing about
+    the five keys inside an entry, so "`/submit` is its only writer" is a
+    convention rather than a check. Here the value decides which lane a file
+    takes - handed to the model as image bytes, or opened by a text reader -
+    and that decision has to land somewhere this module chose rather than
+    somewhere a dict said. Anything unrecognised becomes `FALLBACK_TYPE`,
+    which is outside `INLINE_TYPES` and so takes the document lane, where
+    `attachments.read` keys on the filename's own suffix and reports whatever
+    it finds.
+    """
+    kind = str(record.get("kind") or "")
+    return kind if kind in intakefiles.CONTENT_TYPES else intakefiles.FALLBACK_TYPE
+
+
+def _client_file_name(record: dict) -> str:
+    """What the client called this file, cleaned again on the way back out.
+
+    `/submit` already stored a `clean_name`d string, and this cleans it a
+    second time for exactly the reason that function is public and idempotent:
+    the value on the record is guaranteed by nothing (see `_client_file_kind`),
+    and this one is about to be printed inside
+    `attachments.describe_for_prompt`'s `--- BEGIN <name> ---` markers, in a
+    prompt. A "filename" carrying a newline could close those markers early and
+    write its own; `clean_name` strips control characters, so it cannot.
+    """
+    return intakefiles.clean_name(str(record.get("name") or ""))
+
+
+def _client_lanes(records: List[dict]) -> tuple[List[dict], List[dict]]:
+    """One intake's manifest, split into the two things the model reads it as.
+
+    Images reach the model as images; everything else is opened by
+    `attachments.read` and reaches it as text. `intakefiles.INLINE_TYPES` is
+    the same set that decides whether the studio's own download route renders a
+    file in place, and it is consulted rather than restated - a sixth raster
+    added there is an image here on the same day.
+    """
+    images: List[dict] = []
+    papers: List[dict] = []
+    for record in records:
+        # An entry that is not a dict, or that addresses nothing, is skipped
+        # rather than reasoned about: this list is only as well-formed as
+        # whatever wrote it, which is the whole point of `_client_file_kind`.
+        if not isinstance(record, dict) or not str(record.get("id") or "").strip():
+            continue
+        if _client_file_kind(record) in intakefiles.INLINE_TYPES:
+            images.append(record)
+        else:
+            papers.append(record)
+    return images, papers
+
+
+def _fit_under_studio_cap(
+    records: List[dict], studio_count: int, cap: int, noun: str
+) -> tuple[List[dict], str]:
+    """How much of the client's set fits beside the studio's own, under the
+    studio's own limit - and what has to be said about the rest.
+
+    The combined set is bounded by `MAX_IMAGES`/`MAX_DOCUMENTS`, which are the
+    studio's numbers, and never by `MAX_CLIENT_FILES`: that one is a door
+    policy for a stranger holding a link and has nothing to say about what the
+    studio may read once the files are on the record.
+
+    Which of the two sets gives way turns on one question - **is there an
+    action the person reading the refusal can take?** A studio member whose own
+    uploads push the total over can remove one of theirs, so that is a 400 that
+    names the cause and the count rather than a bare "too many". A client's
+    files that overflow the cap on their own cannot be removed by anybody:
+    `/submit` runs once from `issued` and there is no client-side deletion
+    after it, by design, so refusing there would be a permanent dead end on a
+    legitimate enquiry. That is not hypothetical - `MAX_CLIENT_FILES` is 6 and
+    `MAX_DOCUMENTS` is 5, so a client who attaches six documents and no images
+    is already one past it, and the studio's very first Generate would be
+    refused for something nobody can fix. That case is truncated and reported,
+    which is this codebase's standing preference over correcting in silence.
+
+    So: the client's files fill the cap first, the studio's own take what is
+    left, and the overflow is a 400 only when the studio's own uploads are what
+    does not fit.
+    """
+    kept = records[:cap]
+    room = cap - len(kept)
+    if studio_count > room:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This request already has {len(records)} {noun} from the client, and PRISM "
+                f"reads {cap} {noun} in one quotation. Remove {studio_count - room} of the "
+                f"{studio_count} you attached and generate again."
+            ),
+        )
+    if len(kept) == len(records):
+        return kept, ""
+    dropped = ", ".join(_client_file_name(record) for record in records[cap:])
+    return kept, (
+        f"the client attached {len(records)} {noun} and PRISM reads {cap} - "
+        f"{dropped} did not reach the quotation"
+    )
+
+
+#: What is said about a file the record still names and storage no longer has.
+#: Reachable in the ordinary run of things rather than only under a race:
+#: `close()` deletes an intake's objects and deliberately leaves
+#: `Intake.attachments` populated - the record is the history of what was sent -
+#: so a closed request priced anyway names files that are all gone.
+_CLIENT_FILE_MISSING = (
+    "{name} is no longer stored with this request - nothing from it reached the quotation"
+)
+
+#: And what is said when the read itself came apart. Distinct from the sentence
+#: above because they are different facts about the file: one says the record
+#: outlived the object, the other says something went wrong reaching for it.
+_CLIENT_FILE_UNREADABLE = (
+    "{name} could not be read from storage - nothing from it reached the quotation"
+)
+
+
+def _load_client_files(
+    intake_id: str,
+    image_records: List[dict],
+    document_records: List[dict],
+) -> tuple[List[tuple[bytes, str]], List[attachments_module.Attachment], List[str]]:
+    """The bytes behind one intake's manifest. Blocking, and called in a thread.
+
+    Every line of this is blocking and most of it is network: with Spaces
+    configured, `intakefiles.read` is a `list_objects_v2` to recover the stored
+    extension plus a `get_object` for the bytes, per file, and six files is
+    twelve round trips. `attachments.read` then opens a PDF or unpacks a zip,
+    which is CPU-bound and can be seconds on a large one. That is why this is a
+    plain `def` reached through `asyncio.to_thread` - the same idiom
+    `_store_client_files` and `read_intake_file` already use, and for the same
+    reason: a blocking socket call on the event loop parks every request this
+    worker holds, including an anonymous client's `/submit`, which cannot even
+    be routed while it is parked.
+
+    `to_thread` runs the call in a copy of the current context, so the
+    workspace `_gate` set for the request - carried into the background task by
+    `asyncio.create_task`, which copies the context the same way - is what this
+    thread reads under. That matters more than it looks: `workspaces.current()`
+    falls back to `default_id()` when it is unset rather than raising, so a
+    borrow that failed to carry would read the *first workspace on file*,
+    silently, and a single-workspace test could not tell the difference.
+    check_intake_gate.py proves it across three, positively and negatively.
+
+    **Nothing here raises, and the per-record guard below is what makes that
+    true** rather than a claim about the two calls inside it. This runs inside
+    `run()`, whose own `except Exception` fails the job and stamps
+    `QUOTE_FAILED` - so a single malformed manifest entry escaping this loop
+    would lose the whole quotation, which is the exact opposite of the rule
+    this function exists to keep. `attachments.read` is already total by
+    contract and `intakefiles.read` catches broadly on both backends, but
+    `intakefiles.read`'s local branch reaches `workspaces.root()`, which raises
+    `NoWorkspace`, and neither of those contracts is enforced from here. One
+    file is what a bad entry may cost.
+
+    Back come the images as `(bytes, content type)` pairs, the documents as
+    `Attachment`s - `attachments.read`'s own shape, carrying its own `problem`
+    when there was one - and the sentences that need saying to whoever pressed
+    Generate.
+    """
+    images: List[tuple[bytes, str]] = []
+    papers: List[attachments_module.Attachment] = []
+    problems: List[str] = []
+
+    #: One flat walk over both lanes, so the guard is written once rather than
+    #: twice. Images first, matching `create_proposal`'s own reading order.
+    lanes = [(record, True) for record in image_records]
+    lanes += [(record, False) for record in document_records]
+
+    for record, as_image in lanes:
+        name = _client_file_name(record)
+        papers_before = len(papers)
+        try:
+            found = intakefiles.read(intake_id, str(record.get("id") or ""))
+            if found is None:
+                logger.warning(
+                    "Intake %s: %s is named on the record and is not in storage",
+                    intake_id,
+                    name,
+                )
+                problem = _CLIENT_FILE_MISSING.format(name=name)
+            elif as_image:
+                # The manifest's kind rather than what storage reported, for the
+                # reason `read_intake_file` gives: it is the value `/submit`
+                # resolved through `intakefiles.resolve_type` and the one the
+                # studio's queue already shows this file as. It is inside
+                # `INLINE_TYPES` or this record would not be in this lane.
+                images.append((found[0], _client_file_kind(record)))
+                problem = ""
+            else:
+                # The client's own filename, not the stored `<12-hex>.<ext>`:
+                # `attachments.read` picks its reader off the suffix, and the
+                # name is what appears between the markers in the prompt and in
+                # any problem line the studio reads afterwards.
+                #
+                # This also settles what happens to the manifest's `note`, which
+                # may already hold an extraction warning from upload time: it is
+                # not read off the record, because this call *recomputes* it.
+                # `_store_client_files` produced that note as
+                # `attachments.read(name, data).problem` over the same bytes
+                # under the same name, and this is the same call - so for any
+                # entry whose `kind` is still the one `/submit` resolved, the
+                # warning reaches the quotation by being derived again rather
+                # than copied, and the two cannot drift apart. An entry whose
+                # `kind` was altered to something `_client_file_kind` has to
+                # clamp lands in this lane instead of the image one and is
+                # reported on its suffix, which is a different sentence and the
+                # safe direction to differ in.
+                item = attachments_module.read(name, found[0])
+                papers.append(item)
+                problem = item.problem
+        except Exception:  # noqa: BLE001 - one bad entry must not cost the quotation
+            logger.exception(
+                "Intake %s: %s could not be read for the quotation", intake_id, name
+            )
+            # Anything half-appended for this record goes with it, so a partial
+            # read cannot reach the model as though it were whole.
+            del papers[papers_before:]
+            problem = _CLIENT_FILE_UNREADABLE.format(name=name)
+
+        if not problem:
+            continue
+        problems.append(problem)
+        # A document with nothing behind it still gets an `Attachment` carrying
+        # the reason - the shape `describe_for_prompt` already knows to leave
+        # out, exactly as it leaves out a scan with no text layer - but only
+        # when the reader did not already produce one saying the same thing.
+        if not as_image and len(papers) == papers_before:
+            papers.append(attachments_module.Attachment(name, "", "", problem))
+
+    return images, papers, problems
+
+
 def _normalise_currency(raw: str) -> str:
     code = (raw or "").strip().upper() or "PHP"
     if not _CURRENCY_PATTERN.match(code):
@@ -1256,6 +1503,45 @@ async def create_proposal(
     # Read to text here, once, before any tier is generated: five tiers must
     # not mean opening the same PDF five times.
     papers = await _read_documents(documents)
+
+    # What the client themselves attached, when this quotation is being
+    # prepared for a request that came in through a link. Split here and
+    # fetched later, and the split is the cheap half: it reads the manifest on
+    # the record, which `intakes.get` has already taken off local disk, so the
+    # counts the caps below turn on cost no network at all and the refusal they
+    # can produce still happens synchronously, before a job exists, exactly as
+    # this endpoint's docstring promises.
+    #
+    # An `intake_id` naming nothing this workspace holds - a stale form, a
+    # request in somebody else's workspace, an id somebody typed - is not an
+    # error here, for the same reason `stamp` refuses to make it one. And
+    # `intakes.get` is what enforces the workspace rather than a comparison
+    # written here: it builds its path under `workspaces.root()`, so an intake
+    # belonging to another workspace is simply not a file.
+    client_images: List[dict] = []
+    client_papers: List[dict] = []
+    client_notes: List[str] = []
+    if intake_id:
+        for_intake = intakes.get(intake_id)
+        if for_intake is not None:
+            client_images, client_papers = _client_lanes(for_intake.attachments)
+            client_images, note = _fit_under_studio_cap(
+                client_images, len(attachments), config.MAX_IMAGES, "images"
+            )
+            if note:
+                client_notes.append(note)
+            client_papers, note = _fit_under_studio_cap(
+                client_papers, len(papers), config.MAX_DOCUMENTS, "documents"
+            )
+            if note:
+                client_notes.append(note)
+
+    #: What `prepare()` actually sends, as distinct from what this request
+    #: uploaded. Both are initialised to the studio's own files so that every
+    #: path through `run()` produces a valid prompt whether or not there is an
+    #: intake behind it; `run()` merges the client's in, in a thread, before the
+    #: first tier is priced.
+    model_images: List[tuple[bytes, str]] = list(attachments)
     papers_text = attachments_module.describe_for_prompt(papers)
 
     tiers = _normalise_tiers(request.tiers)
@@ -1285,7 +1571,7 @@ async def create_proposal(
         )
         estimate = await generate_estimate(
             per_tier,
-            attachments,
+            model_images,
             card_text,
             basis_text,
             terms_text,
@@ -1393,9 +1679,50 @@ async def create_proposal(
                 )
 
     async def run() -> None:
+        nonlocal papers_text
         stamp(intakes.PREPARING, job_id=job.id)
         jobs.start(job.id, "Reading the brief")
         try:
+            if client_images or client_papers:
+                # Fetched here - inside the job, and inside a thread - rather
+                # than before the job was handed off, and the reason is what the
+                # alternative costs. With Spaces configured this is two round
+                # trips per file against a client bounded at 5s connect / 10s
+                # read with two attempts, and botocore makes two TCP connection
+                # attempts per attempt: Task 2 measured 18 seconds of wall time
+                # for a single operation against a packet-dropping endpoint.
+                # Six files is twelve operations. As a wait on the POST that is
+                # a Generate button hanging for minutes with no job to look at
+                # and nothing to distinguish it from a crash; as a wait inside
+                # the job it is a progress bar saying what it is doing. This
+                # endpoint's own contract already picks between those two:
+                # everything that can be *rejected* is rejected synchronously,
+                # and only the part that takes time is deferred. The caps are
+                # the part that can be rejected, and they were answered off the
+                # manifest above at no network cost at all.
+                #
+                # `asyncio.to_thread` in either case, because this is `async
+                # def` and a blocking socket call on the loop parks every
+                # request this worker holds - see `_load_client_files`.
+                jobs.stage(job.id, "Reading the client's files")
+                found_images, found_papers, problems = await asyncio.to_thread(
+                    _load_client_files, intake_id, client_images, client_papers
+                )
+                # The client's files first in both lanes, which is a decision
+                # rather than an accident. `attachments.describe_for_prompt`
+                # spends one `MAX_TOTAL_CHARS` budget in list order and names
+                # whatever it runs out of room for, so first is what is
+                # guaranteed to be read: the client's documents are the request
+                # being priced, the studio's are reference material added on top
+                # of it, and a quotation prepared without the client's own scope
+                # is the failure this whole feature exists to prevent. The cost
+                # is the reverse of that and is real - a studio attaching a long
+                # document to a request already carrying 60,000 characters of
+                # client material may see it named in `describe_for_prompt`'s
+                # own "was not included" line rather than read.
+                model_images[:0] = found_images
+                papers_text = attachments_module.describe_for_prompt(found_papers + papers)
+                client_notes.extend(problems)
             if tiers:
                 # One call per tier, top down, one after another. They used to
                 # run together - three tiers in the time of the slowest - and
@@ -1449,6 +1776,21 @@ async def create_proposal(
             caveats = [note for note in (first.target_note, first.tier_cap_note) if note]
             if first.target_total and not first.hit_target and not caveats:
                 caveats.append("the target total could not be reached exactly")
+            # A client's file that did not reach the model goes ahead of the
+            # arithmetic notes rather than after them, because only `caveats[0]`
+            # reaches the body below: a document that was not read changes what
+            # was priced, which is worth more of that one line than a note about
+            # what the costing had to do to a figure. Placed after the block
+            # above, not folded into it, so it cannot suppress the "could not be
+            # reached exactly" caveat merely by making the list non-empty.
+            #
+            # Joined into one entry rather than added as several, for the same
+            # reason: six separate entries would name one missing file and drop
+            # the other five in silence, which is the failure this whole line
+            # exists to avoid. Bounded by `MAX_CLIENT_FILES` plus one truncation
+            # note per lane.
+            if client_notes:
+                caveats.insert(0, "; ".join(client_notes))
             inbox.notify(
                 "quotation_ready",
                 inbox.ACTOR,

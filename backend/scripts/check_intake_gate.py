@@ -33,8 +33,10 @@ assertions there are driven at the ASGI layer rather than through `TestClient`.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -51,10 +53,23 @@ os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intake-gate-")
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_ANON_KEY"] = ""
 os.environ["SUPABASE_JWT_SECRET"] = ""
+# And the same for Spaces, for a second reason: this file's own `.env` has live
+# DigitalOcean credentials, `intakefiles.configured()` reads them live, and the
+# client-files section at the bottom of this script stores and reads real bytes.
+# Left set, every check below would write into the user's actual bucket and this
+# script would need the network to pass. Blanked, `intakefiles` answers from the
+# local backend under the scratch `GENERATED_DIR` above - which is what
+# `configured() == False` is for. Same four lines as check_intakefiles.py and
+# check_client_upload.py.
+os.environ["DO_SPACES_ACCESS_KEY"] = ""
+os.environ["DO_SPACES_SECRET_KEY"] = ""
+os.environ["DO_SPACES_REGION"] = ""
+os.environ["DO_SPACES_BUCKET"] = ""
+os.environ["DO_SPACES_ENDPOINT"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import config, inbox, intakes, jobs, main, members, workspaces  # noqa: E402
+from app import config, inbox, intakefiles, intakes, jobs, main, members, workspaces  # noqa: E402
 from app.gemini_service import GeminiConfigError, GeminiResponseError  # noqa: E402
 from app.schemas import Estimate  # noqa: E402
 
@@ -443,6 +458,452 @@ odd = client.post(
     data={"brief": "Unknown intake.", "intake_id": "0" * 12},
 )
 ok("an unknown intake_id does not fail the request", odd.status_code == 202)
+
+# =============================================================================
+# The client's own files reach the model
+# =============================================================================
+#
+# `POST /api/proposals` reads the files a client attached through their own
+# link off the intake's manifest and merges them with whatever the pad itself
+# uploaded, so that pricing a client's request never means the studio
+# re-uploading the client's files.
+#
+# Everything below drives the real handler and asserts on **what the model was
+# actually handed** - the images list and the `documents_text` keyword
+# `generate_estimate` receives - rather than on an internal call being made.
+# The stub is the only thing replaced.
+#
+# THREE WORKSPACES, and that is the point of them. `workspaces.current()` falls
+# back to `default_id()` when the context is unset rather than raising, so a
+# workspace that failed to carry into the thread this fetch runs in would read
+# the *first workspace on file*, silently, and a single-workspace check could
+# not tell that apart from working. So: the intake and its files live in
+# `gamma`, `alpha` (created first, and therefore the default) holds neither,
+# and `beta` is a third workspace that asks for the same intake by id.
+
+#: A real 1x1 PNG rather than arbitrary bytes: this is the value asserted to
+#: have arrived at the model unchanged, and a file that is what it says it is
+#: keeps the assertion honest if anything downstream ever starts looking.
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+#: Distinctive enough that finding it in the prompt cannot be a coincidence.
+CLIENT_MARKER = "AURORA-CLIENT-SCOPE-MARKER"
+CLIENT_SCOPE = f"{CLIENT_MARKER}\nFourteen treatment rooms, two floors, one reception."
+STUDIO_MARKER = "AURORA-STUDIO-NOTE-MARKER"
+
+alpha = made  # the first workspace created, and so `default_id()`
+gamma = workspaces.create("Gamma Studio")
+beta = workspaces.create("Beta Studio")
+
+SEEN: dict = {}
+NOTES: list = []
+_real_notify = inbox.notify
+
+
+async def stub_capture(*args, **kwargs):
+    """Record what `create_proposal` handed the model, then answer as before.
+
+    Positional, because that is how `prepare()` calls it: the request first,
+    the images second. `documents_text` is the keyword carrying
+    `attachments.describe_for_prompt`'s block.
+    """
+    SEEN["images"] = list(args[1])
+    SEEN["documents_text"] = kwargs.get("documents_text", "")
+    return Estimate(project_name="Booking platform", currency="PHP")
+
+
+def stub_notify(kind, person, payload):
+    """Every notification this pass raised, so the reporting half can be read.
+
+    `inbox.notify` is where a quotation that is ready *and* has something worth
+    saying says it - `create_proposal` builds a `caveats` list and puts the
+    first of them in the body. Captured rather than read back out of
+    `inbox.listing()` because the notify runs inside the background task, under
+    whichever workspace and identity that task carried, and the assertion here
+    is about the sentence, not about where it was filed.
+    """
+    NOTES.append((kind, payload))
+    return 0
+
+
+def stock_client_files(workspace_id: str, entries: list) -> str:
+    """One submitted intake in `workspace_id`, carrying `entries` as real files.
+
+    `entries` are `(name, bytes, content type)`. Stored through
+    `intakefiles.save` - the same call `/submit` makes - so the manifest is the
+    real shape rather than a hand-written dict, and the bytes are genuinely on
+    the other end of it.
+    """
+    borrowed = workspaces.borrow(workspace_id)
+    try:
+        made_intake = intakes.create(
+            client_email="scope@client.com",
+            client_phone="",
+            scope="A clinic fit-out.",
+            budget_text="",
+            preset={},
+            created_by="riku@neptune.ph",
+        )
+        manifest = [
+            intakefiles.save(made_intake.id, name, data, kind)
+            for name, data, kind in entries
+        ]
+        intakes.advance(made_intake.id, intakes.SUBMITTED, attachments=manifest)
+        return made_intake.id
+    finally:
+        workspaces.give_back(borrowed)
+
+
+#: A second client, **entered as a context manager**, and that is load-bearing
+#: rather than tidy. `TestClient` used bare opens a fresh blocking portal - and
+#: so a fresh event loop - per request and tears it down when the response
+#: comes back. Every background job above survives that only because its every
+#: `await` resolves without yielding (the estimate stub is a coroutine that
+#: returns immediately), so `run()` completes inside the single step the task is
+#: first scheduled in. `create_proposal` now has a real suspension point in that
+#: task - `await asyncio.to_thread(...)` for the client's files - and a task
+#: suspended there when the loop is torn down never resumes: the job sits at
+#: "Reading the client's files" for ever and every assertion below reads an
+#: empty capture. Entered, one loop runs in its own thread for the whole
+#: section, and the task finishes as it does under uvicorn. This is a fact
+#: about the harness, not about the handler.
+files_client = TestClient(app=main.app)
+files_client.__enter__()
+
+
+def price(workspace_id: str, intake_id: str, brief: str = "Price this.", files=None):
+    """One Generate through the real handler, waited out, with the capture reset."""
+    SEEN.clear()
+    NOTES.clear()
+    main.generate_estimate = stub_capture
+    inbox.notify = stub_notify
+    try:
+        payload = {"brief": brief}
+        if intake_id:
+            payload["intake_id"] = intake_id
+        answer = files_client.post(
+            "/api/proposals",
+            headers={"X-Workspace": workspace_id},
+            data=payload,
+            files=files,
+        )
+        if answer.status_code == 202:
+            # Waited out under a borrow of the workspace the request named:
+            # `jobs` is per workspace (`jobs._by_workspace`), and read from this
+            # thread with nothing set, `jobs.get` would look in `alpha` - the
+            # default - find nothing, and return instantly without waiting for
+            # anything at all.
+            job_id = answer.json()["id"]
+            deadline = time.time() + 20.0
+            while time.time() < deadline:
+                borrowed_for_job = workspaces.borrow(workspace_id)
+                try:
+                    found = jobs.get(job_id)
+                finally:
+                    workspaces.give_back(borrowed_for_job)
+                if found is not None and found.state in ("done", "failed"):
+                    break
+                time.sleep(0.25)
+    finally:
+        inbox.notify = _real_notify
+    return answer
+
+
+def note_bodies() -> str:
+    return " ".join(str(payload.get("body", "")) for _kind, payload in NOTES)
+
+
+# --- The positive: the client's own files reach the model --------------------
+
+both_kinds = stock_client_files(
+    gamma.id,
+    [
+        ("site-photo.png", PNG_1X1, "image/png"),
+        ("scope.txt", CLIENT_SCOPE.encode("utf-8"), "text/plain"),
+    ],
+)
+answer = price(gamma.id, both_kinds)
+ok("a Generate against an intake with files still answers 202", answer.status_code == 202)
+ok(
+    "the client's own document reaches the model as text",
+    CLIENT_MARKER in SEEN.get("documents_text", ""),
+)
+ok(
+    "and under the client's own filename, not the stored 12-hex one",
+    "scope.txt" in SEEN.get("documents_text", ""),
+)
+ok(
+    "the client's own image reaches it as image bytes, with the manifest's type",
+    (PNG_1X1, "image/png") in SEEN.get("images", []),
+)
+ok("and nothing was reported as missing", "no longer stored" not in note_bodies())
+
+# THE GATE ON THAT POSITIVE. If the workspace had failed to carry into the
+# thread the fetch runs in, `workspaces.current()` would have answered `alpha`
+# - the default - and the read would have found nothing there. These two
+# assertions are what make the four above mean "the thread saw gamma" rather
+# than "some workspace had the file": the file is readable from gamma and from
+# nowhere else.
+gamma_manifest = None
+borrowed = workspaces.borrow(gamma.id)
+try:
+    gamma_manifest = list(intakes.get(both_kinds).attachments)
+    ok(
+        "the file is readable from gamma, where it was stored",
+        intakefiles.read(both_kinds, gamma_manifest[0]["id"]) is not None,
+    )
+finally:
+    workspaces.give_back(borrowed)
+
+for label, elsewhere in (("the default workspace", alpha.id), ("a third workspace", beta.id)):
+    borrowed = workspaces.borrow(elsewhere)
+    try:
+        ok(
+            f"and from {label} it is not readable at all - so the read above can "
+            "only have run under gamma",
+            intakefiles.read(both_kinds, gamma_manifest[0]["id"]) is None,
+        )
+    finally:
+        workspaces.give_back(borrowed)
+
+# --- Merge, do not replace ---------------------------------------------------
+#
+# A studio pricing a client's request while attaching its own reference
+# material keeps both sets, in both lanes.
+answer = price(
+    gamma.id,
+    both_kinds,
+    files=[
+        ("images", ("studio-shot.png", PNG_1X1, "image/png")),
+        ("documents", ("studio-note.txt", STUDIO_MARKER.encode("utf-8"), "text/plain")),
+    ],
+)
+ok("a Generate carrying the studio's own files too answers 202", answer.status_code == 202)
+ok(
+    "both documents reach the model - merged, not replaced",
+    CLIENT_MARKER in SEEN.get("documents_text", "")
+    and STUDIO_MARKER in SEEN.get("documents_text", ""),
+)
+ok("and both images do", len(SEEN.get("images", [])) == 2)
+ok(
+    "with the client's read first, which is what the shared character budget "
+    "is spent on first",
+    # `0 <=` on purpose: `find` answers -1 for a marker that is not there at
+    # all, which would make a bare `<` true for exactly the case this whole
+    # section exists to catch - the client's document never having arrived.
+    0 <= SEEN.get("documents_text", "").find(CLIENT_MARKER)
+    < SEEN.get("documents_text", "").find(STUDIO_MARKER),
+)
+
+# --- The negative: another workspace cannot reach them through `intake_id` ---
+#
+# `intake_id` arrives on a `Form` field, so it is caller-controlled: an id
+# belonging to another workspace must read as an id belonging to nobody.
+answer = price(beta.id, both_kinds)
+ok("a Generate naming a foreign intake still answers 202", answer.status_code == 202)
+ok(
+    "and not one byte of that intake's files reaches the model",
+    not SEEN.get("images", []) and CLIENT_MARKER not in SEEN.get("documents_text", ""),
+)
+borrowed = workspaces.borrow(beta.id)
+try:
+    ok(
+        "the layer that refused it is `intakes.get`'s own workspace-scoped path "
+        "- from beta the record does not exist at all",
+        intakes.get(both_kinds) is None,
+    )
+finally:
+    workspaces.give_back(borrowed)
+
+# THE MUTATION, and it earns its keep twice. Asserting the negative above
+# proves the behaviour and not the layer: it would pass just as well if the
+# manifest had been found and the bytes then refused, or if nothing had been
+# looked up at all. So the first layer is removed - beta is given a real intake
+# record with the *same id and the same manifest*, copied on disk, exactly as
+# though `intakes.get` were not workspace-scoped - and the same request is run
+# again. Storage's own workspace-scoped prefix has to refuse it on its own.
+#
+# It is also the honest version of Step 3: a record that names files storage
+# does not have is precisely what a closed intake is, and what must be reported
+# rather than raised.
+gamma_record = workspaces.dir_for(gamma.id) / intakes.DIRNAME / f"{both_kinds}.json"
+beta_records = workspaces.dir_for(beta.id) / intakes.DIRNAME
+beta_records.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(gamma_record, beta_records / f"{both_kinds}.json")
+
+borrowed = workspaces.borrow(beta.id)
+try:
+    ok(
+        "with the record copied across, beta's own `intakes.get` now finds the "
+        "manifest - the first layer is genuinely gone",
+        intakes.get(both_kinds) is not None,
+    )
+finally:
+    workspaces.give_back(borrowed)
+
+answer = price(beta.id, both_kinds)
+ok("the request with the copied record still answers 202", answer.status_code == 202)
+ok(
+    "and storage refuses it on its own - still not one byte reaches the model",
+    not SEEN.get("images", []) and CLIENT_MARKER not in SEEN.get("documents_text", ""),
+)
+ok(
+    "a file the record names and storage does not have is reported, not raised - "
+    "the quotation still finished",
+    answer.status_code == 202 and SEEN.get("documents_text", "") == "",
+)
+ok(
+    "and whoever pressed Generate is told, by name",
+    "scope.txt is no longer stored with this request" in note_bodies(),
+)
+
+# --- The caps are the studio's, and the overflow names its cause -------------
+#
+# The combined set is bounded by MAX_IMAGES / MAX_DOCUMENTS - the studio's own
+# numbers - and never by MAX_CLIENT_FILES, which is a door policy for a
+# stranger. Which set gives way turns on whether the person reading the refusal
+# can act on it.
+full_house = stock_client_files(
+    gamma.id,
+    [
+        (f"scope-{index}.txt", f"{CLIENT_MARKER} part {index}".encode("utf-8"), "text/plain")
+        for index in range(config.MAX_DOCUMENTS)
+    ],
+)
+answer = price(gamma.id, full_house)
+ok(
+    f"{config.MAX_DOCUMENTS} client documents and no studio ones is fine",
+    answer.status_code == 202,
+)
+
+refused = price(
+    gamma.id,
+    full_house,
+    files=[("documents", ("studio-note.txt", STUDIO_MARKER.encode("utf-8"), "text/plain"))],
+)
+ok(
+    "the studio's own document on top of a full house is refused - it is the one "
+    "thing the person reading the message can remove",
+    refused.status_code == 400,
+)
+ok(
+    "and the message names the cause rather than saying 'too many documents'",
+    str(config.MAX_DOCUMENTS) in refused.json()["detail"]
+    and "from the client" in refused.json()["detail"]
+    and "Remove 1" in refused.json()["detail"],
+)
+
+# The other side of that decision: a client's files that overflow on their own
+# are truncated and reported, never refused. Nobody can remove them - `/submit`
+# runs once from `issued` and there is no client-side deletion after it - so a
+# 400 here would be a permanent dead end on a legitimate enquiry. It is
+# reachable today rather than theoretical: MAX_CLIENT_FILES is 6 and
+# MAX_DOCUMENTS is 5.
+overflowing = stock_client_files(
+    gamma.id,
+    [
+        (f"extra-{index}.txt", f"{CLIENT_MARKER} extra {index}".encode("utf-8"), "text/plain")
+        for index in range(config.MAX_DOCUMENTS + 1)
+    ],
+)
+answer = price(gamma.id, overflowing)
+ok(
+    "a client who sent more documents than the studio reads is not a refusal",
+    answer.status_code == 202,
+)
+ok(
+    f"exactly {config.MAX_DOCUMENTS} of them reach the model",
+    SEEN.get("documents_text", "").count("--- BEGIN ") == config.MAX_DOCUMENTS,
+)
+ok(
+    "and the one that did not is named to whoever pressed Generate",
+    f"extra-{config.MAX_DOCUMENTS}.txt did not reach the quotation" in note_bodies(),
+)
+
+# --- A manifest that is not the shape it should be ---------------------------
+#
+# `Intake.attachments` is a bare `List[dict]` in `ADVANCE_FIELDS`; `advance()`
+# enforces "a list, of dicts" and nothing at all about the five keys. An entry
+# claiming a content type this app does not store must not decide which lane a
+# file takes, and one addressing nothing must not reach storage.
+borrowed = workspaces.borrow(gamma.id)
+try:
+    malformed = intakes.create(
+        client_email="odd@client.com",
+        client_phone="",
+        scope="A malformed manifest.",
+        budget_text="",
+        preset={},
+        created_by="riku@neptune.ph",
+    )
+    stored = intakefiles.save(
+        malformed.id, "scope.txt", CLIENT_SCOPE.encode("utf-8"), "text/plain"
+    )
+    intakes.advance(
+        malformed.id,
+        intakes.SUBMITTED,
+        attachments=[
+            dict(stored, kind="text/html"),
+            {"name": "nothing.png", "kind": "image/png", "bytes": 1, "note": ""},
+        ],
+    )
+finally:
+    workspaces.give_back(borrowed)
+
+answer = price(gamma.id, malformed.id)
+ok("a malformed manifest does not fail the request", answer.status_code == 202)
+ok(
+    "an unrecognised content type takes the document lane and is read by its "
+    "suffix, not served as whatever the dict claimed",
+    CLIENT_MARKER in SEEN.get("documents_text", "") and not SEEN.get("images", []),
+)
+
+# --- A storage read that comes apart costs that file, not the quotation ------
+#
+# `_load_client_files` runs inside `run()`, whose own `except Exception` fails
+# the job and stamps quote_failed. Without its per-record guard, one manifest
+# entry that made storage raise would lose the whole quotation - which is the
+# opposite of what "reported, not raised" means. `intakefiles.read` catches
+# broadly on both backends today, but its local branch reaches
+# `workspaces.root()`, which raises `NoWorkspace`, and nothing enforces that
+# contract from `main.py`. Forced here, the same technique this file already
+# uses on `intakes.advance` above.
+_real_intakefiles_read = intakefiles.read
+
+
+def _boom_read(intake_id, file_id):
+    raise RuntimeError("synthetic storage failure, to prove the per-record guard")
+
+
+try:
+    intakefiles.read = _boom_read
+    answer = price(gamma.id, both_kinds)
+finally:
+    intakefiles.read = _real_intakefiles_read
+
+ok("a storage read that raises still answers 202", answer.status_code == 202)
+ok(
+    "and the quotation was still generated - the model was reached past the "
+    "failed read, rather than the job dying on it",
+    "images" in SEEN,
+)
+ok(
+    "with nothing of that file in the prompt",
+    not SEEN.get("images", []) and SEEN.get("documents_text", "") == "",
+)
+ok(
+    "and both files named to whoever pressed Generate",
+    "site-photo.png could not be read from storage" in note_bodies()
+    and "scope.txt could not be read from storage" in note_bodies(),
+)
+
+main.generate_estimate = stub_estimate
+# The section below drives raw ASGI rather than this client, and nothing after
+# it needs a background task to finish, so the long-lived loop is given back
+# here rather than left running to the end of the process.
+files_client.__exit__(None, None, None)
 
 # =============================================================================
 # `_gate`'s body cap, on the half of it that a `Content-Length` header does not
