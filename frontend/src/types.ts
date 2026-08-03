@@ -845,6 +845,36 @@ export type IntakePreset = {
 }
 
 /**
+ * One file a client attached, as the studio sees it - one entry of
+ * `intakes.Intake.attachments`, in the shape `app.intakefiles.save()` returns
+ * and the only function that ever builds one.
+ *
+ * Unlike `ClientAttachment` below, which is what the client themselves is
+ * shown, this carries the two fields a client deliberately is not: `id`,
+ * which addresses the file through
+ * `GET /api/intakes/{intake_id}/files/{id}` (`lib/api.ts`'s `intakeFileUrl`),
+ * and `note`, `attachments.read`'s extraction warning in the studio's own
+ * words ("this scan has no text layer") - a sentence about how PRISM will
+ * price the job, not one for the person who sent the file.
+ *
+ * The server's field is `List[dict]` with no model behind it - see
+ * `intakes.Intake.attachments`'s own docstring on why - so this shape is
+ * enforced here by `readIntake`'s coercion, the same discipline
+ * `IntakeRevision` already gets, not by anything `response_model` checks.
+ */
+export type IntakeAttachment = {
+  id: string
+  /** The client's own filename, verbatim - never the server's stored key. */
+  name: string
+  /** The canonical content type `intakefiles.resolve_type` settled on - the
+   *  same string the download route serves this file's `Content-Type` as. */
+  kind: string
+  bytes: number
+  /** `attachments.read`'s extraction warning, or empty when there was none. */
+  note: string
+}
+
+/**
  * One client request and everything that has happened to it - `intakes.Intake`.
  *
  * Storage-side and workspace-scoped, like `Member` and `Invite`: it never
@@ -889,6 +919,21 @@ export type Intake = {
    */
   client_kind: string
   client_kind_label: string
+
+  /**
+   * What the client attached, as a manifest rather than as bytes - one entry
+   * per stored file, in `IntakeAttachment`'s shape (below). Storage never
+   * held the filename or the extraction note, so this manifest is where both
+   * actually live; `intakefiles.listing()` answers a narrower question
+   * ("what is on the other end") that this type does not mirror.
+   *
+   * Still populated after `close()` - the record is the history of what was
+   * sent, per plan - even though the files themselves are deleted the moment
+   * a request closes. A screen rendering this array has to decide for itself
+   * whether `state === 'closed'` changes what a row does with it; see
+   * `IntakeListScreen.tsx`'s own comment on the judgement call it makes.
+   */
+  attachments: IntakeAttachment[]
 
   /**
    * The PAD settings this intake will be quoted under - kind, currency,

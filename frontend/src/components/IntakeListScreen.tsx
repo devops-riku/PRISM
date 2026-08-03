@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
-import { closeIntake, listIntakes, relinkIntake, sendIntake } from '../lib/api'
-import { formatDate } from '../lib/format'
+import type { MouseEvent, ReactNode } from 'react'
+import { closeIntake, intakeFileUrl, listIntakes, openFile, relinkIntake, sendIntake } from '../lib/api'
+import { formatBytes, formatDate } from '../lib/format'
 import RowMenu from './RowMenu'
 import { useRole } from '../lib/role'
 import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
-import type { Intake, IntakeRevision, IntakeState } from '../types'
+import type { Intake, IntakeAttachment, IntakeRevision, IntakeState } from '../types'
 
 /**
  * Every client request, grouped by what is waiting on whom rather than by
@@ -393,6 +393,119 @@ function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
   )
 }
 
+/**
+ * Fetch one of a client's own files with the session in a header, rather than
+ * letting the browser follow the link on its own.
+ *
+ * The same shape `ProposalView.tsx`'s and `SheetHeader.tsx`'s own `take`
+ * helpers already are, copied rather than imported: this file has no
+ * dependency on either component, and reaching into one for a six-line
+ * closure would be a stranger coupling than repeating it. The href stays
+ * real underneath - worth being able to copy or open in a new tab - but a
+ * plain navigation cannot carry the `Authorization` header this route needs
+ * once accounts are configured, so the click is taken here and the file
+ * arrives as a blob, exactly as every other authed file in this app already
+ * does.
+ *
+ * `download` mirrors the server's own `Content-Disposition` choice rather
+ * than forcing a save regardless of kind: a raster image opens in a new tab,
+ * the same thing `inline` on the response is for, and a document downloads,
+ * matching `attachment`. `openFile` never reads the response header itself
+ * - it cannot, the header describes bytes already in a blob by the time this
+ * runs - so this is a second, independent read of the same fact from the one
+ * place the frontend already has it: the manifest's own `kind`.
+ */
+function openAttachment(
+  url: string,
+  name: string,
+  download: boolean,
+): (event: MouseEvent<HTMLAnchorElement>) => void {
+  return (event) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+    event.preventDefault()
+    openFile(url, download ? { download: name } : {}).catch((failure) => {
+      window.alert(failure?.message || 'That file could not be opened.')
+    })
+  }
+}
+
+type AttachmentsProps = {
+  intakeId: string
+  attachments: IntakeAttachment[]
+  /**
+   * A closed intake's own manifest still names every file it ever held, and
+   * every one of them is gone: `close()` deletes the stored objects and
+   * leaves `Intake.attachments` populated, per plan - the record is the
+   * history of what was sent. Rendered as links regardless, a closed row
+   * would offer a full set of addresses that all 404 the moment anyone
+   * clicked one. So a closed row shows the same names and sizes as plain,
+   * non-interactive text instead, with a line saying why: the history stays
+   * readable, and nothing on it looks like a control that still works.
+   */
+  closed: boolean
+}
+
+/**
+ * What a client attached, by name and size, each one a link to
+ * `GET /api/intakes/{intake_id}/files/{file_id}` - the half of this feature
+ * the studio asked for by name.
+ *
+ * A count line rather than a bare list: a queue row is scanned, not read,
+ * and "3 files attached" answers "did they send anything" before anyone has
+ * to look further. The list itself is never cut to the first few to make it
+ * fit - it is bounded by height and scrolls instead, the same treatment this
+ * file already gives a long revision request (`asked.asked`, in `IntakeRow`
+ * below) - so a request with more files than fit on screen still shows every
+ * one of them, just not all at once.
+ */
+function AttachmentsBlock({ intakeId, attachments, closed }: AttachmentsProps) {
+  if (!attachments.length) return null
+
+  return (
+    <div className="mt-1 max-h-[9rem] max-w-[52ch] overflow-y-auto border-l-2 border-l-hairline pl-2">
+      <p className={MONO_LABEL}>
+        {attachments.length === 1 ? '1 file attached' : `${attachments.length} files attached`}
+      </p>
+      {closed ? (
+        <p className="mt-0.5 font-body text-[12.5px] leading-[1.5] text-faint">
+          Removed when this request was closed.
+        </p>
+      ) : null}
+      <ul className="mt-0.5 flex flex-col gap-0.5">
+        {attachments.map((file) => {
+          const label = file.name || 'Attachment'
+          const size = formatBytes(file.bytes)
+          if (closed) {
+            return (
+              <li key={file.id} className="truncate font-body text-[13px] text-faint">
+                {label} <span className={MONO_LABEL}>{size}</span>
+              </li>
+            )
+          }
+          const url = intakeFileUrl(intakeId, file.id)
+          // The only `image/*` kinds that ever reach this manifest are the
+          // five in `intakefiles.INLINE_TYPES` - `image/svg+xml` is refused
+          // at the door in Task 3, never stored - so this prefix check is a
+          // safe stand-in for that allowlist without restating it here.
+          const isRaster = file.kind.startsWith('image/')
+          return (
+            <li key={file.id} className="truncate">
+              <a
+                href={url}
+                className="font-body text-[13px] text-ballpoint underline underline-offset-[3px]"
+                onClick={openAttachment(url, label, !isRaster)}
+              >
+                {label}
+              </a>{' '}
+              <span className={MONO_LABEL}>{size}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
 type IntakeRowProps = {
   row: Intake
   isAdmin: boolean
@@ -578,6 +691,11 @@ function IntakeRow({
             </p>
           </div>
         ) : null}
+        <AttachmentsBlock
+          intakeId={row.id}
+          attachments={row.attachments}
+          closed={row.state === 'closed'}
+        />
         <p className="mt-2 flex flex-wrap items-center gap-2">
           <span className={row.state === 'quote_failed' ? 'chip chip--alert' : 'chip'}>
             {STATE_LABEL[row.state] || row.state}

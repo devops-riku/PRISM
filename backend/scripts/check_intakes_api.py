@@ -27,6 +27,7 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import config  # noqa: E402
+from app import intakefiles  # noqa: E402
 from app import intakes as intakes_module  # noqa: E402
 from app import main as main_module  # noqa: E402
 from app import storage  # noqa: E402
@@ -244,6 +245,190 @@ ok(
     client.post(
         f"/api/intakes/{body['id']}/close", headers={"X-Workspace": other.id}
     ).status_code
+    == 404,
+)
+
+# --- Reading a client's own file back, and the cross-intake refusal ---------
+#
+# `GET /api/intakes/{intake_id}/files/{file_id}` is the half of this feature
+# the studio asked for by name. `intakefiles.save()` writes the bytes and the
+# manifest entry directly - there is no anonymous multipart route exercised
+# here, exactly as `check_client_upload.py` owns proving `/submit` itself and
+# this file owns proving the routes that read back what it wrote.
+workspaces.use(made.id)
+
+FILE_A_BYTES = b"%PDF-1.4 fixture A - a client's own scope document\n"
+FILE_B_BYTES = b"\x89PNG\r\n\x1a\nfixture B - a client's own screenshot\n"
+
+intake_a = intakes_module.create(
+    client_email="", client_phone="", scope="", budget_text="", preset={}, created_by="",
+)
+# The quote in this name is the point: `intakefiles.clean_name` keeps it, so
+# the header-encoding assertions below are exercised against a real one
+# rather than a filename this suite chose to be convenient.
+entry_a = intakefiles.save(intake_a.id, 'sco"pe.pdf', FILE_A_BYTES, "application/pdf")
+intakes_module.advance(intake_a.id, intakes_module.SUBMITTED, attachments=[entry_a])
+
+intake_b = intakes_module.create(
+    client_email="", client_phone="", scope="", budget_text="", preset={}, created_by="",
+)
+entry_b = intakefiles.save(intake_b.id, "shot.png", FILE_B_BYTES, "image/png")
+intakes_module.advance(intake_b.id, intakes_module.SUBMITTED, attachments=[entry_b])
+
+own_a = client.get(f"/api/intakes/{intake_a.id}/files/{entry_a['id']}", headers=headers)
+ok(
+    "a studio can read a file that actually belongs to this intake",
+    own_a.status_code == 200 and own_a.content == FILE_A_BYTES,
+)
+ok("never cached", own_a.headers.get("cache-control") == "no-store")
+ok(
+    "an explicit content type read off the manifest",
+    own_a.headers.get("content-type", "").split(";")[0] == "application/pdf",
+)
+ok(
+    "a document outside the raster allowlist is attachment, not inline",
+    own_a.headers.get("content-disposition", "").startswith("attachment;"),
+)
+ok("nosniff on the document branch", own_a.headers.get("x-content-type-options") == "nosniff")
+ok(
+    "the quote in the client's own filename cannot break the header - the ASCII "
+    "fallback strips it rather than passing it through raw",
+    '"sco"pe.pdf"' not in own_a.headers.get("content-disposition", "")
+    and 'filename="scope.pdf"' in own_a.headers.get("content-disposition", ""),
+)
+ok(
+    "and the real name, quote included, survives as an RFC 5987 filename*",
+    "filename*=UTF-8''sco%22pe.pdf" in own_a.headers.get("content-disposition", ""),
+)
+
+own_b = client.get(f"/api/intakes/{intake_b.id}/files/{entry_b['id']}", headers=headers)
+ok(
+    "a raster image is inline, not attachment - the allowlist Task 3 enforced on the way in",
+    own_b.status_code == 200
+    and own_b.headers.get("content-disposition", "").startswith("inline;"),
+)
+ok(
+    "nosniff on the image branch too - both branches now, not local-only, since "
+    "the presigned redirect that exception existed for is gone",
+    own_b.headers.get("x-content-type-options") == "nosniff",
+)
+
+cross_a_to_b = client.get(f"/api/intakes/{intake_a.id}/files/{entry_b['id']}", headers=headers)
+ok(
+    "a file id belonging to a different intake, fetched through this intake's "
+    "own route, is 404",
+    cross_a_to_b.status_code == 404,
+)
+cross_b_to_a = client.get(f"/api/intakes/{intake_b.id}/files/{entry_a['id']}", headers=headers)
+ok("and the same refusal the other way round", cross_b_to_a.status_code == 404)
+
+ok(
+    "an unknown intake id is 404",
+    client.get(f"/api/intakes/000000000000/files/{entry_a['id']}", headers=headers).status_code
+    == 404,
+)
+ok(
+    "an unknown file id is 404",
+    client.get(f"/api/intakes/{intake_a.id}/files/000000000000", headers=headers).status_code
+    == 404,
+)
+ok(
+    "another workspace cannot read this intake's file either - the same "
+    "isolation reading the intake itself already has",
+    client.get(
+        f"/api/intakes/{intake_a.id}/files/{entry_a['id']}", headers={"X-Workspace": other.id}
+    ).status_code
+    == 404,
+)
+
+# --- Mutation proof: which layer is the gate, said plainly rather than implied
+#
+# Be honest about what this proves. The *primary* cross-intake gate on this
+# route is `intakefiles.read`'s own structural binding - it ties
+# `(intake_id, file_id)` together via the actual storage key or path, not by a
+# comparison a route could get wrong, and check_intakefiles.py already proves
+# it exhaustively. Disabling only this route's own `_owned_attachment` check
+# would still 404 on that binding and would prove nothing about this route at
+# all - exactly the trap Task 2's own review named: most of a traversal suite
+# passes with no gate at all, because the paths involved simply do not exist.
+#
+# So the mutation below simulates storage's binding being *absent* first (a
+# permissive stand-in for `intakefiles.read`, not a claim that the real one is
+# weak), with `_owned_attachment` left real, to show that check alone still
+# refuses a wrong-intake file id when nothing else would. Only then is
+# `_owned_attachment` defeated too, to show it is genuinely a second,
+# independent layer - not one incidentally covering for the other - rather
+# than to claim either check alone is "the" gate this route depends on.
+_real_read = intakefiles.read
+_real_owned = main_module._owned_attachment
+
+
+def _permissive_read(_intake_id, requested_file_id):
+    """Stands in for a storage layer with no cross-intake gate of its own:
+    answers for `entry_b`'s file regardless of which intake asked - the bug
+    `_owned_attachment` exists to survive."""
+    if requested_file_id == entry_b["id"]:
+        return FILE_B_BYTES, "image/png"
+    return _real_read(_intake_id, requested_file_id)
+
+
+def _always_owned(_entry, _file_id):
+    return {"name": "whatever.bin", "kind": "application/octet-stream", "bytes": 0, "note": ""}
+
+
+try:
+    intakefiles.read = _permissive_read
+    still_refused = client.get(
+        f"/api/intakes/{intake_a.id}/files/{entry_b['id']}", headers=headers
+    )
+    ok(
+        "with storage's own binding simulated away, the route's own manifest "
+        "check (_owned_attachment) still refuses a file id that is not this "
+        "intake's - a second, independent layer, not merely along for the ride",
+        still_refused.status_code == 404,
+    )
+
+    main_module._owned_attachment = _always_owned
+    both_defeated = client.get(
+        f"/api/intakes/{intake_a.id}/files/{entry_b['id']}", headers=headers
+    )
+    ok(
+        "mutation: with the route's own check disabled as well, on top of "
+        "storage's binding already being simulated away, the wrong intake's "
+        "file is served - proving `_owned_attachment` was doing real work "
+        "above, not that it is the only thing preventing this in production "
+        "(intakefiles.read's own structural binding, proven in "
+        "check_intakefiles.py, is the primary gate and was never actually "
+        "removed there)",
+        both_defeated.status_code == 200 and both_defeated.content == FILE_B_BYTES,
+    )
+finally:
+    intakefiles.read = _real_read
+    main_module._owned_attachment = _real_owned
+
+ok(
+    "restored: the same cross-intake fetch is refused again, on the real "
+    "functions rather than the mutated ones",
+    client.get(f"/api/intakes/{intake_a.id}/files/{entry_b['id']}", headers=headers).status_code
+    == 404,
+)
+
+# --- A closed intake's manifest still names its files, and every one is gone -
+#
+# `close()` deletes the objects but leaves `Intake.attachments` populated -
+# per plan, the record is the history of what was sent - so this route has to
+# answer 404 for a file its own intake still lists, not raise and not serve a
+# stale copy.
+closed_with_files = intakes_module.close(intake_a.id, "studio@neptune.ph")
+ok(
+    "closing an intake does not touch its manifest",
+    len(closed_with_files.attachments) == 1
+    and closed_with_files.attachments[0]["id"] == entry_a["id"],
+)
+ok(
+    "but the file itself is gone - close() deleted the object, and this route "
+    "404s for a file its own manifest still names",
+    client.get(f"/api/intakes/{intake_a.id}/files/{entry_a['id']}", headers=headers).status_code
     == 404,
 )
 
@@ -501,6 +686,27 @@ ok(
     client.get(f"/api/intakes/{secured_id}", headers=member_headers).status_code == 200,
 )
 
+# And a member can read a client's own attached file too - no admin check on
+# `read_intake_file` either, by the same reasoning as the queue itself.
+attachment_target = client.post(
+    "/api/intakes", headers=admin_headers, json={"preset": {}}
+).json()
+workspaces.use(secured.id)
+attachment_entry = intakefiles.save(
+    attachment_target["id"], "brief.pdf", b"%PDF-1.4 secured fixture\n", "application/pdf"
+)
+intakes_module.advance(
+    attachment_target["id"], intakes_module.SUBMITTED, attachments=[attachment_entry]
+)
+ok(
+    "a member can read a client's attached file: 200",
+    client.get(
+        f"/api/intakes/{attachment_target['id']}/files/{attachment_entry['id']}",
+        headers=member_headers,
+    ).status_code
+    == 200,
+)
+
 # `secured_id` is closed by this point, so relink/send need fixtures of their
 # own - a closed intake refuses both for reasons that have nothing to do with
 # the permission model this section exists to test.
@@ -553,6 +759,15 @@ ok(
 ok(
     "no Authorization header: reading one is 401",
     client.get(f"/api/intakes/{secured_id}", headers=no_token_headers).status_code == 401,
+)
+ok(
+    "no Authorization header: reading its attached file is 401 too - `_gate` "
+    "refuses before the route's own checks ever run",
+    client.get(
+        f"/api/intakes/{attachment_target['id']}/files/{attachment_entry['id']}",
+        headers=no_token_headers,
+    ).status_code
+    == 401,
 )
 ok(
     "no Authorization header: closing is 401",

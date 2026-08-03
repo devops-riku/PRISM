@@ -29,6 +29,7 @@ import threading
 import time
 from collections import deque
 from typing import Callable, List, NamedTuple, Union
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi import WebSocketDisconnect
@@ -2735,6 +2736,144 @@ async def read_intake(intake_id: str) -> intakes.Intake:
     if entry is None:
         raise HTTPException(status_code=404, detail="That request does not exist.")
     return entry
+
+
+def _owned_attachment(entry: intakes.Intake, file_id: str) -> dict | None:
+    """The manifest entry `file_id` names on `entry`, or `None`.
+
+    Said plainly rather than left to be inferred: the *primary* cross-intake
+    gate on this route is `intakefiles.read`'s own structural binding, below -
+    it ties `(intake_id, file_id)` together via the actual storage key or
+    local path, not by a comparison that could be written wrong, and
+    check_intakefiles.py proves it exhaustively. This function is the
+    route's own **second, independent** layer, sourced from this intake's own
+    manifest rather than from storage: a file id belonging to a different
+    intake, in this workspace or another, is simply not a member of *this*
+    intake's own `attachments`, so it comes back `None` here before storage
+    is ever asked a question - structurally, the same way `_quoted_bundle`
+    ties a bundle id to the intake that may send it, rather than by a
+    comparison a route could get subtly wrong.
+
+    Its own name rather than inlined into the route, for the same reason
+    `_quoted_bundle` has one: a check that can be disabled on its own is a
+    check a test can prove is doing real work. See check_intakes_api.py's
+    mutation proof, which simulates `intakefiles.read`'s own binding being
+    absent before trusting a flip from 404 to 200 to mean anything about this
+    function specifically - disabling only this function, with that binding
+    intact, would still 404 on it and prove nothing about this route at all.
+    """
+    key = (file_id or "").strip().lower()
+    if not key:
+        return None
+    for item in entry.attachments:
+        if isinstance(item, dict) and str(item.get("id", "")).strip().lower() == key:
+            return item
+    return None
+
+
+def _attachment_disposition(kind: str, name: str) -> str:
+    """`inline` for the raster allowlist, `attachment` for everything else -
+    `intakefiles.disposition_for` decides which, off the one content type
+    this route already resolved from the manifest, so `INLINE_TYPES` is
+    consulted in exactly one place rather than restated here.
+
+    The filename is the one string in this response a client chose, not this
+    studio. `intakefiles.clean_name` strips separators and control characters
+    on the way onto the record but keeps `"`, so a file called `sco"pe.pdf`
+    would close a naive `filename="..."` early and corrupt the header. Two
+    forms rather than one: `filename=` is a plain-ASCII fallback for the RFC
+    6266 grammar every client understands, with every `"`, backslash and
+    control byte stripped rather than escaped - a fallback name only has to
+    be recognisable, not exact, and escaping inside this particular header is
+    its own can of worms. `filename*=UTF-8''...` (RFC 5987) is the real name,
+    percent-encoded, and what every current browser actually opens or saves
+    the file under.
+
+    A name with no ASCII characters at all - `提案書.pdf` - reduces the
+    fallback to the bare word "attachment" with no extension. That is
+    deliberate, not a gap: `filename*` still carries the real name correctly
+    encoded, which is what every current browser actually reads, and the
+    fallback's only job is to be a legal RFC 6266 token for whatever does
+    not - never to be recognisable in every case.
+    """
+    disposition = intakefiles.disposition_for(kind)
+    original = name or "attachment"
+    ascii_only = original.encode("ascii", "ignore").decode("ascii")
+    fallback = re.sub(r'[\\"\r\n]', "", ascii_only).strip() or "attachment"
+    encoded = quote(original, safe="")
+    return f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+
+
+@app.get("/api/intakes/{intake_id}/files/{file_id}", tags=["intakes"])
+async def read_intake_file(intake_id: str, file_id: str) -> Response:
+    """One file a client attached to their request - the half of this
+    feature the studio asked for by name.
+
+    No admin check: reading the queue is any member's, and `list_intakes`'s
+    own docstring already settles that this is the same class of read.
+
+    There is no presigned redirect here, on either backend - see
+    `intakefiles.py`'s own docstring and the plan's "The revisit" section.
+    A presigned GET answers no `Access-Control-Allow-Origin` (the bucket has
+    no CORS rule, which is the default for every Space) and, carrying an
+    `Authorization` header across the redirect, a `400` instead of a file on
+    a browser that does not strip it - so a `307` here would be a response
+    the studio's own browser can neither `fetch` nor navigate to. The bytes
+    are read through `intakefiles.read` instead, in a thread: that call is a
+    network round trip once Spaces is configured, this is `async def`, and a
+    blocking socket call in it would park every request this worker holds,
+    including an anonymous client's `/submit` - `asyncio.to_thread` runs it
+    in a copy of the current context, so the workspace `_gate` already set
+    for this request carries into the thread rather than being silently lost.
+
+    The id pair is checked together, twice, independently, before a byte
+    leaves storage: `_owned_attachment` against this intake's own manifest
+    first, `intakefiles.read` second - see that function's own docstring for
+    why one alone is not trusted to be enough.
+
+    Every response sets `Cache-Control: no-store`, an explicit `Content-Type`
+    read off the manifest rather than off the object, `Content-Disposition:
+    inline` for `intakefiles.INLINE_TYPES` and `attachment` for everything
+    else, and `X-Content-Type-Options: nosniff` on both branches - the
+    exception that used to keep `nosniff` off the Spaces branch is retired
+    along with the presigned redirect it existed for.
+    """
+    entry = intakes.get(intake_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="That request does not exist.")
+
+    record = _owned_attachment(entry, file_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="That file does not exist.")
+
+    found = await asyncio.to_thread(intakefiles.read, intake_id, file_id)
+    if found is None:
+        # Covers a race with another request, and the ordinary case this
+        # feature has to answer for on purpose: `close()` deletes the objects
+        # but leaves `Intake.attachments` populated (see `intakes.py` and
+        # Task 2 Step 6), so a closed intake's own manifest still names this
+        # file right up until this line - and finds nothing behind it.
+        raise HTTPException(status_code=404, detail="That file does not exist.")
+
+    data, stored_type = found
+    # The manifest's own kind wins over what storage reports. It is the value
+    # `/submit` resolved through `intakefiles.resolve_type` in the first
+    # place and the one the studio's queue already shows this file as;
+    # `stored_type` is kept only as a fallback for an entry that somehow
+    # lacks one, so this response is never inconsistent with the record that
+    # named the file.
+    content_type = str(record.get("kind") or stored_type or intakefiles.FALLBACK_TYPE)
+    name = str(record.get("name") or "attachment")
+
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": _attachment_disposition(content_type, name),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.post("/api/intakes/{intake_id}/close", response_model=intakes.Intake, tags=["intakes"])

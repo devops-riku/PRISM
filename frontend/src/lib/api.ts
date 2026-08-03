@@ -18,6 +18,7 @@ import type {
   Currency,
   DocumentKind,
   Intake,
+  IntakeAttachment,
   IntakeIssued,
   IntakeRevision,
   Invite,
@@ -899,6 +900,30 @@ export function fileUrl(
 }
 
 /**
+ * URL of one file a client attached to their request -
+ * `GET /api/intakes/{intake_id}/files/{file_id}`.
+ *
+ * Unlike `documentUrl` and `fileUrl` above, there is no extension in this
+ * path: the server resolves `Content-Type` and `Content-Disposition` off the
+ * manifest entry it already holds, not off anything the URL names, so there
+ * is nothing here for a caller to get wrong by choosing the wrong one.
+ *
+ * Always fetched through `openFile`, never navigated to directly - the
+ * bucket behind this route is private and the session travels in a header,
+ * exactly as every other authed file in this app is already read.
+ */
+export function intakeFileUrl(intakeId: string, fileId: string): string {
+  const requestId = String(intakeId ?? '').trim()
+  if (!requestId) throw new TypeError('intakeFileUrl needs an intake id.')
+  const attachmentId = String(fileId ?? '').trim()
+  if (!attachmentId) throw new TypeError('intakeFileUrl needs a file id.')
+
+  return withWorkspace(
+    `${API_ROOT}/intakes/${encodeURIComponent(requestId)}/files/${encodeURIComponent(attachmentId)}`,
+  )
+}
+
+/**
  * Every workspace on this install, oldest first.
  *
  * Each carries its own counts and its own studio name, which is what makes the
@@ -1084,6 +1109,41 @@ function readRevisions(value: unknown): IntakeRevision[] {
 }
 
 /**
+ * One `attachments` entry as it actually arrives, before `readAttachments`
+ * has decided whether it is one - the same `unknown`-fielded shape
+ * `RevisionLike` uses above, for the same reason.
+ */
+type AttachmentLike = {
+  id?: unknown
+  name?: unknown
+  kind?: unknown
+  bytes?: unknown
+  note?: unknown
+}
+
+/**
+ * `Intake.attachments`, narrowed to the five keys this client knows about.
+ *
+ * The server's field is `List[dict]` with no model behind it - see
+ * `intakes.Intake.attachments`'s own docstring - so what lands here is
+ * whatever `intakefiles.save()` wrote, and the queue is going to render a
+ * client's own filename into the page. Coerced rather than trusted, exactly
+ * as `readRevisions` coerces `revisions` beside it: a third key somebody adds
+ * upstream is dropped, and an entry missing one of the five renders as an
+ * empty string or a zero rather than as `undefined`.
+ */
+function readAttachments(value: unknown): IntakeAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value.map((entry: AttachmentLike) => ({
+    id: String((entry && entry.id) || ''),
+    name: String((entry && entry.name) || ''),
+    kind: String((entry && entry.kind) || ''),
+    bytes: Number((entry && entry.bytes) || 0) || 0,
+    note: String((entry && entry.note) || ''),
+  }))
+}
+
+/**
  * The one place an `Intake` crosses into this client from the wire.
  *
  * Applied to every intake every call in this module hands back, so no screen
@@ -1092,7 +1152,11 @@ function readRevisions(value: unknown): IntakeRevision[] {
  * plain strings and a string array, which `response_model` does guarantee.
  */
 function readIntake<T extends Intake>(entry: T): T {
-  return { ...entry, revisions: readRevisions(entry.revisions) }
+  return {
+    ...entry,
+    revisions: readRevisions(entry.revisions),
+    attachments: readAttachments(entry.attachments),
+  }
 }
 
 /**
