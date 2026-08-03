@@ -140,6 +140,8 @@ ADVANCE_FIELDS = {
     "client_phone",
     "scope",
     "budget_text",
+    "client_kind",
+    "client_kind_label",
 }
 
 
@@ -194,6 +196,25 @@ class Intake(BaseModel):
     client_phone: str = ""
     scope: str = ""
     budget_text: str = ""
+
+    #: What kind of work the client says this is, and - for `other` - their own
+    #: word for it. One of `kinds.BY_ID`, or empty when they have not answered.
+    #:
+    #: Their own fields rather than two more keys inside `preset`, and that is a
+    #: security decision rather than a tidiness one. `preset` is the studio's
+    #: whole PAD configuration - currency, market, tax basis, payment terms,
+    #: tiers - and it is deliberately absent from `ADVANCE_FIELDS`. Putting the
+    #: client's answer in there would mean adding `preset` to that allowlist,
+    #: which would hand an anonymous caller the ability to rewrite every pricing
+    #: setting the studio chose, to change one of them. These two are what
+    #: `ADVANCE_FIELDS`'s own note anticipates: "the day a second write path
+    #: needs a field the first should not be able to touch."
+    #:
+    #: `App.tsx`'s `readPreset` prefers these over `preset.kind` when they are
+    #: set, so the pad opens on the client's answer and falls back to the
+    #: studio's default for a request generated before this existed.
+    client_kind: str = ""
+    client_kind_label: str = ""
 
     #: The PAD settings this intake will be quoted under - kind, currency,
     #: market region, tax basis, payment terms, tiers.

@@ -626,11 +626,26 @@ def kind_block(kind_id: str, kind_label: str = "") -> list[str]:
     if kind.id == kinds.DEFAULT.id:
         return []
 
-    # "Something else" is a discipline the studio named. Its guidance says to use
-    # the studio's own word for it throughout, which is worth nothing unless the
-    # word is in the brief.
-    named = (kind_label or "").strip()[: kinds.MAX_LABEL]
-    heading = f"THIS IS {named.upper()} WORK" if named and kind.id == kinds.OTHER.id else (
+    # "Something else" is a discipline somebody named. Its guidance says to use
+    # that word for it throughout, which is worth nothing unless the word is in
+    # the brief.
+    #
+    # `.upper()` INSIDE `strip_sentinels`, for the reason `build_brief` spells
+    # out at length over its own four fields: every sentinel is all-uppercase
+    # and the helper matches case-sensitively, so upper-casing after the strip
+    # would let a lowercase lookalike survive untouched and then be minted into
+    # a real marker by the very transform meant to normalise it. This line is
+    # the one that mints, too - the label lands inside `=== ... ===`, which is
+    # the shape of every heading the model is told to obey.
+    #
+    # That comment ends by naming the day this would matter: "the day any preset
+    # field is wired to a client-writable source". `kind_label` is that field
+    # and this is that day - the kind of work is now the client's answer, given
+    # through their own link, so a client who types a marker as their discipline
+    # is a client writing directly into the prompt's instruction layer. It was
+    # safe while only an admin could reach it and it is not safe now.
+    named = strip_sentinels((kind_label or "").strip()[: kinds.MAX_LABEL].upper())
+    heading = f"THIS IS {named} WORK" if named and kind.id == kinds.OTHER.id else (
         "THE SECOND DOCUMENT IS NOT A SOFTWARE SPECIFICATION"
     )
 

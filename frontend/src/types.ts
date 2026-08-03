@@ -877,6 +877,20 @@ export type Intake = {
   budget_text: string
 
   /**
+   * What kind of work the client says this is, and - for `other` - their own
+   * word for it. Empty until they answer; one of `KindPicker`'s ids after.
+   *
+   * Their own fields rather than two more keys inside `preset`, because
+   * `preset` is not writable by the client at all: it is absent from
+   * `intakes.ADVANCE_FIELDS` on purpose, and putting the client's answer
+   * there would mean granting an anonymous caller write access to every
+   * pricing setting the studio chose in order to let them change one.
+   * `App.tsx`'s `readPreset` prefers these over `preset.kind`.
+   */
+  client_kind: string
+  client_kind_label: string
+
+  /**
    * The PAD settings this intake will be quoted under - kind, currency,
    * market region, tax basis, payment terms, tiers. The server's own field is
    * a bare, unconstrained `dict` rather than a fixed shape, and its values

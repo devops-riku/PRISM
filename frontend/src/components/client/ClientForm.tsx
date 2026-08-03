@@ -2,15 +2,26 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FieldLabel } from '../FieldRow'
 import ErrorNotice from '../ErrorNotice'
+import KindPicker from '../KindPicker'
 import { ACTION_PRIMARY, DISPLAY, MONO_LABEL, WELL, WELL_TEXTAREA } from '../tokens'
 import { ClientApiError, submitClientIntake } from '../../lib/clientApi'
 import type { ClientSubmitBody } from '../../lib/clientApi'
-import type { ClientIntakeView, ClientIssuedView } from '../../types'
+import type { ClientIntakeView, ClientIssuedView, QuotationKind } from '../../types'
 
 /**
- * Face 1: `issued`. A stranger's first look at this studio - four fields,
- * nothing else, the studio's own name at the top of the page rather than
- * PRISM's.
+ * Face 1: `issued`. A stranger's first look at this studio - what kind of
+ * work it is and four fields under it, nothing else, the studio's own name at
+ * the top of the page rather than PRISM's.
+ *
+ * The kind of work is asked here rather than on the studio's own Generate
+ * screen, where it used to live. The reasoning that put it there was that the
+ * kind is the studio's reading of the job, and that is true of what the answer
+ * *does* - it picks the second document and the words the quotation is written
+ * in - and false of who knows it. A client commissioning an audit knows they
+ * are commissioning an audit; a studio holding a paragraph is guessing. So the
+ * question moves and the consequences do not: `App.tsx`'s `readPreset` still
+ * hands the pad a kind, it is now the client's answer rather than the studio's
+ * default.
  *
  * Every field here is length-bounded and stored verbatim by `/submit`
  * (`_normalise_client_email`/`_normalise_client_phone`/`_normalise_scope`/
@@ -82,6 +93,18 @@ export default function ClientForm({
   const [phone, setPhone] = useState('')
   const [scope, setScope] = useState('')
   const [budget, setBudget] = useState('')
+  // Asked first, because it decides the vocabulary the whole quotation is
+  // written in and what the studio's second document turns out to be. It used
+  // to be asked on the studio's own Generate screen, on the reasoning that it
+  // was the studio's reading of the job rather than the client's answer -
+  // which is true of the consequences and false of the question. The client
+  // is the one who knows whether they are commissioning a website or an audit,
+  // and asking them is cheaper than a studio guessing from a paragraph.
+  //
+  // `software` opens selected because it is what PRISM has always quoted, so
+  // a client whose work is a website answers nothing at all.
+  const [kind, setKind] = useState<QuotationKind>('software')
+  const [kindLabel, setKindLabel] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<{ headline: string; next?: string } | null>(null)
   // Flips true on the first submit attempt that finds something missing, and
@@ -94,13 +117,23 @@ export default function ClientForm({
   const trimmedScope = scope.trim()
   const trimmedBudget = budget.trim()
 
+  const trimmedKindLabel = kindLabel.trim()
+
   const emailMissing = !trimmedEmail
   const emailInvalid = !emailMissing && !EMAIL_SHAPE.test(trimmedEmail)
   const scopeMissing = !trimmedScope
   const budgetMissing = !trimmedBudget
-  const ready = !emailMissing && !emailInvalid && !scopeMissing && !budgetMissing
+  // Only for `other`, and only because the whole point of picking it is the
+  // word that comes with it: `prompts.kind_block` writes that word into the
+  // heading the model works under, and an `other` with nothing typed falls
+  // back to a generic heading that says what the work is *not*. Every other
+  // kind carries its own name already.
+  const kindLabelMissing = kind === 'other' && !trimmedKindLabel
+  const ready =
+    !emailMissing && !emailInvalid && !scopeMissing && !budgetMissing && !kindLabelMissing
 
   const missing: string[] = []
+  if (kindLabelMissing) missing.push('Kind of work - name the discipline')
   if (emailMissing) missing.push('Email')
   else if (emailInvalid) missing.push('Email - that doesn’t look like a full address')
   if (scopeMissing) missing.push('Scope')
@@ -136,6 +169,13 @@ export default function ClientForm({
       client_phone: phone.trim(),
       scope: trimmedScope,
       budget_text: trimmedBudget,
+      client_kind: kind,
+      // Sent only where it means something. `kind_block` reads this field for
+      // `other` alone, so shipping a label the client typed before changing
+      // their mind back to `software` would put a word on the record that
+      // nothing will ever read and that a studio would reasonably believe was
+      // chosen.
+      client_kind_label: kind === 'other' ? trimmedKindLabel : '',
     }
 
     submitClientIntake(token, body)
@@ -158,10 +198,38 @@ export default function ClientForm({
         Tell {studio} about the work
       </h1>
       <p className="mt-2 max-w-[46ch] font-body text-[14.5px] leading-[1.6] text-void">
-        Four things, and {studio} can start putting a quotation together.
+        What kind of work it is and a few details, and {studio} can start putting a quotation
+        together.
       </p>
 
       <form onSubmit={handleSubmit} noValidate className="mt-6 flex flex-col gap-5">
+        {/* First, and above the four fields rather than among them: it is the
+            only question here whose answer changes how the others are read.
+            `KindPicker` is the studio's own component, used unchanged - the
+            same eight disciplines in the same order, so a client and the
+            studio pricing them are looking at one vocabulary rather than two
+            that have to be kept in step. */}
+        <div>
+          <FieldLabel htmlFor="client-kind">Kind of work</FieldLabel>
+          <p className="mt-1 max-w-[46ch] font-body text-[13px] leading-[1.6] text-void">
+            It decides how {studio} writes the quotation, and what they put together alongside it.
+          </p>
+          <div className="mt-3">
+            <KindPicker
+              value={kind}
+              label={kindLabel}
+              onChange={setKind}
+              onLabel={setKindLabel}
+              disabled={pending}
+            />
+          </div>
+          {attempted && kindLabelMissing ? (
+            <p className="mt-2 font-body text-[13px] leading-[1.6] text-alert">
+              Name the discipline so {studio} can write in its language.
+            </p>
+          ) : null}
+        </div>
+
         <div>
           <FieldLabel htmlFor="client-email">Email</FieldLabel>
           <input

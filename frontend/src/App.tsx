@@ -375,13 +375,24 @@ type PresetRead = { [K in keyof IntakePreset]: IntakePreset[K] | undefined }
  * `IntakePreset`'s own docstring), and reading a key nothing writes would be
  * the same mistake in the other direction.
  */
-function readPreset(preset: Record<string, unknown>): PresetRead {
+function readPreset(preset: Record<string, unknown>, intake: Intake): PresetRead {
   // `fetchIntake` only checks that `id` is a string, so this field is exactly
   // as trustworthy as `intake.scope` is below - which is to say, not.
   const source = preset && typeof preset === 'object' ? preset : {}
+  // The kind of work is the client's answer, given through their own link, and
+  // it wins over the preset's when they have given one. The preset still
+  // carries a kind and still supplies it here, because it is the right answer
+  // in the case the client has not answered at all: a studio can open the pad
+  // on an `issued` intake, before anybody has filled the form in, and the
+  // studio's own default is a better opening than nothing.
+  //
+  // `client_kind` goes through the same membership check the preset's does,
+  // and for a sharper reason: this one arrives from a stranger. A value
+  // outside the union falls back to the preset exactly as an absent one does.
+  const clientKind = presetMember(intake.client_kind, KIND_IDS)
   return {
-    kind: presetMember(source.kind, KIND_IDS),
-    kind_label: presetText(source.kind_label),
+    kind: clientKind || presetMember(source.kind, KIND_IDS),
+    kind_label: clientKind ? presetText(intake.client_kind_label) : presetText(source.kind_label),
     currency: presetCurrency(source.currency),
     market_region: presetText(source.market_region),
     tax_mode: presetMember(source.tax_mode, TAX_MODES),
@@ -953,7 +964,7 @@ export default function App() {
                       // same form in the same single pass. Same discipline as
                       // the three above, extended to the fields that are unions
                       // rather than free text - see `readPreset`.
-                      ...readPreset(intake.preset),
+                      ...readPreset(intake.preset, intake),
                     }
                   : undefined
               }

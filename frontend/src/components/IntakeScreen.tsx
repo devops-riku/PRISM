@@ -7,14 +7,12 @@ import { padDefaults } from './BriefForm'
 import CurrencySelect from './CurrencySelect'
 import Dropdown from './Dropdown'
 import { FieldLabel } from './FieldRow'
-import KindPicker from './KindPicker'
 import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
 import type {
   IntakeIssued,
   IntakePreset,
   PaymentCadence,
   PricingBasis,
-  QuotationKind,
   StudioDefaults,
   TaxMode,
 } from '../types'
@@ -26,9 +24,15 @@ import type {
  * not any more: from Stage 2 the client writes their own scope and their own
  * budget through the link generated here, so what is left is everything about
  * the quotation that is the studio's to decide before anybody has said
- * anything - what kind of work it is, what currency and market it is priced
- * in, how tax is handled, what the payment terms are, and whether it is quoted
- * at tiers.
+ * anything - what currency and market it is priced in, how tax is handled,
+ * what the payment terms are, and whether it is quoted at tiers.
+ *
+ * What kind of work it is used to be asked here too, and is not any more: that
+ * one is the client's answer, given on their own form, because a client
+ * commissioning an audit knows they are commissioning an audit and a studio
+ * holding a paragraph is guessing. The preset still carries a kind as the
+ * opening for an intake nobody has filled in yet; `App.tsx`'s `readPreset`
+ * prefers the client's the moment there is one.
  *
  * That configuration is stored on the request as its preset and read back the
  * moment somebody opens the pad from the queue, so a studio that sets its
@@ -83,8 +87,10 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
   // that had stopped believing it.
   const opening = padDefaults(defaults)
 
-  const [kind, setKind] = useState<QuotationKind>(opening.kind)
-  const [kindLabel, setKindLabel] = useState(opening.kind_label)
+  // No state for `kind` and `kind_label`: this screen no longer asks. They are
+  // still written below, straight off `padDefaults`, as the opening the pad
+  // gets for an intake whose client has not answered yet - a value nobody has
+  // chosen yet rather than one this screen pretends to have chosen.
   const [currency, setCurrency] = useState(opening.currency)
   const [marketRegion, setMarketRegion] = useState(opening.market_region)
   const [taxMode, setTaxMode] = useState<TaxMode>(opening.tax_mode)
@@ -167,8 +173,8 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
     // written per-payment schedule - because each depends on what the client
     // actually asked for, and at this moment they have not asked yet.
     const preset: IntakePreset = {
-      kind,
-      kind_label: kindLabel.trim(),
+      kind: opening.kind,
+      kind_label: opening.kind_label,
       currency,
       market_region: marketRegion.trim(),
       tax_mode: taxMode,
@@ -303,6 +309,15 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
             </div>
           ) : (
             <form onSubmit={submit} className="max-w-[46rem]">
+              {/* "Kind of work" used to be the first thing asked here, on the
+                  reasoning that it was the studio's reading of the job rather
+                  than the client's answer. It is the client's question and it
+                  now lives on their form - see `ClientForm`'s own docstring.
+                  The preset still carries a kind, because a studio can open
+                  the pad on an `issued` intake before anybody has filled that
+                  form in and the studio's default is a better opening than
+                  nothing; `App.tsx`'s `readPreset` prefers the client's answer
+                  the moment there is one. */}
               <section>
                 {/* Where focus lands coming back from the link panel, so
                     "Generate another" is as announced as generating was. */}
@@ -311,26 +326,8 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
                   tabIndex={-1}
                   className={`${DISPLAY} focus-landing text-[17px]`}
                 >
-                  Kind of work
+                  How it is priced
                 </h3>
-                <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
-                  It decides what the second document is, and the words the quotation is written
-                  in. The client is not asked this &mdash; it is the studio&rsquo;s reading of the
-                  work, not theirs.
-                </p>
-                <div className="mt-3">
-                  <KindPicker
-                    value={kind}
-                    label={kindLabel}
-                    onChange={setKind}
-                    onLabel={setKindLabel}
-                    disabled={busy}
-                  />
-                </div>
-              </section>
-
-              <section className="mt-6 border-t border-hairline pt-5">
-                <h3 className={`${DISPLAY} text-[17px]`}>How it is priced</h3>
                 <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
                   Rates are set for the market below and quoted straight into the currency. Nothing
                   is converted.

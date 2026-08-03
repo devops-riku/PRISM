@@ -237,13 +237,22 @@ export async function fetchClientIntake(
   return request<ClientIntakeView>(token, '', { signal: options.signal })
 }
 
-/** The four fields `POST /api/client/{token}/submit` accepts, filled in once
- * from `issued`. */
+/** What `POST /api/client/{token}/submit` accepts, filled in once from
+ * `issued`.
+ *
+ * `client_kind` is one of `KindPicker`'s own ids and the server checks it
+ * against `kinds.BY_ID` rather than trusting it; `client_kind_label` is the
+ * client's own word for their discipline and is read only when the kind is
+ * `other`. Both land on their own `Intake` fields rather than inside the
+ * studio's `preset` - see `intakes.Intake.client_kind` for why that
+ * distinction is a security boundary and not a filing decision. */
 export type ClientSubmitBody = {
   client_email: string
   client_phone: string
   scope: string
   budget_text: string
+  client_kind: string
+  client_kind_label: string
 }
 
 /** The client's own words, written once. Legal only from `issued` - a
