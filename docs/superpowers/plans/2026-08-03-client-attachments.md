@@ -29,9 +29,11 @@ This is not hedging. It is what lets the feature ship and be tested before crede
 - **The client's filename never becomes a path.** Files are stored as `<12-hex>.<ext>` with the original name kept in the manifest as data. `storage.is_valid_id` is the existing gate for this shape and is reused.
 - **A link buys one upload.** `/submit` is legal only from `issued` and moves the intake to `submitted`, so `intakes.ALLOWED` already bounds an anonymous caller to one submission per token. Do not add a second anonymous write route; that bound is the strongest control in this feature.
 - **Nothing client-supplied is ever served `inline` except a raster image from a closed allowlist.** `image/svg+xml` is refused outright — an SVG is a script document, and the studio opens these on the studio's own origin.
-- **Every response carrying a client file sets `Cache-Control: no-store`, an explicit `Content-Type`, and `Content-Disposition: attachment` for anything outside the raster allowlist.** `X-Content-Type-Options: nosniff` is added **on the local branch only, and this is a deliberate, reasoned exception rather than an oversight** — see below.
+- **Every response carrying a client file sets `Cache-Control: no-store`, an explicit `Content-Type`, and `Content-Disposition: attachment` for anything outside the raster allowlist.** `X-Content-Type-Options: nosniff` is added **on both branches** — see the amendment below, which measured the presigned redirect this exception was written for and found the studio's own browser cannot follow it.
 
 ### Why nosniff is not on the Spaces branch
+
+> **Amended at Task 5 — this whole section is now history rather than instruction.** The `307` it reasons about is gone, and with it the exception. What follows is kept because the reasoning is still the reasoning, and because the section below it records what replaced it and why. Read both.
 
 It cannot be. `PutObject` accepts `ACL`, `CacheControl`, `ContentDisposition`, `ContentEncoding`, `ContentLanguage`, `ContentType`, `Expires`, `Metadata` and the SSE members; the presign overrides are the `Response*` set. **No member on either side emits `X-Content-Type-Options`**, and `Metadata` emits `x-amz-meta-*` only. Since a presigned GET is fetched browser→DigitalOcean with this app out of the path, there is nowhere left to add it.
 
@@ -44,6 +46,21 @@ What stands in for it, and why it is adequate: nosniff's job is to stop a browse
 Practical note for Task 5, not a security one: Safari renders HEIC and Chrome and Firefox do not, so `inline` on a `.heic` degrades to a download in most browsers. That is a display outcome, not a hole — HEIC cannot execute either way.
 
 The residual is a browser ignoring a correct `Content-Type` on a five-format raster allowlist. That is thin, it is on a different origin from the studio's session, and buying it back would mean streaming every byte through this process and giving up the 307 entirely. **If that trade is ever revisited, revisit it here rather than silently in a route.**
+
+### The revisit: the 307 is gone, and nosniff is on both branches
+
+Task 5 took that invitation, because the 307 turned out not to be a trade at all — the studio's browser cannot follow it. Two facts, both measured against the live `sgp1` Space rather than reasoned about, under a throwaway `zz-task5-cors-probe/` prefix that was deleted afterwards:
+
+1. **A presigned GET answers no `Access-Control-Allow-Origin`.** With `Origin: http://localhost:5173` on the request the object comes back `200` with `Vary: Origin, Access-Control-Request-Headers, Access-Control-Request-Method` and *no* `Access-Control-Allow-Origin` — the bucket has no CORS rule, which is the default for every Space. A browser `fetch` follows the `307` cross-origin and is then refused the read.
+2. **A presigned GET carrying an `Authorization` header answers `400 InvalidArgument`.** Two auth mechanisms on one request. Browsers are supposed to strip `Authorization` across a cross-origin redirect; any that does not turns this into a `400` instead of a file.
+
+Neither is fixable from inside this app, and the fallback of a plain navigation is not available either: `auth.required()` is true wherever Supabase is configured, and an `<a href>` cannot carry a bearer token — which is precisely why `lib/api.ts`'s `openFile` exists and why every authed file in this app is already fetched and handed over as a blob. So the `307` is a route the frontend can neither `fetch` nor navigate to.
+
+**The bytes are therefore served through this process on both branches**, `intakefiles.read()` inside `asyncio.to_thread` so a `get_object` never blocks the event loop. What that costs is real and bounded: at most `MAX_CLIENT_FILES` × `MAX_CLIENT_FILE_BYTES` — six files of 6 MiB — through the app instead of past it, on a hand-pressed studio read, which is the same order Task 6 already spends fetching the same files for generation.
+
+What it buys is more than it costs. There is now genuinely **one** behaviour rather than one route over two, so the frontend cannot be right about one backend and wrong about the other. `X-Content-Type-Options: nosniff` goes on **both** branches, because this app is finally in the path for both — the exception above is not narrowed, it is retired. And a presigned URL, which is a bearer credential for a private object, is no longer minted at all on the studio's read path.
+
+`intakefiles.view_url()` is untouched and still tested: it remains the module's answer to "where can this be looked at", and it is what a CORS-configured deployment or a non-browser consumer would reach for. `main.py` simply no longer routes through it.
 - **A file that cannot be read is reported, never raised.** This is `attachments.py`'s existing rule (its module docstring states it) and it now applies to a client who is not in the room to be asked.
 - `backend/app/schemas.py` is not modified. TypeScript strict, zero errors, zero `any`/`as`/`@ts-ignore`/`!`. Tailwind v4 CSS-first. No test framework may be added; backend checks are standalone scripts under `backend/scripts/` that exit 0.
 - Branch from `e5b581f` on `feat/client-attachments`.
@@ -187,11 +204,11 @@ This task ships **before** any upload route exists, because both defects it clos
 
 - [ ] **Step 1: `GET /api/intakes/{intake_id}/files/{file_id}`.** Behind the gate like every other studio route. No admin check — reading the queue is any member's, and `list_intakes`'s own docstring settles that this is the same class of read.
 
-  On Spaces it answers `307` to a **presigned URL with a short TTL** (minutes, not hours) rather than streaming the bytes through this process; on local it serves the file. One route, either way, so the frontend has one thing to link to and never learns which backend is behind it.
+  ~~On Spaces it answers `307` to a **presigned URL with a short TTL** (minutes, not hours) rather than streaming the bytes through this process; on local it serves the file.~~ **Amended — see "The revisit" above.** It serves the bytes on both branches, through `intakefiles.read()` inside `asyncio.to_thread`, because a `307` to a presigned URL is a response the studio's browser can neither `fetch` (no CORS rule on the Space) nor navigate to (no bearer on an `<a href>`). One route, one behaviour, so the frontend has one thing to link to and never learns which backend is behind it.
 
 - [ ] **Step 2: The headers, which are the point of the route.** `Cache-Control: no-store`, an explicit `Content-Type` from the manifest, `Content-Disposition: inline` only for the raster allowlist Task 3 enforced and `attachment` for everything else. Never a sniffed type.
 
-  For Spaces these are set as **object metadata at `put_object` time** (Task 2 does this), so a presigned GET carries them without this route being in the path. **`X-Content-Type-Options: nosniff` is set on the local branch only** — it cannot be attached to a Spaces object or a presigned URL at all. Do not go looking for a way; read the "Why nosniff is not on the Spaces branch" section above, which settles it and says what stands in for it. If you disagree with that trade, say so in your report rather than changing the design here.
+  For Spaces these are *also* set as **object metadata at `put_object` time** (Task 2 does this), which is still right and still worth keeping: it is what makes the object correct in its own bucket, independently of who reads it. But this route is now in the path for both backends, so the headers a studio actually receives are the ones built here, off the manifest. ~~**`X-Content-Type-Options: nosniff` is set on the local branch only**~~ — **amended: it is set on both**, since giving up the `307` put this app back in the path. See "The revisit" above.
 
   **Filenames need encoding, not interpolation.** `intakefiles.clean_name` strips separators and control characters but keeps `"`, so a file called `sco"pe.pdf` would break a naive `Content-Disposition: attachment; filename="…"`. Quote it properly or use RFC 5987 `filename*`.
 
