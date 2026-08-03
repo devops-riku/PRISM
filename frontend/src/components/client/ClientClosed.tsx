@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { DISPLAY } from '../tokens'
 
 /**
@@ -19,9 +20,26 @@ import { DISPLAY } from '../tokens'
  * alike.
  */
 export default function ClientClosed() {
+  // This face can arrive as a transition - a write mid-session discovers the
+  // link is gone and ClientShell swaps whatever was on screen for this - as
+  // easily as a fresh load. The heading takes focus either way, the same
+  // treatment every other face gives its own: a screen reader hears
+  // "There's nothing here" immediately rather than needing to explore the
+  // page to find out anything happened at all.
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [])
+
   return (
     <div className="rounded-[18px] border border-rule bg-paper p-7 text-center shadow-raised sm:p-8">
-      <h1 className={`${DISPLAY} text-[19px] leading-[1.4] text-ink`}>There&rsquo;s nothing here.</h1>
+      <h1
+        ref={headingRef}
+        tabIndex={-1}
+        className={`${DISPLAY} focus-landing text-[19px] leading-[1.4] text-ink`}
+      >
+        There&rsquo;s nothing here.
+      </h1>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { formatDate } from '../../lib/format'
 import { DISPLAY, MONO_LABEL } from '../tokens'
 import type { ClientWaitingView } from '../../types'
@@ -19,14 +20,38 @@ import type { ClientWaitingView } from '../../types'
  * No `.chip--live`, `.orbit`, `.thread--waiting` or `.bar-live` - every one
  * of those says "work is happening right now," which is the one thing this
  * screen is built to never claim.
+ *
+ * This is the face a `ClientForm` submit lands on, and that transition
+ * unmounts one component and mounts this one - React gives no signal of its
+ * own that anything happened, so a screen reader user gets nothing unless
+ * this component says so itself. Two things do that: `role="status"` on the
+ * card (a live region a screen reader announces as soon as it appears,
+ * whether or not it happens to be focused), and moving focus to the
+ * heading on mount, for the sighted-keyboard case and as a second path to
+ * the same announcement on assistive tech that reads focus moves more
+ * reliably than live regions. Belt and suspenders on purpose: a stranger on
+ * a phone who just pressed "Send" needs to know something happened, and
+ * this is the one screen built entirely to reassure them of that.
  */
 export default function ClientWaiting({ view }: { view: ClientWaitingView }) {
   const studio = view.studio_name || 'This studio'
 
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [])
+
   return (
-    <div className="rounded-[18px] border border-rule bg-paper p-6 shadow-raised sm:p-8">
+    <div
+      role="status"
+      className="rounded-[18px] border border-rule bg-paper p-6 shadow-raised sm:p-8"
+    >
       <p className={MONO_LABEL}>{studio}</p>
-      <h1 className={`${DISPLAY} mt-3 text-[22px] leading-[1.2] text-ink`}>
+      <h1
+        ref={headingRef}
+        tabIndex={-1}
+        className={`${DISPLAY} focus-landing mt-3 text-[22px] leading-[1.2] text-ink`}
+      >
         {studio} has your scope.
       </h1>
       <p className="mt-2 font-body text-[15px] leading-[1.6] text-ink">Nobody has replied yet.</p>

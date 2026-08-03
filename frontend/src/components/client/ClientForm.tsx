@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FieldLabel } from '../FieldRow'
 import ErrorNotice from '../ErrorNotice'
@@ -17,8 +17,23 @@ import type { ClientIntakeView, ClientIssuedView } from '../../types'
  * `_normalise_budget_text` in `main.py`) - none of it is validated for shape
  * server-side beyond a length ceiling, so the `required`/`type="email"`
  * attributes here are for this screen's own sake, not a contract the API
- * enforces.
+ * enforces. `EMAIL_SHAPE` below is the one exception worth the trouble:
+ * this address is the studio's only route back to whoever filled this in,
+ * and the server only strips and bounds it, so a shape check has to happen
+ * here or nowhere.
+ *
+ * The submit button is never `disabled` on account of incomplete fields -
+ * only while a request is actually in flight. A grey, unclickable button
+ * with no reachable explanation is a dead end for a user who filled in two
+ * of three fields and cannot tell which one is missing; this form instead
+ * lets the click happen and answers it with a summary naming exactly what's
+ * left, each entry wired to the field it names via `aria-describedby`.
  */
+
+/** A shape check, not a deliverability one: local part, an `@`, a domain
+ * with a dot. Permissive on purpose - this only has to catch `asdf`, not
+ * reject every legal address a strict RFC 5322 pattern would. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 /** Turn a failed write into words safe to show a stranger, and whether the
  * link itself is gone rather than merely this one call. Mirrors the rule
@@ -69,22 +84,58 @@ export default function ClientForm({
   const [budget, setBudget] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<{ headline: string; next?: string } | null>(null)
+  // Flips true on the first submit attempt that finds something missing, and
+  // stays true - once a stranger has seen what's wrong, the per-field
+  // messages below should keep tracking their progress live as they fix
+  // each one, not vanish and reappear only on the next click.
+  const [attempted, setAttempted] = useState(false)
 
+  const trimmedEmail = email.trim()
   const trimmedScope = scope.trim()
-  const ready = Boolean(email.trim()) && Boolean(trimmedScope) && Boolean(budget.trim())
+  const trimmedBudget = budget.trim()
+
+  const emailMissing = !trimmedEmail
+  const emailInvalid = !emailMissing && !EMAIL_SHAPE.test(trimmedEmail)
+  const scopeMissing = !trimmedScope
+  const budgetMissing = !trimmedBudget
+  const ready = !emailMissing && !emailInvalid && !scopeMissing && !budgetMissing
+
+  const missing: string[] = []
+  if (emailMissing) missing.push('Email')
+  else if (emailInvalid) missing.push('Email - that doesn’t look like a full address')
+  if (scopeMissing) missing.push('Scope')
+  if (budgetMissing) missing.push('Budget')
+
+  const summaryRef = useRef<HTMLDivElement | null>(null)
+  // The summary box only enters the DOM once `attempted` first flips true -
+  // on the very first failed submit, `summaryRef.current` is still `null` at
+  // the moment `handleSubmit` runs, because this render hasn't committed the
+  // box yet. This effect catches that first case once the DOM has it; the
+  // direct call in `handleSubmit` below still covers every attempt after
+  // the first, where the box already exists and the ref is already live -
+  // so a second click on an incomplete form (nothing fixed since the last
+  // one) still moves focus back to the summary rather than going silent.
+  useEffect(() => {
+    if (attempted) summaryRef.current?.focus()
+  }, [attempted])
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!ready || pending) return
+    if (pending) return
+    if (!ready) {
+      setAttempted(true)
+      summaryRef.current?.focus()
+      return
+    }
 
     setPending(true)
     setError(null)
 
     const body: ClientSubmitBody = {
-      client_email: email.trim(),
+      client_email: trimmedEmail,
       client_phone: phone.trim(),
       scope: trimmedScope,
-      budget_text: budget.trim(),
+      budget_text: trimmedBudget,
     }
 
     submitClientIntake(token, body)
@@ -124,11 +175,27 @@ export default function ClientForm({
             disabled={pending}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="you@example.com"
+            aria-invalid={attempted && (emailMissing || emailInvalid)}
+            aria-describedby={
+              attempted && (emailMissing || emailInvalid)
+                ? 'client-email-hint client-email-error'
+                : 'client-email-hint'
+            }
             className={WELL}
           />
-          <p className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
+          <p id="client-email-hint" className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
             Where {studio} sends the quotation.
           </p>
+          {attempted && emailMissing ? (
+            <p id="client-email-error" className="mt-1 font-body text-[13px] text-alert">
+              Enter your email address.
+            </p>
+          ) : null}
+          {attempted && !emailMissing && emailInvalid ? (
+            <p id="client-email-error" className="mt-1 font-body text-[13px] text-alert">
+              That doesn&rsquo;t look like a full email address.
+            </p>
+          ) : null}
         </div>
 
         <div>
@@ -160,11 +227,26 @@ export default function ClientForm({
             disabled={pending}
             onChange={(event) => setScope(event.target.value)}
             placeholder="What you need built, who it's for, and anything that matters about how it should work."
+            aria-invalid={attempted && scopeMissing}
+            // The character-count hint only ever renders once there is text,
+            // and the error only ever renders while there is none - the two
+            // are mutually exclusive by construction, never both at once.
+            aria-describedby={
+              trimmedScope ? 'client-scope-hint' : attempted && scopeMissing ? 'client-scope-error' : undefined
+            }
             className={`${WELL_TEXTAREA} pad-brief`}
           />
           {trimmedScope ? (
-            <p className="mt-1.5 font-label text-[12px] uppercase tracking-[0.14em] tabular-nums text-void">
+            <p
+              id="client-scope-hint"
+              className="mt-1.5 font-label text-[12px] uppercase tracking-[0.14em] tabular-nums text-void"
+            >
               {trimmedScope.length} character{trimmedScope.length === 1 ? '' : 's'}
+            </p>
+          ) : null}
+          {attempted && scopeMissing ? (
+            <p id="client-scope-error" className="mt-1.5 font-body text-[13px] text-alert">
+              Describe the work before sending.
             </p>
           ) : null}
         </div>
@@ -181,13 +263,35 @@ export default function ClientForm({
             disabled={pending}
             onChange={(event) => setBudget(event.target.value)}
             placeholder="Around ₱300,000, or “under 500k”"
+            aria-invalid={attempted && budgetMissing}
+            aria-describedby={
+              attempted && budgetMissing ? 'client-budget-hint client-budget-error' : 'client-budget-hint'
+            }
             className={WELL}
           />
-          <p className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
+          <p id="client-budget-hint" className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
             This helps {studio} shape the quotation to fit what you have in mind. It doesn&rsquo;t
             set your price, and you&rsquo;re not held to it.
           </p>
+          {attempted && budgetMissing ? (
+            <p id="client-budget-error" className="mt-1 font-body text-[13px] text-alert">
+              Give a rough budget before sending.
+            </p>
+          ) : null}
         </div>
+
+        {attempted && missing.length > 0 ? (
+          <div
+            ref={summaryRef}
+            tabIndex={-1}
+            role="alert"
+            className="focus-landing rounded-lg border border-alert/40 bg-paper px-4 py-3"
+          >
+            <p className="font-body text-[14px] leading-[1.5] text-ink">
+              Before this can be sent: {missing.join(', ')}.
+            </p>
+          </div>
+        ) : null}
 
         {error ? (
           <ErrorNotice headline={error.headline} next={error.next} onDismiss={() => setError(null)} />
@@ -195,8 +299,8 @@ export default function ClientForm({
 
         <button
           type="submit"
-          disabled={!ready || pending}
-          aria-disabled={!ready || pending}
+          disabled={pending}
+          aria-disabled={pending}
           className={`${ACTION_PRIMARY} mt-1 w-full justify-center ${pending ? 'cursor-wait' : ''}`}
         >
           {pending ? 'Sending' : `Send to ${studio}`}

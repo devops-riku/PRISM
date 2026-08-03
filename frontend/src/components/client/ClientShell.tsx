@@ -121,7 +121,24 @@ export default function ClientShell({ token }: ClientShellProps) {
   // centred card every other face uses. It gets its own page-scrolling
   // frame at a document-friendly width; every other status keeps the
   // original fixed-viewport card, unchanged.
-  const isDocument = status === 'ready' && view !== null && view.state !== 'issued' && view.state !== 'waiting'
+  //
+  // `closed` is excluded too, alongside `issued` and `waiting` - not because
+  // a client's own token ever resolves to it (the anonymous route 404s a
+  // closed intake before `clientview.of` runs, so the `gone` shell status is
+  // what a real closed link actually produces), but because `ClientClosed`
+  // is "the identical page for closed, expired, wrong and never-existed."
+  // That promise has to hold regardless of which layer happens to be
+  // enforcing the 404 today: if `view.state === 'closed'` ever did reach
+  // this component - a future caller with a legitimate reason to read a
+  // closed intake, say - it must render in the exact same frame as the
+  // `gone` 404 it is indistinguishable from, not the document frame every
+  // other ready state gets.
+  const isDocument =
+    status === 'ready' &&
+    view !== null &&
+    view.state !== 'issued' &&
+    view.state !== 'waiting' &&
+    view.state !== 'closed'
 
   if (isDocument && view) {
     return (

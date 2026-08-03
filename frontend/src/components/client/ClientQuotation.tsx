@@ -5,7 +5,12 @@ import StampTotal from '../StampTotal'
 import ErrorNotice from '../ErrorNotice'
 import { ACTION, ACTION_PRIMARY, DISPLAY, MONO_LABEL, WELL_TEXTAREA } from '../tokens'
 import { formatDate, formatMoney, formatPct } from '../../lib/format'
-import { ClientApiError, finalizeClientIntake, reviseClientIntake } from '../../lib/clientApi'
+import {
+  ClientApiError,
+  clientQuotationUrl,
+  finalizeClientIntake,
+  reviseClientIntake,
+} from '../../lib/clientApi'
 import type { ClientIntakeView, ClientQuotationView } from '../../types'
 
 /**
@@ -23,6 +28,15 @@ import type { ClientIntakeView, ClientQuotationView } from '../../types'
  * beside the narrative's own - two "valid until" dates on one page, from two
  * different clocks, is worse than showing the day count once and leaving
  * the narrative to say the rest.
+ *
+ * `revision_requested` reads `sent_bundle_id` - the *previous* send, since
+ * revising does not touch it (only a fresh Send does). Everything below the
+ * header - the total, the schedule, the narrative - is therefore the old
+ * numbers, not a preview of what is coming. The notice that a new quotation
+ * is being prepared sits above all of it, not buried after it, and the
+ * heading itself says "previous" rather than repeating "here is your
+ * quotation" over a figure that is about to change - a buyer should never
+ * read a total as current directly above a sentence saying it is not.
  */
 
 /** See `ClientForm.tsx`'s identical function for what this does and does
@@ -72,6 +86,36 @@ export default function ClientQuotation({
   useEffect(() => {
     if (asking) noteRef.current?.focus()
   }, [asking])
+
+  // The button that opens the revise textarea - focus returns here on
+  // Cancel, since it is the one thing left in this section once the
+  // textarea is gone. Not used on a *successful* revise: that swaps
+  // `view.state` to `revision_requested`, `can_revise` goes false, the
+  // whole section (button included) unmounts, and the heading-focus effect
+  // below takes over instead - a `null` ref here at that point is a no-op,
+  // not a conflict.
+  const askTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const wasAskingRef = useRef(false)
+  useEffect(() => {
+    if (wasAskingRef.current && !asking) {
+      askTriggerRef.current?.focus()
+    }
+    wasAskingRef.current = asking
+  }, [asking])
+
+  // `sent`, `revision_requested` and `finalized` are one component that
+  // never remounts across the transitions between them - unlike
+  // `ClientForm` -> `ClientWaiting`, which are different components and get
+  // mount-time focus for free. Re-running on every `view.state` change is
+  // what gives a revise or a finalize the same "read this again from the
+  // top" treatment: the heading text itself changes per state (see below),
+  // so refocusing it is also what makes a screen reader announce the new
+  // wording rather than staying silent because the same component instance
+  // never unmounted.
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [view.state])
 
   const trimmedNote = note.trim()
   const rounds = view.revisions.length
@@ -126,12 +170,23 @@ export default function ClientQuotation({
       .finally(() => setFinalizePending(false))
   }
 
+  const heading =
+    view.state === 'finalized'
+      ? 'Your quotation'
+      : view.state === 'revision_requested'
+        ? 'Your previous quotation'
+        : 'Here is your quotation'
+
   return (
     <div className="rounded-[18px] border border-rule bg-paper p-6 shadow-raised sm:p-9">
       <p className={MONO_LABEL}>{studio}</p>
       <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-        <h1 className={`${DISPLAY} text-[24px] leading-[1.2] text-ink`}>
-          {view.state === 'finalized' ? 'Your quotation' : 'Here is your quotation'}
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className={`${DISPLAY} focus-landing text-[24px] leading-[1.2] text-ink`}
+        >
+          {heading}
         </h1>
         {view.reference ? (
           <p className="font-label text-[12px] uppercase tracking-[0.14em] text-void">
@@ -154,6 +209,40 @@ export default function ClientQuotation({
           </div>
         ) : null}
       </dl>
+
+      {/* The backend built these two files for exactly this face - a client
+          forwarding their own link to a boss or a partner needs a copy that
+          survives outside the browser tab it arrived in. A plain `<a href>`:
+          `clientQuotationUrl`'s own docstring is explicit that this door
+          needs no auth header, unlike `lib/api.ts`'s `openFile`. */}
+      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
+        <a
+          href={clientQuotationUrl(token, 'pdf')}
+          download={`${view.reference || 'quotation'}.pdf`}
+          className="font-label text-[12px] uppercase tracking-[0.12em] text-ballpoint underline decoration-1 underline-offset-[3px]"
+        >
+          Download PDF
+        </a>
+        <a
+          href={clientQuotationUrl(token, 'html')}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-label text-[12px] uppercase tracking-[0.12em] text-ballpoint underline decoration-1 underline-offset-[3px]"
+        >
+          View as a page
+          <span className="sr-only"> (opens the printable copy in a new tab)</span>
+        </a>
+      </div>
+
+      {view.state === 'revision_requested' ? (
+        <div role="status" className="mt-6 rounded-lg border border-rule bg-duplicate/50 px-4 py-3">
+          <p className="font-body text-[14px] leading-[1.6] text-ink">
+            {studio} is preparing a new quotation from the change you asked for. Everything on this
+            page - the total, the validity, the schedule and the document below - is from your{' '}
+            <strong>previous</strong> quotation, not the new one.
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-5">
         <StampTotal total={view.total} currency={view.currency} />
@@ -233,16 +322,8 @@ export default function ClientQuotation({
         </div>
       ) : null}
 
-      {view.state === 'revision_requested' ? (
-        <div className="mt-8 rounded-lg border border-rule bg-duplicate/50 px-4 py-3">
-          <p className="font-body text-[14px] leading-[1.6] text-ink">
-            {studio} is preparing a new quotation from the change you asked for.
-          </p>
-        </div>
-      ) : null}
-
       {view.state === 'finalized' ? (
-        <div className="mt-8 rounded-lg border border-ballpoint/25 bg-accent-soft px-4 py-3">
+        <div role="status" className="mt-8 rounded-lg border border-ballpoint/25 bg-accent-soft px-4 py-3">
           <p className="font-body text-[14px] leading-[1.6] text-ink">
             {studio} has been told you&rsquo;re ready to go ahead.
           </p>
@@ -260,7 +341,12 @@ export default function ClientQuotation({
                   You&rsquo;ve asked for a change {rounds} time{rounds === 1 ? '' : 's'} already.
                 </p>
               ) : null}
-              <button type="button" onClick={() => setAsking(true)} className={`${ACTION} mt-3`}>
+              <button
+                type="button"
+                ref={askTriggerRef}
+                onClick={() => setAsking(true)}
+                className={`${ACTION} mt-3`}
+              >
                 Ask for a change
               </button>
             </>

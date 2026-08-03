@@ -250,6 +250,28 @@
 }
 
 @layer components {
+  /* ── The route announcer's landing point ─────────────────────────────
+     The client faces (`ClientForm`/`ClientWaiting`/`ClientQuotation`/
+     `ClientClosed`) move focus to their own `<h1>` on mount and on every
+     state transition - the standard SPA "announce the new page" pattern,
+     since nothing else tells a screen reader that `ClientForm` just
+     unmounted into `ClientWaiting`, or that the same `ClientQuotation`
+     instance just swapped from `sent` to `finalized`.
+     `:focus-visible` in the base layer is right to ring anything a person
+     can act on - a field, a button, a link - so a keyboard user always
+     knows where they are. A heading that only ever receives focus
+     programmatically is a different thing: there is nothing to act on and
+     nowhere for a visible ring to send a sighted user next, and it reads as
+     a stray outline around a sentence rather than as a control. `.stamp` in
+     this same layer already overrides the base layer's own defaults by
+     nothing more than being declared after it - components beats base
+     regardless of selector specificity - so this can undo the ring for
+     exactly these headings without touching `:focus-visible` for anything
+     that is actually interactive. */
+  .focus-landing:focus-visible {
+    outline: none;
+  }
+
   /* ── The pad's question ──────────────────────────────────────────────
      One question at a time, set large enough to be the only thing on the
      screen worth reading. The Clarity Kit's flow pattern asks for this
@@ -722,6 +744,16 @@
     padding-block: 1.1rem 1.2rem;
     padding-inline: 1.5rem;
     min-width: 248px;
+    /* `.stamp-figure` below is deliberately `white-space: nowrap` - a number
+       broken mid-digit reads worse than almost anything else on the page -
+       but that means an eight-figure total has nowhere to go on a narrow
+       card. `max-width: 100%` stops the stamp itself from forcing the page
+       wider than its viewport the way an unconstrained `inline-flex` box
+       would; `overflow-x: auto` gives the rare total that still doesn't fit
+       its own scrollbar instead, the same "wide content scrolls in its own
+       container" idiom the narrative's tables already use. */
+    max-width: 100%;
+    overflow-x: auto;
     color: var(--color-ballpoint);
     background-color: var(--color-accent-soft);
     border: 1px solid color-mix(in srgb, var(--color-ballpoint) 22%, transparent);
