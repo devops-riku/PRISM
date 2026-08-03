@@ -706,7 +706,13 @@ def build_brief(
     # must not be the one place someone forgot to route it through the same
     # helper. Cheap now, while nothing depends on it; expensive to notice
     # later, after something does.
-    currency = strip_sentinels(req.currency).upper() or "PHP"
+    # `.upper()` INSIDE `strip_sentinels`, not outside it: every sentinel this
+    # module defines is all-uppercase, and `strip_sentinels` matches by exact,
+    # case-sensitive substring. Stripping first and upper-casing after would
+    # let a lowercase sentinel-lookalike survive the strip untouched and then
+    # be minted into a real, uppercase sentinel by the very transform meant
+    # to normalise it - the sanitiser undone by the line that calls it.
+    currency = strip_sentinels(req.currency.upper()) or "PHP"
     region = strip_sentinels(req.market_region) or "Philippines"
     client_name = strip_sentinels(req.client_name)
     project_name = strip_sentinels(req.project_name)
