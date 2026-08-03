@@ -324,7 +324,29 @@ def _clean(value: str) -> str:
     return (value or "").strip()
 
 
-def _strip_sentinels(text: str) -> str:
+#: What a stripped sentinel becomes. Not `""`: deleting a sentinel outright
+#: lets the text on either side of it become newly adjacent, and if that
+#: text was chosen so the two sides concatenate back into the very sentinel
+#: just removed - `"----- END CLIENT B" + BRIEF_END + "RIEF -----"` becomes
+#: `"----- END CLIENT B" + "" + "RIEF -----"`, which IS `BRIEF_END` again,
+#: byte for byte - a single non-recursive pass reconstructs it out of its
+#: own deletion and never rescans to catch the copy it just built. Worse,
+#: this is not limited to a sentinel rebuilding itself: removing
+#: `REVISION_END` from the middle of `"----- BEGIN CLIENT B" + REVISION_END
+#: + "RIEF -----"` reconstructs `BRIEF_BEGIN` - a *different* sentinel,
+#: processed on an *earlier* pass that has already finished and will not
+#: run again. A fixed, non-empty placeholder that shares no substring with
+#: any sentinel closes both shapes at once, in the same single pass, with
+#: no reasoning about pass order or termination required: `"----- END
+#: CLIENT B" + "[removed]" + "RIEF -----"` is not `BRIEF_END`, is not any
+#: other sentinel, and two sides that used to be adjacent across a deleted
+#: sentinel now have this sitting between them instead. It also leaves
+#: honest, visible evidence in the prompt that something was stripped,
+#: rather than a seamless gap.
+_SENTINEL_PLACEHOLDER = "[removed]"
+
+
+def strip_sentinels(text: str) -> str:
     """Remove every framing marker this module ever prints around
     client-supplied text - `BRIEF_BEGIN`/`BRIEF_END` and
     `REVISION_BEGIN`/`REVISION_END` alike, regardless of which field is being
@@ -339,16 +361,28 @@ def _strip_sentinels(text: str) -> str:
     further down this module, is safe: Python resolves a function body's
     global names at call time, not at `def` time, and nothing calls this
     before the whole module has finished importing.
+
+    Replaces with `_SENTINEL_PLACEHOLDER`, not deletes - see that constant's
+    own docstring for the nested-reconstruction attack this closes that a
+    bare `.replace(sentinel, "")` does not.
+
+    Public (no leading underscore) rather than this module's usual internal
+    idiom: `gemini_service._apply_request_identity` also writes a client-
+    suppliable field (`req.client_name`) straight onto `Estimate.client_name`,
+    which reaches `build_revision`'s `prior_json` unsanitised - the same
+    field, the same threat, a different file. One shared function crossing
+    that boundary beats a second copy of the same four-item loop living in
+    `gemini_service.py`.
     """
     cleaned = _clean(text)
     for sentinel in (BRIEF_BEGIN, BRIEF_END, REVISION_BEGIN, REVISION_END):
-        cleaned = cleaned.replace(sentinel, "")
+        cleaned = cleaned.replace(sentinel, _SENTINEL_PLACEHOLDER)
     return cleaned.strip()
 
 
 def _sanitise_brief(brief: str) -> str:
     """Strip the framing sentinels so pasted text cannot close the brief block early."""
-    return _strip_sentinels(brief)
+    return strip_sentinels(brief)
 
 
 #: Identity-compared placeholder for the optional unit-basis paragraph, so it
@@ -634,7 +668,7 @@ def build_brief(
     """
     currency = _clean(req.currency).upper() or "PHP"
     region = _clean(req.market_region) or "Philippines"
-    # `_strip_sentinels`, not the bare `_clean` every other field on this line
+    # `strip_sentinels`, not the bare `_clean` every other field on this line
     # gets: `client_name` can be pre-filled from an intake's own
     # `client_email` (typed anonymously at `POST /api/client/{token}/submit`,
     # only control-character-scrubbed and bounded, never read by anyone at
@@ -645,9 +679,9 @@ def build_brief(
     # `BRIEF_END`/`BRIEF_BEGIN` pair in either one would close and reopen the
     # real brief block precisely as `brief` itself was already protected
     # against.
-    client_name = _strip_sentinels(req.client_name)
+    client_name = strip_sentinels(req.client_name)
     project_name = _clean(req.project_name)
-    budget_hint = _strip_sentinels(req.budget_hint)
+    budget_hint = strip_sentinels(req.budget_hint)
     timeline_hint = _clean(req.timeline_hint)
     target_total = max(0.0, float(req.target_total or 0.0))
     tax_inclusive = bool(req.tax_inclusive)
@@ -955,12 +989,12 @@ make a figure land."""
 
 
 def _sanitise_instruction(instruction: str) -> str:
-    """Strip the framing sentinels - see `_strip_sentinels`, which this now
+    """Strip the framing sentinels - see `strip_sentinels`, which this now
     delegates to rather than keeping its own copy of the same four-item
     list. Kept as its own named function because the callers below read as
     "sanitise this instruction", which is clearer at the call site than the
     generic name."""
-    return _strip_sentinels(instruction)
+    return strip_sentinels(instruction)
 
 
 def build_revision(

@@ -2716,11 +2716,12 @@ async def send_intake(request: Request, intake_id: str, body: IntakeSendRequest)
     alone.
 
     `bundle_id` is required and must already be one of this intake's own
-    `bundle_ids` - checked by membership, not by re-reading `storage` for the
-    bundle itself, because the question here is "did PRISM quote this for
-    *this* request", not "does this id exist at all". A bundle id that is
-    real but belongs to a different intake, or was simply guessed, is
-    refused exactly like one that names nothing.
+    `bundle_ids`, AND still exist in `storage` - see `_quoted_bundle`'s own
+    docstring, which is the actual contract this route enforces. A bundle id
+    that is real but belongs to a different intake, or was simply guessed,
+    or once belonged here but was since deleted (`DELETE /api/proposals/{id}`
+    does not prune `bundle_ids`), is refused exactly like one that names
+    nothing.
     """
     _require_admin(request, "Only an admin of this workspace can send a quotation to a client.")
     bundle_id = (body.bundle_id or "").strip()

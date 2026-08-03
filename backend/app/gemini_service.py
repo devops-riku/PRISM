@@ -37,6 +37,7 @@ from app.prompts import (
     build_brief,
     build_proposal_brief,
     build_revision,
+    strip_sentinels,
 )
 from app.schemas import Estimate, ProposalNarrative, ProposalRequest
 
@@ -369,7 +370,12 @@ def _apply_request_identity(estimate: Estimate, req: ProposalRequest) -> Estimat
         estimate.cost.tax_pct = 0.0
         estimate.cost.tax_inclusive = False
 
-    client_name = (req.client_name or "").strip()
+    # `strip_sentinels`, not a bare `.strip()`: `estimate.client_name` is
+    # serialised whole into `build_revision`'s `prior_json` (`prompts.py`),
+    # and `req.client_name` can carry the same anonymously-submitted text
+    # `build_brief` already has to defend against - see `strip_sentinels`'s
+    # own docstring for why this call exists in this file at all.
+    client_name = strip_sentinels(req.client_name)
     if client_name:
         estimate.client_name = client_name
 
