@@ -1,13 +1,11 @@
 import { useEffect, useState } from 'react'
 import { ClientApiError, fetchClientIntake } from '../../lib/clientApi'
-import { formatDate } from '../../lib/format'
 import { DISPLAY, MONO_LABEL } from '../tokens'
-import type {
-  ClientIntakeView,
-  ClientIssuedView,
-  ClientQuotationView,
-  ClientWaitingView,
-} from '../../types'
+import ClientClosed from './ClientClosed'
+import ClientForm from './ClientForm'
+import ClientQuotation from './ClientQuotation'
+import ClientWaiting from './ClientWaiting'
+import type { ClientIntakeView } from '../../types'
 
 /**
  * What `main.tsx` renders instead of `<AuthGate><App/></AuthGate>` when the
@@ -19,12 +17,13 @@ import type {
  * `lib/clientApi.ts` exists as its own module is so that fact cannot be
  * undone by an import.
  *
- * This component owns exactly one thing: turning a token into a
- * `ClientIntakeView` and picking which face of the client experience shows
- * it. The four faces themselves - the intake form, the waiting notice, the
- * quotation, and the closed/gone notice - are Task 8's; what stands in for
- * each here is a placeholder that renders enough of the real data to prove
- * the plumbing works, deliberately not a design.
+ * This component owns turning a token into a `ClientIntakeView`, picking
+ * which of Task 8's four faces shows it, and threading state forward when
+ * one of them writes: `ClientForm`'s submit, and `ClientQuotation`'s revise
+ * and finalize, each hand back the fresh `ClientIntakeView` their own write
+ * route answered with, and `ReadyFace` re-renders off it directly - no
+ * separate refetch, and no local notion of "what state are we in" that
+ * could drift from what the server actually recorded.
  */
 
 type ClientShellProps = { token: string }
@@ -97,17 +96,57 @@ export default function ClientShell({ token }: ClientShellProps) {
     }
   }, [token])
 
+  // Handed to `ClientForm` and `ClientQuotation`, whose write routes each
+  // answer with a fresh `ClientIntakeView` of the same intake they just
+  // moved (`/submit`, `/revise` and `/finalize` all end by calling
+  // `clientview.of` on the record they wrote). Swapping it straight in is
+  // what lets, say, a successful `/submit` move the page from the form to
+  // the waiting face without a second round trip back through
+  // `fetchClientIntake`.
+  const handleUpdate = (next: ClientIntakeView) => setView(next)
+
+  // A write can discover the link is gone just as easily as the initial
+  // read can - the token can expire, or the studio can close the intake,
+  // between this page loading and a client pressing Finalize. Routed to the
+  // same `gone` status the read path uses, so a write's own 404 lands on
+  // the identical closed face rather than a face-local error string that
+  // would have to reinvent "this link no longer works."
+  const handleGone = () => {
+    setView(null)
+    setStatus('gone')
+  }
+
+  // The quotation face is a full document - a rendered proposal, a payment
+  // schedule, a revision history - and does not fit the compact, vertically
+  // centred card every other face uses. It gets its own page-scrolling
+  // frame at a document-friendly width; every other status keeps the
+  // original fixed-viewport card, unchanged.
+  const isDocument = status === 'ready' && view !== null && view.state !== 'issued' && view.state !== 'waiting'
+
+  if (isDocument && view) {
+    return (
+      <div className="min-h-dvh bg-canvas px-4 py-10 font-body text-body sm:px-6 sm:py-14">
+        <div className="mx-auto w-full max-w-[46rem]">
+          <ReadyFace view={view} token={token} onUpdate={handleUpdate} onGone={handleGone} />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-dvh items-center justify-center bg-canvas px-4 py-10 font-body text-body">
       {/* `max-h-dvh` + its own scroll, the same idiom `AuthScreen.tsx` uses
           inside `AuthGate`'s identical `h-dvh` wrapper: the outer frame stays
           fixed to the viewport and this card scrolls itself once a face -
-          the quotation placeholder, say - runs taller than the screen. */}
+          a long form on a short phone screen, say - runs taller than the
+          screen. */}
       <div className="max-h-dvh w-full max-w-[32rem] overflow-y-auto">
         {status === 'loading' ? <LoadingFace /> : null}
         {status === 'offline' ? <OfflineFace message={offlineMessage} /> : null}
-        {status === 'gone' ? <ClosedFace /> : null}
-        {status === 'ready' && view ? <ReadyFace view={view} /> : null}
+        {status === 'gone' ? <ClientClosed /> : null}
+        {status === 'ready' && view ? (
+          <ReadyFace view={view} token={token} onUpdate={handleUpdate} onGone={handleGone} />
+        ) : null}
       </div>
     </div>
   )
@@ -115,14 +154,29 @@ export default function ClientShell({ token }: ClientShellProps) {
 
 /** Picks a face by `view.state`. A plain if-chain, not a lookup table: each
  * branch narrows `view` to one member of the union, which a table keyed on
- * the same strings could not do without a cast. */
-function ReadyFace({ view }: { view: ClientIntakeView }) {
-  if (view.state === 'issued') return <IssuedFace view={view} />
-  if (view.state === 'waiting') return <WaitingFace view={view} />
-  if (view.state === 'closed') return <ClosedFace />
+ * the same strings could not do without a cast. `token`, `onUpdate` and
+ * `onGone` are only ever read by the two faces that write - `ClientWaiting`
+ * and `ClientClosed` take no props at all, by design (see their own files).
+ */
+function ReadyFace({
+  view,
+  token,
+  onUpdate,
+  onGone,
+}: {
+  view: ClientIntakeView
+  token: string
+  onUpdate: (next: ClientIntakeView) => void
+  onGone: () => void
+}) {
+  if (view.state === 'issued') {
+    return <ClientForm view={view} token={token} onUpdate={onUpdate} onGone={onGone} />
+  }
+  if (view.state === 'waiting') return <ClientWaiting view={view} />
+  if (view.state === 'closed') return <ClientClosed />
   // The only member left is `ClientQuotationView` - `'sent'`,
   // `'revision_requested'` or `'finalized'`.
-  return <QuotationFace view={view} />
+  return <ClientQuotation view={view} token={token} onUpdate={onUpdate} onGone={onGone} />
 }
 
 function LoadingFace() {
@@ -148,116 +202,3 @@ function OfflineFace({ message }: { message: string }) {
   )
 }
 
-/**
- * Placeholder for `ClientForm.tsx` (Task 8). `issued`: the link is live and
- * nothing has been submitted yet.
- */
-function IssuedFace({ view }: { view: ClientIssuedView }) {
-  return (
-    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
-      <p className={MONO_LABEL}>{view.studio_name || 'This studio'}</p>
-      <h1 className={`${DISPLAY} mt-3 text-[22px] leading-[1.2] text-ink`}>
-        Tell {view.studio_name || 'the studio'} about the work
-      </h1>
-      <p className="mt-3 max-w-[46ch] text-[14.5px] leading-[1.6] text-void">
-        Placeholder for the intake form - Task 8. State on file:{' '}
-        <code className="rounded bg-duplicate px-1.5 py-0.5 font-label text-[13px] text-ink">
-          issued
-        </code>
-        .
-      </p>
-    </div>
-  )
-}
-
-/**
- * Placeholder for `ClientWaiting.tsx` (Task 8). One face for `submitted`,
- * `preparing`, `quoted` and `quote_failed` - the server has already
- * collapsed all four into this single `'waiting'` shape, and nothing here
- * may try to tell them apart again.
- */
-function WaitingFace({ view }: { view: ClientWaitingView }) {
-  return (
-    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
-      <p className={MONO_LABEL}>{view.studio_name || 'This studio'}</p>
-      <h1 className={`${DISPLAY} mt-3 text-[22px] leading-[1.2] text-ink`}>
-        {view.studio_name || 'The studio'} has your scope
-      </h1>
-      <p className="mt-3 max-w-[46ch] text-[14.5px] leading-[1.6] text-void">
-        Nobody has replied yet. Placeholder for the waiting face - Task 8.
-      </p>
-      <dl className="mt-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-label text-[13px] text-void">
-        {/* `sent_at` is `intake.created_at` - see `ClientWaitingView`'s own
-            comment in types.ts on why this is the link's own issue date, not
-            the client's submission time, and why the label below says so
-            rather than "Submitted". */}
-        <dt className="text-faint">Link issued</dt>
-        <dd className="text-ink">{view.sent_at ? formatDate(view.sent_at) : '—'}</dd>
-        <dt className="text-faint">From</dt>
-        <dd className="text-ink">{view.email || '—'}</dd>
-        <dt className="text-faint">Scope</dt>
-        <dd className="text-ink">{view.scope_length} characters</dd>
-      </dl>
-    </div>
-  )
-}
-
-/**
- * Placeholder for `ClientQuotation.tsx` (Task 8). `sent`, `revision_requested`
- * and `finalized` all land here - one shape, `state` is the only thing that
- * tells them apart.
- */
-function QuotationFace({ view }: { view: ClientQuotationView }) {
-  return (
-    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
-      <p className={MONO_LABEL}>{view.studio_name || 'This studio'}</p>
-      <h1 className={`${DISPLAY} mt-3 text-[22px] leading-[1.2] text-ink`}>{view.reference}</h1>
-      <p className="mt-3 max-w-[46ch] text-[14.5px] leading-[1.6] text-void">
-        Placeholder for the quotation face - Task 8. State on file:{' '}
-        <code className="rounded bg-duplicate px-1.5 py-0.5 font-label text-[13px] text-ink">
-          {view.state}
-        </code>
-        .
-      </p>
-      <dl className="mt-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-label text-[13px] text-void">
-        <dt className="text-faint">Total</dt>
-        <dd className="text-ink">
-          {view.total} {view.currency}
-        </dd>
-        <dt className="text-faint">Valid for</dt>
-        <dd className="text-ink">{view.validity} days</dd>
-        <dt className="text-faint">Sent</dt>
-        <dd className="text-ink">{view.sent_at ? formatDate(view.sent_at) : '—'}</dd>
-        <dt className="text-faint">Revisions asked</dt>
-        <dd className="text-ink">{view.revisions.length}</dd>
-        <dt className="text-faint">Can revise / finalize</dt>
-        <dd className="text-ink">
-          {view.can_revise ? 'yes' : 'no'} / {view.can_finalize ? 'yes' : 'no'}
-        </dd>
-      </dl>
-    </div>
-  )
-}
-
-/**
- * Placeholder for `ClientClosed.tsx` (Task 8) - "the identical page for
- * closed, expired, wrong and never-existed." Reached two ways: a real
- * `{state: 'closed'}` (which `clientview.of` can build but this route never
- * actually sends - see `ClientClosedView`'s own comment) and the `'gone'`
- * shell status above, which is every 404 this door answers with. Neither
- * carries anything worth showing beyond the fact itself, so this takes no
- * props at all - one render for both paths, on purpose.
- */
-function ClosedFace() {
-  return (
-    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
-      <p className={MONO_LABEL}>Not available</p>
-      <h1 className={`${DISPLAY} mt-3 text-[22px] leading-[1.2] text-ink`}>
-        This link is not open right now
-      </h1>
-      <p className="mt-3 max-w-[46ch] text-[14.5px] leading-[1.6] text-void">
-        Placeholder for the closed face - Task 8.
-      </p>
-    </div>
-  )
-}
