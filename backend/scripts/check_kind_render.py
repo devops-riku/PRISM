@@ -17,10 +17,21 @@ rather than proving the fixture happened to be empty.
     .venv/Scripts/python.exe scripts/check_kind_render.py        # Windows
     .venv/bin/python scripts/check_kind_render.py                # macOS / Linux
 
-The baseline hash covers the document's date of issue, and that is today's
-date. It was taken on 1 August 2026; run on a later day the document says a
-different date and the hash has to be recomputed. That is only safe when the
-software path itself has not been touched.
+The baseline hash covers the document's date of issue, so the clock is frozen
+to the day the baseline was taken (1 August 2026) rather than the hash being
+recomputed on whatever day this runs.
+
+That is the whole point of the fix. Recomputing is the obvious move and it is
+the wrong one: the instruction "only recompute when the software path has not
+been touched" asks whoever is holding a red check to certify by eye the exact
+thing the hash exists to certify mechanically, and the answer that gets typed
+is yes. Worse, this check was red at every commit for days, and a check that is
+always red is a check nobody reads - a real regression in the software sheet
+would have arrived as the same failure everyone had already learned to skip.
+
+Frozen, the hash means what it was written to mean: these bytes, from this
+renderer, on any day. The date rendering itself is not what this check is for -
+`_long_date` and the validity window are exercised elsewhere.
 """
 
 from __future__ import annotations
@@ -28,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -44,6 +56,30 @@ for stream in (sys.stdout, sys.stderr):
 from app import kinds  # noqa: E402
 from app.costing import recompute  # noqa: E402
 from app.renderers.markdown import render_developer_requirements  # noqa: E402
+import app.renderers.markdown as markdown_module  # noqa: E402
+
+# --- The frozen clock, and why it is a subclass rather than a stub -----------
+#
+# `markdown.py` does `from datetime import date`, so the name this rebinds is
+# that module's own, and only for this process. A plain stub object would not
+# do: the renderer adds a `timedelta` to what `today()` returns to print the
+# validity window, so the return value has to be a real `date`. Subclassing and
+# overriding the one classmethod keeps every other use of the name intact.
+#
+# The day is the day the baseline below was taken. Changing one without the
+# other is what this is here to prevent.
+BASELINE_DATE = date(2026, 8, 1)
+
+
+class _BaselineDate(date):
+    """`date`, with `today()` pinned to the day BASELINE_SHA16 was taken."""
+
+    @classmethod
+    def today(cls) -> date:
+        return BASELINE_DATE
+
+
+markdown_module.date = _BaselineDate
 from app.schemas import (  # noqa: E402
     ApiEndpoint,
     Confidence,
