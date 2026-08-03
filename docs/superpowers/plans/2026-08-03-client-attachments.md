@@ -142,19 +142,19 @@ This task ships **before** any upload route exists, because both defects it clos
 - Modify: `backend/app/main.py` (`submit_client_intake`, `ClientSubmitRequest`), `backend/app/clientview.py`
 - Test: `backend/scripts/check_client_upload.py`
 
-- [ ] **Step 1: `/submit` becomes multipart.** The four fields become `Form(...)`; `images` and `documents` become `File(default=[])` with the same loose `List[Union[UploadFile, str]]` typing `_read_images`/`_read_documents` already use — and for the reason their docstrings give, which is that a browser posts an empty file input as a part with no filename and a strict `List[UploadFile]` makes FastAPI reject the whole request before any handler runs. `ClientSubmitRequest` is deleted or kept only if something still reads it.
+- [x] **Step 1: `/submit` becomes multipart.** The four fields become `Form(...)`; `images` and `documents` become `File(default=[])` with the same loose `List[Union[UploadFile, str]]` typing `_read_images`/`_read_documents` already use — and for the reason their docstrings give, which is that a browser posts an empty file input as a part with no filename and a strict `List[UploadFile]` makes FastAPI reject the whole request before any handler runs. `ClientSubmitRequest` is deleted or kept only if something still reads it.
 
-- [ ] **Step 2: Reuse the studio's readers, then diverge where the caller is a stranger.** `_read_images`/`_read_documents` already do count, declared-size and read-bounded-size gating; call them. Then add what the anonymous path needs and the studio path does not: an explicit raster allowlist. `_read_images` admits anything matching `image/`, which includes `image/svg+xml` — a script document the studio will later open on the studio's own origin. The client path accepts `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/heic` and nothing else.
+- [x] **Step 2: Reuse the studio's readers, then diverge where the caller is a stranger.** `_read_images`/`_read_documents` already do count, declared-size and read-bounded-size gating; call them. Then add what the anonymous path needs and the studio path does not: an explicit raster allowlist. `_read_images` admits anything matching `image/`, which includes `image/svg+xml` — a script document the studio will later open on the studio's own origin. The client path accepts `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/heic` and nothing else.
 
-- [ ] **Step 3: Extract, save, manifest — in that order, inside the borrow.** `attachments.read()` for the extraction warning, `intakefiles.save()` for the bytes, the returned entries into `_client_advance(..., attachments=[...])`. All of it before `give_back`, exactly as every other anonymous handler does it.
+- [x] **Step 3: Extract, save, manifest — in that order, inside the borrow.** `attachments.read()` for the extraction warning, `intakefiles.save()` for the bytes, the returned entries into `_client_advance(..., attachments=[...])`. All of it before `give_back`, exactly as every other anonymous handler does it.
 
-- [ ] **Step 4: Orphans.** A save that succeeds followed by an `advance` that is refused leaves bytes on disk with nothing pointing at them. Decide the order that cannot orphan — or clean up on the failure path — and write down which.
+- [x] **Step 4: Orphans.** A save that succeeds followed by an `advance` that is refused leaves bytes on disk with nothing pointing at them. Decide the order that cannot orphan — or clean up on the failure path — and write down which.
 
-- [ ] **Step 5: The client sees what they sent.** `clientview.of` gains the filenames on the waiting face. Names and sizes only: no ids, no URLs, nothing that addresses the file. A client who attached the wrong thing needs to know it arrived, which is a different need from being able to fetch it back.
+- [x] **Step 5: The client sees what they sent.** `clientview.of` gains the filenames on the waiting face. Names and sizes only: no ids, no URLs, nothing that addresses the file. A client who attached the wrong thing needs to know it arrived, which is a different need from being able to fetch it back.
 
-- [ ] **Step 6: Prove the refusals.** An SVG. A `.exe` renamed `.pdf`. A file past the per-file cap. More files than the count cap. A total past the aggregate cap. A second submit against the same token. Each refused, and the intake unchanged after every one.
+- [x] **Step 6: Prove the refusals.** An SVG. A `.exe` renamed `.pdf`. A file past the per-file cap. More files than the count cap. A total past the aggregate cap. A second submit against the same token. Each refused, and the intake unchanged after every one.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ---
 
@@ -193,7 +193,7 @@ This task ships **before** any upload route exists, because both defects it clos
 
   For Spaces these are set as **object metadata at `put_object` time** (Task 2 does this), so a presigned GET carries them without this route being in the path. **`X-Content-Type-Options: nosniff` is set on the local branch only** — it cannot be attached to a Spaces object or a presigned URL at all. Do not go looking for a way; read the "Why nosniff is not on the Spaces branch" section above, which settles it and says what stands in for it. If you disagree with that trade, say so in your report rather than changing the design here.
 
-  **Filenames need encoding, not interpolation.** `_clean_name` strips separators and control characters but keeps `"`, so a file called `sco"pe.pdf` would break a naive `Content-Disposition: attachment; filename="…"`. Quote it properly or use RFC 5987 `filename*`.
+  **Filenames need encoding, not interpolation.** `intakefiles.clean_name` strips separators and control characters but keeps `"`, so a file called `sco"pe.pdf` would break a naive `Content-Disposition: attachment; filename="…"`. Quote it properly or use RFC 5987 `filename*`.
 
 - [ ] **Step 3: Refuse the cross-intake fetch.** A file id belonging to a different intake, in the same workspace or another, is a 404 — the id pair must be checked together, not each alone. **Check it before minting a presigned URL**, not after: a presigned URL is a bearer credential and handing one out is the disclosure, whatever this route returns next.
 

@@ -58,12 +58,14 @@ __all__ = [
     "IntakeFileError",
     "KEY_PREFIX",
     "VIEW_URL_TTL_SECONDS",
+    "clean_name",
     "configured",
     "disposition_for",
     "endpoint",
     "forget",
     "listing",
     "read",
+    "resolve_type",
     "save",
     "view_url",
 ]
@@ -282,7 +284,7 @@ def _bucket() -> str:
 # --- Names, types and the gate every id goes through -------------------------
 
 
-def _clean_name(name: str) -> str:
+def clean_name(name: str) -> str:
     """The client's filename, as a name and only ever as a name.
 
     Nothing downstream builds a path or a key from this - `save()` mints an id
@@ -293,18 +295,58 @@ def _clean_name(name: str) -> str:
     one. Directory separators are stripped, control characters with them, and
     the whole thing is capped at the same 120 characters `attachments.read`
     already caps its own copy at.
+
+    Public, and idempotent, because `save()` is not the only place this string
+    is used: `/submit` names the file back to the client in a refusal, and a
+    name that is cleaned on the way into the record but echoed raw into an error
+    is the same untrusted string getting two different treatments. Calling this
+    early and passing the result to `save()` costs a second pass over 120
+    characters and means there is one answer to "what is this file called".
+
+    **The extension survives the truncation**, which the first cut of this
+    function did not do and which was a real defect rather than a nicety. The
+    cap is applied to a string whose last few characters are the only thing
+    `resolve_type` and `attachments.read` key on, so cutting the tail off a
+    121-character `.docx` left `save()` resolving the name it had just
+    shortened, storing the file as `<id>.bin` under `application/octet-stream`
+    and showing the studio a blob. `/submit` made it worse rather than
+    revealing it: it resolves the same way and would have refused the file
+    outright, by a message about the wrong thing. A long name is a long name -
+    it is not a file PRISM cannot read.
     """
     text = (name or "").replace("\\", "/").rsplit("/", 1)[-1]
     text = "".join(character for character in text if character >= " " and character != "\x7f")
-    return text.strip()[:120] or "attachment"
+    text = text.strip()
+
+    #: The same bound `attachments.read` caps its own copy at.
+    limit = 120
+    if len(text) > limit:
+        # Sliced out of the string itself rather than taken from `_suffix_of`,
+        # which lowercases: a name is data and `SCOPE.PDF` should not come back
+        # from a truncation spelled differently from how a shorter one would.
+        # Everything that reads the extension lowercases it at the lookup.
+        dot = text.rfind(".")
+        tail = text[dot:] if dot > 0 else ""
+        # A "suffix" longer than this is a dot in the middle of a long name
+        # rather than an extension, and keeping it would spend the whole budget
+        # on the wrong end of the string.
+        text = text[: limit - len(tail)] + tail if 0 < len(tail) <= 12 else text[:limit]
+
+    return text or "attachment"
 
 
 def _suffix_of(name: str) -> str:
     return ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
 
 
-def _resolve_type(kind: str, name: str) -> Tuple[str, str]:
+def resolve_type(kind: str, name: str) -> Tuple[str, str]:
     """The canonical content type and the suffix it is stored under.
+
+    Public because there must be exactly one answer to "what is this file", and
+    `/submit` needs the same one this module will store it under: a route that
+    decided differently is how a file gets stored as one type and served as
+    another. It was private in Task 2 only because nothing outside this module
+    had asked yet.
 
     The declared type wins when PRISM knows it and it says anything at all.
     `application/octet-stream` does not: it is a key of `CONTENT_TYPES` only so
@@ -443,8 +485,8 @@ def save(intake_id: str, name: str, data: bytes, kind: str, *, note: str = "") -
         raise IntakeFileError(f"{intake_id!r} is not a usable intake id.")
 
     file_id = storage.new_id()
-    filename = _clean_name(name)
-    content_type, suffix = _resolve_type(kind, filename)
+    filename = clean_name(name)
+    content_type, suffix = resolve_type(kind, filename)
     payload = bytes(data or b"")
 
     if configured():

@@ -34,6 +34,7 @@ import io
 import os
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -122,6 +123,22 @@ def xlsx_bytes(text: str) -> bytes:
     return out.getvalue()
 
 
+def xlsm_bytes(text: str) -> bytes:
+    """A real workbook with a VBA project inside it.
+
+    That entry is the only thing that makes an `.xlsm` different from an
+    `.xlsx` - same zip, same sheets, same cells, plus a program - and it is the
+    whole reason this door will not take one. Built rather than described,
+    because a fixture that was merely an `.xlsx` with a different name would
+    pass or fail this test for the wrong reason.
+    """
+    out = io.BytesIO(xlsx_bytes(text))
+    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as archive:
+        # The OLE compound-file header a vbaProject.bin actually begins with.
+        archive.writestr("xl/vbaProject.bin", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64)
+    return out.getvalue()
+
+
 #: The first 24 bytes of a real HEIC - its ISO base media `ftyp` box, verbatim:
 #: a four-byte box length, the marker at offset 4, then the major brand, the
 #: minor version and the compatible brands. Taken byte for byte off an actual
@@ -166,6 +183,7 @@ PDF = pdf_bytes("A scope of work for a two-branch clinic booking site.")
 BLANK_PDF = pdf_bytes()
 DOCX = docx_bytes("The requirements, as the client wrote them in Word.")
 XLSX = xlsx_bytes("Line one of the requirement list.")
+XLSM = xlsm_bytes("Line one of the requirement list, with a program attached.")
 
 
 workspaces.ensure_ready()
@@ -483,6 +501,127 @@ with TestClient(app) as client:
     )
     ok("a type outside the store's own table is refused", zipped_response.status_code == 400)
     untouched(zipped, "zip")
+
+    # --- A macro-enabled workbook, by every road into the door ----------------
+    #
+    # The one type the store can keep that this route will not take. It is a
+    # program with a spreadsheet round it, `Content-Disposition: attachment` is
+    # no defence because the download is the delivery, and the studio member who
+    # opens it and clicks Enable Content is the target. All three roads are
+    # tried: the macro type declared outright, the same file declared as "no
+    # idea" so the extension decides, and - the one a type-only subtraction
+    # would have missed - the macro file declared as an ordinary spreadsheet,
+    # which matters because the studio downloads it under the client's own name
+    # and `budget.xlsm` opens in Excel as a macro workbook whatever this server
+    # stored it as.
+    MACRO_TYPE = "application/vnd.ms-excel.sheet.macroEnabled.12"
+    PLAIN_XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    for label, declared_as in (
+        ("declared as the macro type", MACRO_TYPE),
+        ("declared as no type at all", "application/octet-stream"),
+        ("declared as an ordinary spreadsheet", PLAIN_XLSX_TYPE),
+    ):
+        macro = fresh()
+        macro_response = submit(
+            macro.token, files=[("documents", ("budget.xlsm", XLSM, declared_as))]
+        )
+        ok(f"a macro-enabled workbook {label} is refused", macro_response.status_code == 400)
+        ok(
+            f"and {label} it is told what it actually is, with the one-step "
+            "remedy - not the general list, which says a spreadsheet is fine to "
+            "somebody holding a spreadsheet",
+            "macro-enabled" in macro_response.json()["detail"]
+            and ".xlsx" in macro_response.json()["detail"],
+        )
+        untouched(macro, f"xlsm {label}")
+
+    ok(
+        "and the plain .xlsx a client actually has is still taken - the same "
+        "cells, without the program",
+        submit(fresh().token, files=[("documents", ("budget.xlsx", XLSX, PLAIN_XLSX_TYPE))]).status_code
+        == 200,
+    )
+
+    # --- An extension that does not agree with the declared type -------------
+    #
+    # Both halves are correct on their own here, which is what makes it worth a
+    # test: the type resolves to application/pdf because that is what was
+    # declared, and `.txt` is a document extension PRISM knows. What is wrong is
+    # that they disagree - `attachments.read` keys its reader off the name, so
+    # the text reader would decode PDF bytes as mojibake, find characters, and
+    # report no problem at all. The manifest would then assert a clean read of a
+    # file nothing read.
+
+    mismatched = fresh()
+    mismatched_response = submit(
+        mismatched.token, files=[("documents", ("scope.txt", PDF, "application/pdf"))]
+    )
+    ok(
+        "a .txt carrying PDF bytes and declaring application/pdf is refused - the "
+        "extension and the type have to name the same reader, not merely both be "
+        "recognised",
+        mismatched_response.status_code == 400,
+    )
+    untouched(mismatched, "extension disagreeing with the declared type")
+
+    ok(
+        "while the ordinary disagreement is untouched: a .md a browser declared "
+        "text/plain is a text file by both roads and is taken",
+        submit(
+            fresh().token,
+            files=[("documents", ("notes.md", b"# Notes\n\nTwo branches.", "text/plain"))],
+        ).status_code
+        == 200,
+    )
+
+    # --- The refusal quotes the name the record would have kept --------------
+    #
+    # The success path stores `intakefiles.clean_name(...)`; a refusal that
+    # interpolated the raw filename instead would be the same untrusted string
+    # getting two different treatments, and would let a caller put kilobytes of
+    # control characters into a response body by being refused rather than
+    # accepted.
+
+    hostile_name = "..\\..\\Windows\\ev\x07il" + "n" * 500 + ".zip"
+    hostile = fresh()
+    hostile_response = submit(
+        hostile.token, files=[("documents", (hostile_name, b"PK\x03\x04nope", "application/zip"))]
+    )
+    hostile_detail = hostile_response.json()["detail"]
+    ok("a hostile filename is refused like any other unusable type", hostile_response.status_code == 400)
+    ok(
+        "and the refusal carries the cleaned name - bounded, with no control "
+        "character and no path separator in it",
+        len(hostile_detail) < 400
+        and "\x07" not in hostile_detail
+        and "\\" not in hostile_detail
+        and "Windows" not in hostile_detail,
+    )
+    untouched(hostile, "a hostile filename")
+
+    # --- A long name keeps its extension -------------------------------------
+    #
+    # `clean_name` caps at 120 characters, and the last few of those are the
+    # only part `resolve_type` and `attachments.read` key on. Cutting the tail
+    # off would make a perfectly ordinary document refused by a message about
+    # the wrong thing - a long name is a long name, not a file PRISM cannot
+    # read.
+
+    long_named = fresh()
+    long_name = "Scope of Works - " + "a" * 200 + ".pdf"
+    long_response = submit(
+        long_named.token, files=[("documents", (long_name, PDF, "application/pdf"))]
+    )
+    ok("a document with a 200-character name is still taken", long_response.status_code == 200)
+    long_stored = intakes.get(long_named.id).attachments[0]
+    ok(
+        "its name is capped but still ends in the extension it arrived with",
+        len(long_stored["name"]) == 120 and long_stored["name"].endswith(".pdf"),
+    )
+    ok(
+        "and it is stored as a PDF rather than as an unrecognised blob",
+        long_stored["kind"] == "application/pdf",
+    )
 
     # --- Past the per-file cap -----------------------------------------------
 

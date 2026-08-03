@@ -469,6 +469,46 @@ ok(
     "note is empty when the file read cleanly",
     shot["note"] == "",
 )
+
+# --- A long name keeps the one part of it anything downstream reads ----------
+#
+# `clean_name` caps at 120 characters and the extension is at the far end of
+# that string - which is the end a naive `[:120]` removes. Everything that
+# decides what a file *is* keys on it: `resolve_type` falls back to the suffix
+# when a browser declared nothing useful, and `attachments.read` picks its
+# reader from the suffix and nothing else. A 200-character `.docx` used to be
+# stored as `<id>.bin` under `application/octet-stream` and shown to the studio
+# as a blob. Asserted through `save()` rather than against `clean_name` alone,
+# because the bug was in what `save()` then resolved off the shortened string.
+long_named = save_to_first(
+    "Requirements - " + "a" * 200 + ".docx",
+    PLAIN_DOCX,
+    "application/octet-stream",
+)
+ok(
+    "a 200-character filename is capped at 120 and still ends in its extension",
+    len(long_named["name"]) == 120 and long_named["name"].endswith(".docx"),
+)
+ok(
+    "so a browser that declared nothing useful still gets the type the extension "
+    "names, not application/octet-stream",
+    long_named["kind"]
+    == "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
+ok(
+    "and a long name with no extension at all is simply cut, not given one",
+    intakefiles.clean_name("b" * 200) == "b" * 120,
+)
+ok(
+    "a dot in the middle of a long name is not treated as an extension - keeping "
+    "it would spend the whole budget on the wrong end of the string",
+    intakefiles.clean_name("c" * 100 + "." + "d" * 100) == ("c" * 100 + "." + "d" * 19),
+)
+ok(
+    "and the kept extension is spelled the way it arrived - a name is data, and "
+    "a truncation should not case-fold what a shorter name keeps",
+    intakefiles.clean_name("E" * 200 + ".PDF").endswith(".PDF"),
+)
 ok(
     "and a note travels when the caller has one - it is where attachments.read's "
     "warning about a scan with no text layer ends up",

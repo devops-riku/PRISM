@@ -3243,33 +3243,93 @@ class _ClientFile(NamedTuple):
     """One file a client attached, as far as this door is concerned: what they
     called it, what PRISM decided it is, and the bytes that arrived."""
 
+    #: Already through `intakefiles.clean_name` - the same string that will be
+    #: written onto the record, so a refusal and a manifest entry cannot name
+    #: the file differently.
     name: str
-    #: The canonical content type from `intakefiles._resolve_type` - never the
+    #: The canonical content type from `intakefiles.resolve_type` - never the
     #: raw `Content-Type` the browser sent, and never a bare extension.
     kind: str
     data: bytes
 
+
+#: A macro-enabled workbook, subtracted below and named here so the subtraction
+#: reads as a decision rather than an omission.
+#:
+#: This is the type that shows what deriving a set costs. Everything else in
+#: `CONTENT_TYPES` is a document or a picture; this one is a program with a
+#: spreadsheet wrapped round it, and it was in the accepted set purely because
+#: nobody had to type its name to put it there. `Content-Disposition:
+#: attachment` is no defence at all against it - the download *is* the delivery.
+#: A stranger with one issued link sends `requirements.xlsm` with an auto-open
+#: macro, the queue lists it as an ordinary attachment, a studio member opens it
+#: and clicks Enable Content, and it is their machine.
+#:
+#: A client with a spreadsheet has `.xlsx`, which carries every cell of the same
+#: data and cannot carry the macro. Nothing legitimate is lost, and the studio's
+#: own authenticated pad is unaffected - `_read_documents` still takes what it
+#: always took. That asymmetry is the point: this door is the one with a
+#: stranger on the other side of it.
+_MACRO_SPREADSHEET = "application/vnd.ms-excel.sheet.macroEnabled.12"
 
 #: Every content type a client's own file may be stored as. Derived from
 #: `intakefiles.CONTENT_TYPES` rather than written out again beside it: that
 #: table is what the store knows how to keep, hand back and label, and a second
 #: copy here would be a thing to forget. `application/octet-stream` is
 #: subtracted because it is not a type - it is `intakefiles`' word for "no
-#: idea", the answer `_resolve_type` gives when neither the declared type nor
+#: idea", the answer `resolve_type` gives when neither the declared type nor
 #: the extension said anything it recognised. A file arriving as "no idea" is
 #: precisely what an anonymous door should not be storing, so on this path the
-#: fallback *is* the refusal.
+#: fallback *is* the refusal. And `_MACRO_SPREADSHEET`, for the reason above.
 #:
 #: The raster half of the set is `intakefiles.INLINE_TYPES`, imported rather
 #: than restated for the same reason, and it is the closed allowlist the plan
 #: requires: `_read_images` admits anything matching `image/`, which includes
 #: `image/svg+xml`, and an SVG is a script document that the studio will later
 #: open. The gate is on the **declared** type and structurally cannot be on a
-#: resolved-from-filename one, because `_resolve_type` refuses to let a suffix
+#: resolved-from-filename one, because `resolve_type` refuses to let a suffix
 #: resolve into `INLINE_TYPES` at all - see its docstring. So a file only ever
 #: reaches the raster set by being declared one of them, and `_looks_like`
 #: below is what decides whether the declaration was true.
-_CLIENT_TYPES = frozenset(intakefiles.CONTENT_TYPES) - {intakefiles.FALLBACK_TYPE}
+_CLIENT_TYPES = frozenset(intakefiles.CONTENT_TYPES) - {
+    intakefiles.FALLBACK_TYPE,
+    _MACRO_SPREADSHEET,
+}
+
+#: Which of `attachments.py`'s readers each accepted document's extension names,
+#: and which one its content type names - the same map read from both sides, so
+#: the two can be compared.
+#:
+#: Two things depend on this and they are worth separating. The first is that a
+#: document's extension has to *agree* with its declared type rather than merely
+#: be recognised: `scope.txt` carrying PDF bytes and declaring
+#: `application/pdf` resolves to `application/pdf` correctly, but
+#: `attachments.read` keys its reader off the name, so the text reader would run
+#: over PDF bytes, decode them as mojibake, find "text" and report no problem at
+#: all. The manifest would then assert a clean read of a file nothing read, and
+#: Task 6 would feed the model the same noise. Comparing readers rather than
+#: strings is what catches that while still allowing the ordinary disagreements
+#: - a `.md` a browser declared `text/plain` is a text file either way.
+#:
+#: The second is that this is derived from `_CLIENT_TYPES`, so subtracting the
+#: macro type above closes the extension road too: `.xlsm` is no longer a key
+#: here, so a macro workbook cannot get in by declaring the plain spreadsheet
+#: type either - which matters because the studio downloads a file under the
+#: *client's* name, and `budget.xlsm` opens in Excel as a macro workbook whatever
+#: this server stored it as.
+#:
+#: `SUFFIXES[suffix]` is indexed rather than `.get`, so a document type added to
+#: `intakefiles.CONTENT_TYPES` that no reader in `attachments.py` knows about
+#: fails here, at import, with a `KeyError` naming the suffix. That is the
+#: intended failure and not an oversight: the alternative is that the new type
+#: is quietly unacceptable on this route for ever, which nobody would notice
+#: until a client's file was refused. Import happens on every start and every
+#: check script, so whoever added the type finds out immediately.
+_DOCUMENT_READER = {
+    suffix: attachments_module.SUFFIXES[suffix]
+    for kind, suffix in intakefiles.CONTENT_TYPES.items()
+    if kind in _CLIENT_TYPES and kind not in intakefiles.INLINE_TYPES
+}
 
 #: What each of those types actually begins with: a tuple of `(offset,
 #: alternatives)` pairs, all of which must match.
@@ -3297,6 +3357,11 @@ _CLIENT_TYPES = frozenset(intakefiles.CONTENT_TYPES) - {intakefiles.FALLBACK_TYP
 #: executable renamed `.txt`, which is a file that downloads as `.txt`, opens in
 #: a text editor and runs nowhere - the case this table exists for is the one
 #: where the extension makes it double-clickable.
+#:
+#: `_MACRO_SPREADSHEET` is absent too, for a different reason: it is refused at
+#: the type gate, so `_looks_like` can never be called with it, and an entry for
+#: it would be a line nothing could ever execute. This table covers exactly what
+#: this door accepts, not everything `intakefiles` can store.
 _SIGNATURES: dict[str, tuple[tuple[int, tuple[bytes, ...]], ...]] = {
     "image/png": ((0, (b"\x89PNG\r\n\x1a\n",)),),
     "image/jpeg": ((0, (b"\xff\xd8\xff",)),),
@@ -3316,7 +3381,6 @@ _SIGNATURES: dict[str, tuple[tuple[int, tuple[bytes, ...]], ...]] = {
         (0, (b"PK\x03\x04",)),
     ),
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ((0, (b"PK\x03\x04",)),),
-    "application/vnd.ms-excel.sheet.macroEnabled.12": ((0, (b"PK\x03\x04",)),),
 }
 
 
@@ -3345,6 +3409,16 @@ _WRONG_KIND = (
     "'{name}' is not a file PRISM can take. Attach a PDF, a Word document, a "
     "spreadsheet, a CSV or a text file - or a photo or screenshot as PNG, JPEG, "
     "WebP, GIF or HEIC."
+)
+
+#: The macro workbook's own answer, because the general one above would read as
+#: wrong to the only person who ever sees it: it says a spreadsheet is fine, and
+#: they are holding a spreadsheet. This is also the one refusal in the set with
+#: a remedy the client can carry out in one step, so it says what that is
+#: instead of listing everything they could have sent instead.
+_MACRO_REFUSED = (
+    "'{name}' is a macro-enabled workbook, and PRISM does not take those. Save "
+    "it as .xlsx and attach that - it keeps every cell, without the program."
 )
 
 
@@ -3395,29 +3469,43 @@ async def _read_client_files(
     total_mb = config.MAX_CLIENT_UPLOAD_TOTAL_BYTES / (1024 * 1024)
 
     for upload in candidates:
-        name = (upload.filename or "attachment").strip()
+        # Cleaned here rather than left to `save()`, and the cleaned string is
+        # what everything downstream uses - the checks below, the refusals that
+        # name the file, and the manifest entry. `clean_name` caps at 120
+        # characters and strips control characters and separators, so a caller
+        # cannot put a multi-kilobyte name with a newline in it into a response
+        # body by being refused instead of accepted, and the file is called one
+        # thing rather than two.
+        name = intakefiles.clean_name(upload.filename or "")
         declared = (upload.content_type or "").split(";")[0].strip().lower()
         # The store's own resolution, not a second copy of it: the declared type
         # wins when PRISM knows it, the extension is consulted only when it said
         # nothing, and an extension can never resolve into the raster allowlist.
-        # Reached through the module's private name knowingly - it is the one
-        # function that decides what a file is, and a route deciding it
-        # differently is how a file gets stored under one type and served under
-        # another.
-        kind, _stored_as = intakefiles._resolve_type(declared, name)  # noqa: SLF001
+        kind, _stored_as = intakefiles.resolve_type(declared, name)
 
         # Two refusals with one message, because they are one thing to the person
         # reading it: PRISM does not take that. The second clause is the
-        # document-with-no-usable-extension case - `attachments.read` keys its
-        # reader off the suffix, so a scope called `scope` with no extension at
-        # all would be stored as a PDF and extracted as nothing, and the note on
-        # its manifest entry would contradict its own `kind`.
+        # document whose extension and declared type do not name the same
+        # reader - including the document with no usable extension at all, which
+        # `_DOCUMENT_READER.get` answers `None` for. See that map's own comment
+        # for what each half of it is holding up.
         if kind not in _CLIENT_TYPES or (
             kind not in intakefiles.INLINE_TYPES
-            and _suffix_of(name) not in attachments_module.SUFFIXES
+            and _DOCUMENT_READER.get(_suffix_of(name))
+            != _DOCUMENT_READER[intakefiles.CONTENT_TYPES[kind]]
         ):
             await upload.close()
-            raise HTTPException(status_code=400, detail=_WRONG_KIND.format(name=name))
+            # Both roads into the macro refusal get the message about macros:
+            # the type, when a browser declared it, and the extension, when it
+            # declared an ordinary spreadsheet or nothing at all. Which of the
+            # two clauses above caught it is not something the person reading
+            # the sentence should have to know.
+            answer = (
+                _MACRO_REFUSED
+                if kind == _MACRO_SPREADSHEET or _suffix_of(name) == ".xlsm"
+                else _WRONG_KIND
+            )
+            raise HTTPException(status_code=400, detail=answer.format(name=name))
 
         # Refused on what the part declares before anything is allocated for it,
         # exactly as `_read_images` does and for the reason its own comment
@@ -3617,11 +3705,29 @@ async def submit_client_intake(
             # not the other), so a submit that was always going to be refused -
             # a used link, a closed intake, a second click - would otherwise put
             # up to six files in a bucket with nothing on any record pointing at
-            # them, on an anonymous route, as often as the rate limit allows.
-            # Reading the state first turns the overwhelming majority of that
-            # into no write at all. The residual is a genuine race - two submits
-            # that both read `issued` - which is rare, bounded to one loser's
-            # files, and logged.
+            # them, on an anonymous route, as often as they cared to try.
+            # Reading the state first turns the *sequential* case of that into
+            # no write at all, which is the case that actually happens: a client
+            # who clicks twice, a browser that retries, a link forwarded to
+            # somebody who tries it after the fact.
+            #
+            # What it does not bound is concurrency, and the arithmetic is worth
+            # writing down rather than being reassured by. There is an `await`
+            # between this read and the advance below - the `to_thread` that
+            # does the saving - so every request in flight at once passes this
+            # check before any of them reaches `advance()`. Twenty simultaneous
+            # submits against one live link, which the per-address limiter
+            # permits in a minute, is nineteen losers times six files times six
+            # megabytes: on the order of 700 MB stored with nothing pointing at
+            # it and no per-file delete to take it back. This check is an orphan
+            # *filter*, not a bound, and nothing here is a defence against a
+            # caller who is trying - see `_rate_limit_hits`' own comment for the
+            # same disclaimer about the only other control on this door.
+            #
+            # Closing the window would mean claiming the intake atomically
+            # before the files exist, and the only thing in this codebase that
+            # can claim one is `advance()` itself - which is the manifest-first
+            # ordering rejected below, for a worse reason than this one.
             entry = intakes.get(intake_id)
             if entry is None or entry.state != intakes.ISSUED:
                 raise _client_write_refused()
