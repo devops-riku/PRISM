@@ -881,11 +881,19 @@ export type IntakeAttachment = {
  * drift an earlier draft of the plan itself caused when it wrote the
  * allowlist as four types while Task 3 wrote five: "Import it; do not
  * restate it." There is nothing to import across a language boundary, so
- * this is that restatement, made once, here, rather than left for whichever
- * component happens to need "is this one of the pictures" to invent its own
- * version - `file.kind.startsWith('image/')`, say, which only coincides with
- * this set because `intakefiles.CONTENT_TYPES` happens to have no other
- * `image/*` entries today.
+ * this is that restatement - and it is made once, here, rather than left for
+ * whichever component happens to need "is this one of the pictures" to invent
+ * its own version.
+ *
+ * Both consumers import it: `IntakeListScreen` for what the studio may open
+ * inline, and the client's `ClientDropzone` for what the picker offers. They
+ * held two separate versions until a review found them - the first a
+ * `file.kind.startsWith('image/')` prefix test that only coincided with this
+ * set because `intakefiles.CONTENT_TYPES` happens to have no other `image/*`
+ * entry today, the second a correct copy, which is the more dangerous of the
+ * two because nothing about a correct copy looks wrong until the day the sets
+ * differ. Adding a sixth raster is now two edits - `intakefiles.INLINE_TYPES`
+ * and this - and there is no third place to forget.
  */
 export const INLINE_KINDS: ReadonlySet<string> = new Set([
   'image/png',

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { formatBytes } from '../../lib/format'
+import { INLINE_KINDS } from '../../types'
 import type { ClientSubmitFiles } from '../../lib/clientApi'
 
 /**
@@ -60,22 +61,27 @@ const MAX_FILE_BYTES = 6 * 1024 * 1024
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024
 
 /**
- * `intakefiles.INLINE_TYPES`: the five rasters, and nothing else.
+ * The five rasters, and nothing else, come from `types.ts`'s `INLINE_KINDS` -
+ * imported, not written out again. That file is the single TypeScript
+ * statement of `intakefiles.INLINE_TYPES`, and this door held a second copy
+ * until a review noticed: two correct copies are how a sixth raster gets added
+ * server-side and ships accepted by one screen and refused by the other, which
+ * is the same drift the plan cites against itself for once writing the
+ * allowlist as four types in one section and five in another.
  *
- * A file reaches this set by being **declared** one of them and no other way -
- * `resolve_type` refuses to let a filename suffix resolve into it, so a client
- * naming their file `payload.png` cannot decide that it renders. That asymmetry
- * is reproduced faithfully in `slotFor` below rather than smoothed over, which
- * is why a `.heic` that arrives with no type at all (some browsers send none)
- * is refused here rather than accepted and refused again by the server.
+ * Importing it is not the same as sharing a policy with `ImageDropzone`, which
+ * the docstring above refuses on purpose. That component's rule is a *different
+ * rule* - the loose `image/` prefix. This is the *same set*, named by the same
+ * server constant, and there is nothing for this door to decide about it.
+ *
+ * What stays this door's own is how the set is reached: a file lands in it by
+ * being **declared** one of them and no other way. `resolve_type` refuses to
+ * let a filename suffix resolve into it, so a client naming their file
+ * `payload.png` cannot decide that it renders. That asymmetry is reproduced
+ * faithfully in `slotFor` below rather than smoothed over, which is why a
+ * `.heic` that arrives with no type at all (some browsers send none) is refused
+ * here rather than accepted and refused again by the server.
  */
-const IMAGE_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/gif',
-  'image/heic',
-])
 
 /** `intakefiles.FALLBACK_TYPE`. Not a type - that module's word for "no idea",
  *  and on this door the answer that *is* the refusal. */
@@ -178,7 +184,7 @@ const SUFFIX_READERS: Record<string, string> = {
 }
 const DOCUMENT_READER: Record<string, string> = Object.fromEntries(
   Object.entries(CONTENT_TYPES)
-    .filter(([type]) => CLIENT_TYPES.has(type) && !IMAGE_TYPES.has(type))
+    .filter(([type]) => CLIENT_TYPES.has(type) && !INLINE_KINDS.has(type))
     .map(([, suffix]) => [suffix, SUFFIX_READERS[suffix]]),
 )
 
@@ -195,7 +201,7 @@ const DOCUMENT_READER: Record<string, string> = Object.fromEntries(
  * and every dialog has an "All files" escape. `slotFor` is what actually
  * decides.
  */
-const ACCEPT = [...IMAGE_TYPES, ...Object.keys(DOCUMENT_READER)].join(',')
+const ACCEPT = [...INLINE_KINDS, ...Object.keys(DOCUMENT_READER)].join(',')
 
 /** Which of the server's two file fields a file belongs in, or `null` when it
  *  belongs in neither. */
@@ -237,14 +243,14 @@ function slotFor(file: File): Slot | null {
     kind = declared
   } else {
     const guessed = TYPE_FOR_SUFFIX[suffix] || ''
-    if (guessed && !IMAGE_TYPES.has(guessed)) kind = guessed
+    if (guessed && !INLINE_KINDS.has(guessed)) kind = guessed
   }
 
   // The gate's first clause. The fallback fails this by construction, and so
   // does the macro workbook, however it was declared or named.
   if (!kind || !CLIENT_TYPES.has(kind)) return null
 
-  if (IMAGE_TYPES.has(kind)) return 'image'
+  if (INLINE_KINDS.has(kind)) return 'image'
 
   // The gate's second clause: for anything outside the raster set, the reader
   // the extension names must be the reader the resolved type names. A document

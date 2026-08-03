@@ -430,9 +430,17 @@ _real_owned = main_module._owned_attachment
 
 def _permissive_read(_intake_id, requested_file_id):
     """Stands in for a storage layer with no cross-intake gate of its own:
-    answers for `entry_b`'s file regardless of which intake asked - the bug
-    `_owned_attachment` exists to survive."""
-    if requested_file_id == entry_b["id"]:
+    answers for `entry_b`'s file - and for the *other workspace's* file -
+    regardless of which intake asked, which is the bug `_owned_attachment`
+    exists to survive.
+
+    The foreign-workspace id is in here for a specific reason. Storage scopes
+    its own prefix by workspace, so that fetch is 404 on the real functions
+    whether `_owned_attachment` runs or not: the ungated assertion above proves
+    the *behaviour* and nothing about *which layer* delivers it. Answering for
+    it here removes storage from the question so the route's own check is the
+    only thing left standing."""
+    if requested_file_id in (entry_b["id"], foreign_ws_entry["id"]):
         return FILE_B_BYTES, "image/png"
     return _real_read(_intake_id, requested_file_id)
 
@@ -451,6 +459,17 @@ try:
         "check (_owned_attachment) still refuses a file id that is not this "
         "intake's - a second, independent layer, not merely along for the ride",
         still_refused.status_code == 404,
+    )
+
+    foreign_still_refused = client.get(
+        f"/api/intakes/{intake_a.id}/files/{foreign_ws_entry['id']}", headers=headers
+    )
+    ok(
+        "the same is true for the *other workspace's* file id: with storage's "
+        "workspace-scoped prefix simulated away, _owned_attachment is what "
+        "refuses it - the assertion earlier in this file passes either way, so "
+        "this is the one that names the layer",
+        foreign_still_refused.status_code == 404,
     )
 
     main_module._owned_attachment = _always_owned

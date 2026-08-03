@@ -471,9 +471,13 @@ function AttachmentsBlock({ intakeId, attachments, closed }: AttachmentsProps) {
       <p className={MONO_LABEL}>
         {attachments.length === 1 ? '1 file attached' : `${attachments.length} files attached`}
       </p>
-      <div className="mt-0.5 max-h-[9rem] overflow-y-auto">
+      {/* `overflow-y-auto` makes this a block formatting context, so its own
+          top margin would not collapse with the list's - the gap is spelled on
+          the children instead, which keeps the closed and open cases the same
+          2px they were before the count line moved out of here. */}
+      <div className="max-h-[9rem] overflow-y-auto">
         {closed ? (
-          <p className="font-body text-[12.5px] leading-[1.5] text-faint">
+          <p className="mt-0.5 font-body text-[12.5px] leading-[1.5] text-faint">
             Removed when this request was closed.
           </p>
         ) : null}
