@@ -202,27 +202,27 @@ This task ships **before** any upload route exists, because both defects it clos
 **Files:**
 - Modify: `backend/app/main.py`, `frontend/src/components/IntakeListScreen.tsx`, `frontend/src/lib/api.ts`, `frontend/src/types.ts`
 
-- [ ] **Step 1: `GET /api/intakes/{intake_id}/files/{file_id}`.** Behind the gate like every other studio route. No admin check — reading the queue is any member's, and `list_intakes`'s own docstring settles that this is the same class of read.
+- [x] **Step 1: `GET /api/intakes/{intake_id}/files/{file_id}`.** Behind the gate like every other studio route. No admin check — reading the queue is any member's, and `list_intakes`'s own docstring settles that this is the same class of read.
 
   ~~On Spaces it answers `307` to a **presigned URL with a short TTL** (minutes, not hours) rather than streaming the bytes through this process; on local it serves the file.~~ **Amended — see "The revisit" above.** It serves the bytes on both branches, through `intakefiles.read()` inside `asyncio.to_thread`, because a `307` to a presigned URL is a response the studio's browser can neither `fetch` (no CORS rule on the Space) nor navigate to (no bearer on an `<a href>`). One route, one behaviour, so the frontend has one thing to link to and never learns which backend is behind it.
 
-- [ ] **Step 2: The headers, which are the point of the route.** `Cache-Control: no-store`, an explicit `Content-Type` from the manifest, `Content-Disposition: inline` only for the raster allowlist Task 3 enforced and `attachment` for everything else. Never a sniffed type.
+- [x] **Step 2: The headers, which are the point of the route.** `Cache-Control: no-store`, an explicit `Content-Type` from the manifest, `Content-Disposition: inline` only for the raster allowlist Task 3 enforced and `attachment` for everything else. Never a sniffed type.
 
   For Spaces these are *also* set as **object metadata at `put_object` time** (Task 2 does this), which is still right and still worth keeping: it is what makes the object correct in its own bucket, independently of who reads it. But this route is now in the path for both backends, so the headers a studio actually receives are the ones built here, off the manifest. ~~**`X-Content-Type-Options: nosniff` is set on the local branch only**~~ — **amended: it is set on both**, since giving up the `307` put this app back in the path. See "The revisit" above.
 
   **Filenames need encoding, not interpolation.** `intakefiles.clean_name` strips separators and control characters but keeps `"`, so a file called `sco"pe.pdf` would break a naive `Content-Disposition: attachment; filename="…"`. Quote it properly or use RFC 5987 `filename*`.
 
-- [ ] **Step 3: Refuse the cross-intake fetch.** A file id belonging to a different intake, in the same workspace or another, is a 404 — the id pair must be checked together, not each alone. **Check it before minting a presigned URL**, not after: a presigned URL is a bearer credential and handing one out is the disclosure, whatever this route returns next.
+- [x] **Step 3: Refuse the cross-intake fetch.** A file id belonging to a different intake, in the same workspace or another, is a 404 — the id pair must be checked together, not each alone. **Check it before minting a presigned URL**, not after: a presigned URL is a bearer credential and handing one out is the disclosure, whatever this route returns next.
 
-- [ ] **Step 4: The studio sees them, and this is the half the user asked for by name.** The queue row lists each attachment by filename, with its size, each one a link to the route above. A `submitted` row whose client attached three files and one with none must be distinguishable without opening either.
+- [x] **Step 4: The studio sees them, and this is the half the user asked for by name.** The queue row lists each attachment by filename, with its size, each one a link to the route above. A `submitted` row whose client attached three files and one with none must be distinguishable without opening either.
 
   The queue row is a summary, so if the full list does not fit it, say how many there are and put the list where the scope already goes. **Do not silently show the first two.**
 
   **A closed intake still lists its attachments and every one of them is gone.** `close()` deletes the objects but leaves `Intake.attachments` populated, which is per plan — the record is the history of what was sent. A closed row rendered straight from that manifest offers a full set of links that all 404. Decide what a closed row shows and say what you decided.
 
-- [ ] **Step 5: Typecheck, build, and open a client-uploaded file from the queue.** Quote what you observed, including the response headers.
+- [x] **Step 5: Typecheck, build, and open a client-uploaded file from the queue.** Quote what you observed, including the response headers.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 
