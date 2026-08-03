@@ -281,10 +281,20 @@ export default function ClientForm({
         </div>
 
         {attempted && missing.length > 0 ? (
+          // `role="status"` (polite), not `role="alert"` (implicitly
+          // assertive) - this box stays mounted for as long as anything is
+          // still missing and its text is recomputed on every render, so an
+          // assertive region here re-announces the whole remaining list on
+          // every keystroke that changes it, forcibly interrupting a screen
+          // reader's own character echo of what is currently being typed.
+          // `role="alert"` was right for the per-attempt announcement this
+          // is meant to be, wrong for a region that keeps mutating live
+          // while the user is still typing - the two are the same box, but
+          // not the same lifetime.
           <div
             ref={summaryRef}
             tabIndex={-1}
-            role="alert"
+            role="status"
             className="focus-landing rounded-lg border border-alert/40 bg-paper px-4 py-3"
           >
             <p className="font-body text-[14px] leading-[1.5] text-ink">

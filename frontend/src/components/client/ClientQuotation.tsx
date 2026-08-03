@@ -214,25 +214,42 @@ export default function ClientQuotation({
           forwarding their own link to a boss or a partner needs a copy that
           survives outside the browser tab it arrived in. A plain `<a href>`:
           `clientQuotationUrl`'s own docstring is explicit that this door
-          needs no auth header, unlike `lib/api.ts`'s `openFile`. */}
-      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
-        <a
-          href={clientQuotationUrl(token, 'pdf')}
-          download={`${view.reference || 'quotation'}.pdf`}
-          className="font-label text-[12px] uppercase tracking-[0.12em] text-ballpoint underline decoration-1 underline-offset-[3px]"
-        >
-          Download PDF
-        </a>
-        <a
-          href={clientQuotationUrl(token, 'html')}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-label text-[12px] uppercase tracking-[0.12em] text-ballpoint underline decoration-1 underline-offset-[3px]"
-        >
-          View as a page
-          <span className="sr-only"> (opens the printable copy in a new tab)</span>
-        </a>
-      </div>
+          needs no auth header, unlike `lib/api.ts`'s `openFile`.
+
+          Suppressed entirely in `revision_requested`, not merely labelled -
+          the document these links produce carries the *previous* bundle's
+          total with nothing on the page it prints (no state parameter, no
+          watermark, and `_filename`'s own `-r{revision}` suffix only
+          appears once `revision > 1`, which is not a qualifier a client
+          reading a downloaded PDF would recognise as one). This on-page
+          disclaimer, a few lines below, cannot travel with a file once it
+          is forwarded: a boss who opens an attached PDF never sees this
+          component at all. Suppressing was chosen over relabelling the
+          link text ("Download the previous quotation") for exactly that
+          reason - a truer link label still only warns whoever is looking
+          at *this* page, not whoever the file ends up in front of. The
+          links come back once the studio sends a fresh bundle and this
+          state moves back to `sent`, or once it's `finalized`. */}
+      {view.state !== 'revision_requested' ? (
+        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
+          <a
+            href={clientQuotationUrl(token, 'pdf')}
+            download={`${view.reference || 'quotation'}.pdf`}
+            className="font-label text-[12px] uppercase tracking-[0.12em] text-ballpoint underline decoration-1 underline-offset-[3px]"
+          >
+            Download PDF
+          </a>
+          <a
+            href={clientQuotationUrl(token, 'html')}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-label text-[12px] uppercase tracking-[0.12em] text-ballpoint underline decoration-1 underline-offset-[3px]"
+          >
+            View as a page
+            <span className="sr-only"> (opens the printable copy in a new tab)</span>
+          </a>
+        </div>
+      ) : null}
 
       {view.state === 'revision_requested' ? (
         <div role="status" className="mt-6 rounded-lg border border-rule bg-duplicate/50 px-4 py-3">
