@@ -29,3 +29,11 @@ reportlab
 python-docx>=1.1
 openpyxl>=3.1
 pypdf>=4.0
+
+# Where a client's own files go, when a studio has somewhere to put them:
+# DigitalOcean Spaces, over the S3-compatible API. Optional in practice -
+# `app/intakefiles.py` imports it lazily, inside the Spaces backend, and falls
+# back to the workspace's own folder when no credentials are configured, so the
+# app imports and every check script runs on a machine that has never installed
+# this.
+boto3>=1.34

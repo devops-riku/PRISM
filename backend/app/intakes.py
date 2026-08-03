@@ -26,7 +26,7 @@ from typing import List
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app import storage, tokens, workspaces
+from app import intakefiles, storage, tokens, workspaces
 
 logger = logging.getLogger("prism.intakes")
 
@@ -126,6 +126,14 @@ ALLOWED: dict = {
 #: Narrowing `ADVANCE_FIELDS` itself to be transition-aware would close this
 #: gap structurally rather than by convention, and is worth doing the day a
 #: second write path needs a field the first should not be able to touch.
+#:
+#: `attachments` is here for exactly that reason and inherits exactly that
+#: caveat: `/submit` writes the manifest in the same `issued -> submitted` move
+#: it writes the client's four fields in, so the name has to be allowed, and
+#: nothing scopes it to that one move. What keeps it honest is the same thing:
+#: `/submit` is its only caller, and `advance()` revalidates the whole record
+#: through `Intake.model_validate` before anything is written, so a malformed
+#: manifest is refused at the write rather than discovered at the read.
 ADVANCE_FIELDS = {
     "job_id",
     "bundle_ids",
@@ -142,6 +150,7 @@ ADVANCE_FIELDS = {
     "budget_text",
     "client_kind",
     "client_kind_label",
+    "attachments",
 }
 
 
@@ -215,6 +224,25 @@ class Intake(BaseModel):
     #: studio's default for a request generated before this existed.
     client_kind: str = ""
     client_kind_label: str = ""
+
+    #: What the client attached, as a manifest rather than as bytes. One entry
+    #: per stored file, in the shape `app.intakefiles.save()` returns and is the
+    #: only producer of: `{"id": str, "name": str, "kind": str, "bytes": int,
+    #: "note": str}` - the server-minted file id, what the client called it, the
+    #: canonical content type, the size, and `attachments.read`'s warning when
+    #: there was one ("this scan has no text layer"), empty otherwise.
+    #:
+    #: Deliberately no URL and no bucket key. Both are functions of this intake's
+    #: id and the file's, resolved at read time by `intakefiles`, so a presigned
+    #: URL - which expires in minutes - can never be the thing on file, and
+    #: moving from local disk to Spaces does not have to rewrite history.
+    #:
+    #: `List[dict]` is what the plan specifies and it is worth being plain about
+    #: what that does and does not buy: `model_validate` enforces "a list, of
+    #: dicts", and nothing at all about those five keys. The shape holds because
+    #: `intakefiles.save()` is the only thing that builds an entry, not because
+    #: this line checks it.
+    attachments: List[dict] = Field(default_factory=list)
 
     #: The PAD settings this intake will be quoted under - kind, currency,
     #: market region, tax basis, payment terms, tiers.
@@ -299,6 +327,27 @@ def _write(entry: Intake) -> Intake:
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
         raise IntakeWriteError(f"That intake could not be saved: {exc}") from exc
+    if entry.state == CLOSED:
+        # The other half of the decision the token blank above makes, in the
+        # same place and for the same reason: a withdrawn request must not go
+        # on holding a stranger's scope document, and `close()` and
+        # `advance(id, CLOSED)` are two equally legal doors to this state.
+        # Putting this in `close()` alone is precisely how the token blanking
+        # drifted the first time - one door kept up to date, the other not.
+        #
+        # After the write, never before it: a failed `_write` raises, and files
+        # deleted ahead of an intake that then did not close would be gone with
+        # nothing recording that they ever existed. `forget()` never raises and
+        # never has to be waited on for correctness, so a bucket that cannot be
+        # reached costs a log line and some storage, not the close.
+        #
+        # It does mean this call happens while `_lock` is held, since both
+        # callers write under it - a few hundred milliseconds of `delete_objects`
+        # blocking other intake writes in this worker, on an action a studio
+        # takes by hand and rarely. That is the cheaper of the two costs on
+        # offer; the other is `advance(id, CLOSED)` silently leaving a withdrawn
+        # client's files in a bucket forever.
+        intakefiles.forget(entry.id)
     return entry
 
 

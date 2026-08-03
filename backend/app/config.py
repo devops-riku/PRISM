@@ -120,6 +120,27 @@ if not GENERATED_DIR.is_absolute():
     GENERATED_DIR = (BACKEND_DIR / GENERATED_DIR).resolve()
 
 
+#: DigitalOcean Spaces, where a client's own uploaded files go when there is
+#: somewhere to put them. All four or none: `app.intakefiles.configured()` is
+#: the predicate, and with any of them missing the same bytes go to the
+#: workspace's own `_intake_files/` instead. That fallback is not a stub - it is
+#: what a studio running PRISM on one machine should be using, and it is what
+#: keeps every `check_*.py` offline and network-free.
+#:
+#: Server-side only, exactly as `GEMINI_API_KEY` above is. Nothing reads these
+#: onto the wire: `/api/health` may say *whether* Spaces is configured, the same
+#: way it already reports `key_configured` for Gemini, and never more than that.
+SPACES_KEY: str = _env_str("SPACES_KEY", "")
+SPACES_SECRET: str = _env_str("SPACES_SECRET", "")
+
+#: The Space's region slug - `sgp1`, `nyc3`, `fra1`. The API endpoint is derived
+#: from it (`app.intakefiles.endpoint`) rather than configured separately: it is
+#: a pure function of the region for every Space there is, and a fifth variable
+#: would only be a fifth thing to get subtly wrong.
+SPACES_REGION: str = _env_str("SPACES_REGION", "")
+SPACES_BUCKET: str = _env_str("SPACES_BUCKET", "")
+
+
 # --- HTTP --------------------------------------------------------------------
 
 _DEFAULT_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
@@ -163,6 +184,21 @@ MAX_BRIEF_CHARS: int = _env_int("MAX_BRIEF_CHARS", 20_000)
 MAX_CLIENT_UPLOAD_TOTAL_BYTES: int = _env_int(
     "MAX_CLIENT_UPLOAD_TOTAL_BYTES", 20 * 1024 * 1024
 )
+
+#: How many files a client may attach to one intake, and how large any one of
+#: them may be. Their own names rather than a second reading of `MAX_IMAGES`,
+#: `MAX_DOCUMENTS` and `MAX_DOCUMENT_BYTES` above, and deliberately tighter than
+#: all three: those are a studio's limits on a studio's own uploads to its own
+#: pad, and a studio raising one of them for itself must not thereby raise it
+#: for a stranger holding a link. Six files covers a scope, a spreadsheet and
+#: four photographs of a site, which is what a real enquiry looks like; six
+#: megabytes each is a large PDF and a phone photograph, and is under both
+#: `MAX_IMAGE_BYTES` and `MAX_DOCUMENT_BYTES` on purpose so that neither of
+#: those two being raised can widen this one by accident. The aggregate ceiling
+#: is `MAX_CLIENT_UPLOAD_TOTAL_BYTES` above - there is one of those and this is
+#: not a second.
+MAX_CLIENT_FILES: int = _env_int("MAX_CLIENT_FILES", 6)
+MAX_CLIENT_FILE_BYTES: int = _env_int("MAX_CLIENT_FILE_BYTES", 6 * 1024 * 1024)
 
 #: Mime types the Gemini vision path handles reliably. Anything else that still
 #: claims `image/*` is passed through - this list drives the error message only.
