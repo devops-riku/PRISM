@@ -202,7 +202,7 @@ export default function ClientForm({
         together.
       </p>
 
-      <form onSubmit={handleSubmit} noValidate className="mt-6 flex flex-col gap-5">
+      <form onSubmit={handleSubmit} noValidate className="mt-5 flex flex-col gap-4">
         {/* First, and above the four fields rather than among them: it is the
             only question here whose answer changes how the others are read.
             `KindPicker` is the studio's own component, used unchanged - the
@@ -230,6 +230,11 @@ export default function ClientForm({
           ) : null}
         </div>
 
+        {/* Paired, because they are one question - how to reach you - and
+            because two full-width rows for a 30-character address and an
+            optional phone number is most of the height that pushed the Send
+            button off the screen. */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <FieldLabel htmlFor="client-email">Email</FieldLabel>
           <input
@@ -283,6 +288,7 @@ export default function ClientForm({
             className={WELL}
           />
         </div>
+        </div>
 
         <div>
           <FieldLabel htmlFor="client-scope">Scope</FieldLabel>
@@ -302,7 +308,17 @@ export default function ClientForm({
             aria-describedby={
               trimmedScope ? 'client-scope-hint' : attempted && scopeMissing ? 'client-scope-error' : undefined
             }
-            className={`${WELL_TEXTAREA} pad-brief`}
+            // Shorter than `WELL_TEXTAREA`'s own 184px floor, which is sized
+            // for the pad's brief - a studio writing a full scope from notes.
+            // A client writing a paragraph needs less, and the difference is
+            // what keeps the Send button on the same screen as the question.
+            // It still grows: the box is resizable and scrolls past this.
+            //
+            // The `!` is a SUFFIX. Tailwind v4 moved the important modifier to
+            // the end of the class, and `!min-h-[116px]` is not a v3 spelling
+            // that still works - it matches no utility at all, so it compiles
+            // to nothing and leaves the 184px floor in place with no warning.
+            className={`${WELL_TEXTAREA} pad-brief min-h-[116px]!`}
           />
           {trimmedScope ? (
             <p

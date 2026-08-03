@@ -105,11 +105,22 @@ type KindPickerProps = {
 
 export default function KindPicker({ value, label, onChange, onLabel, disabled }: KindPickerProps) {
   return (
-    <div>
+    // `@container` here rather than on the grid, because a container sizes its
+    // descendants and never itself - an element cannot answer its own query.
+    //
+    // Container queries, not viewport ones, and the difference is visible.
+    // `sm:`/`xl:` ask how wide the *window* is, which is the right question
+    // only when this picker is as wide as the page. It is not: the pad gives it
+    // a wide column and the client's own form gives it a card far narrower than
+    // the window. On a 1920px screen the viewport rule said three across while
+    // the card was 736px, so "Web / Software Development" wrapped onto three
+    // lines and every hint truncated mid-word. `@container` asks how wide
+    // *this* is, which is the question that was always meant.
+    <div className="@container">
       <div
         role="radiogroup"
         aria-label="What kind of work is this?"
-        className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3"
+        className="grid grid-cols-1 gap-2 @md:grid-cols-2 @3xl:grid-cols-3"
       >
         {KINDS.map((kind) => {
           const chosen = value === kind.id

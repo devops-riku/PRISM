@@ -157,7 +157,17 @@ export default function ClientShell({ token }: ClientShellProps) {
           fixed to the viewport and this card scrolls itself once a face -
           a long form on a short phone screen, say - runs taller than the
           screen. */}
-      <div className="max-h-dvh w-full max-w-[32rem] overflow-y-auto">
+      {/* The form is the one face here with real content in it - a picker and
+          four fields - and 32rem stacks that into something twice the height of
+          a screen. It gets a frame wide enough to lay the picker out three
+          across and pair the two short fields, which is what makes it fit
+          without scrolling. Every other face is a heading and a sentence, and
+          a wide column would only make those harder to read. */}
+      <div
+        className={`max-h-dvh w-full overflow-y-auto ${
+          status === 'ready' && view?.state === 'issued' ? 'max-w-[58rem]' : 'max-w-[32rem]'
+        }`}
+      >
         {status === 'loading' ? <LoadingFace /> : null}
         {status === 'offline' ? <OfflineFace message={offlineMessage} /> : null}
         {status === 'gone' ? <ClientClosed /> : null}
