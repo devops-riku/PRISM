@@ -348,8 +348,9 @@ _SENTINEL_PLACEHOLDER = "[removed]"
 
 def strip_sentinels(text: str) -> str:
     """Remove every framing marker this module ever prints around
-    client-supplied text - `BRIEF_BEGIN`/`BRIEF_END` and
-    `REVISION_BEGIN`/`REVISION_END` alike, regardless of which field is being
+    client-supplied text - all three pairs this module defines:
+    `BRIEF_BEGIN`/`BRIEF_END`, `REVISION_BEGIN`/`REVISION_END`, and
+    `RATE_CARD_BEGIN`/`RATE_CARD_END` - regardless of which field is being
     cleaned. One shared function rather than one per field, because the
     threat is the same one everywhere: a forged marker does not have to sit
     inside the block it names to do damage. `brief` is not the only field
@@ -357,10 +358,17 @@ def strip_sentinels(text: str) -> str:
     and `budget_hint` do too (see `build_brief`) - so a `BRIEF_END`/`BRIEF_BEGIN`
     pair smuggled into either of those closes and reopens the real brief
     block exactly as effectively as one pasted into `brief` itself would.
-    Referencing `REVISION_BEGIN`/`REVISION_END` here, before they are defined
-    further down this module, is safe: Python resolves a function body's
-    global names at call time, not at `def` time, and nothing calls this
-    before the whole module has finished importing.
+    The same is true of `RATE_CARD_BEGIN`/`RATE_CARD_END`: a forged card
+    planted in `budget_hint` or `client_name` reaches the model inside
+    `=== THE STUDIO'S RATE CARD - BINDING ===`, marked as binding, and read
+    that way unless the studio has a real card configured for `ratecard.apply`
+    to snap the numbers back to (see `rate_card_block`'s own docstring) - with
+    no card configured, a forged one is the only one the model ever sees, and
+    nothing server-side stands behind it. Referencing `REVISION_BEGIN`/
+    `REVISION_END`/`RATE_CARD_BEGIN`/`RATE_CARD_END` here, before they are
+    defined further down this module, is safe: Python resolves a function
+    body's global names at call time, not at `def` time, and nothing calls
+    this before the whole module has finished importing.
 
     Replaces with `_SENTINEL_PLACEHOLDER`, not deletes - see that constant's
     own docstring for the nested-reconstruction attack this closes that a
@@ -371,11 +379,18 @@ def strip_sentinels(text: str) -> str:
     suppliable field (`req.client_name`) straight onto `Estimate.client_name`,
     which reaches `build_revision`'s `prior_json` unsanitised - the same
     field, the same threat, a different file. One shared function crossing
-    that boundary beats a second copy of the same four-item loop living in
+    that boundary beats a second copy of the same list living in
     `gemini_service.py`.
     """
     cleaned = _clean(text)
-    for sentinel in (BRIEF_BEGIN, BRIEF_END, REVISION_BEGIN, REVISION_END):
+    for sentinel in (
+        BRIEF_BEGIN,
+        BRIEF_END,
+        REVISION_BEGIN,
+        REVISION_END,
+        RATE_CARD_BEGIN,
+        RATE_CARD_END,
+    ):
         cleaned = cleaned.replace(sentinel, _SENTINEL_PLACEHOLDER)
     return cleaned.strip()
 
@@ -666,23 +681,37 @@ def build_brief(
     keyword-only in practice, because the callers pass everything before it
     positionally; an unknown or absent id is software, and software adds nothing.
     """
-    currency = _clean(req.currency).upper() or "PHP"
-    region = _clean(req.market_region) or "Philippines"
-    # `strip_sentinels`, not the bare `_clean` every other field on this line
-    # gets: `client_name` can be pre-filled from an intake's own
-    # `client_email` (typed anonymously at `POST /api/client/{token}/submit`,
-    # only control-character-scrubbed and bounded, never read by anyone at
-    # the studio) and `budget_hint` can be pre-filled from `intake.budget_text`
-    # the same way `scope` becomes `brief` (see `_normalise_scope`'s own
-    # docstring). Both are interpolated below - `client_name` at the very top
-    # of the prompt, `budget_hint` ahead of `BRIEF_BEGIN` - so a forged
-    # `BRIEF_END`/`BRIEF_BEGIN` pair in either one would close and reopen the
-    # real brief block precisely as `brief` itself was already protected
-    # against.
+    # Every free-text field on `req` goes through `strip_sentinels`, not the
+    # bare `_clean`/`.strip()` a field with no injection history might seem
+    # to only need. `client_name` and `budget_hint` are the two fields with a
+    # live, traced path from an anonymous client today - `client_name` can be
+    # pre-filled from an intake's own `client_email` (typed anonymously at
+    # `POST /api/client/{token}/submit`, only control-character-scrubbed and
+    # bounded, never read by anyone at the studio) and `budget_hint` from
+    # `intake.budget_text` the same way `scope` becomes `brief` (see
+    # `_normalise_scope`'s own docstring) - and both are interpolated ahead
+    # of `BRIEF_BEGIN` (`client_name` at the very top of the prompt,
+    # `budget_hint` just above the brief block), so a forged sentinel in
+    # either one closes and reopens a real block precisely as one pasted
+    # into `brief` itself would.
+    #
+    # `currency`, `region`, `project_name` and `timeline_hint` have no such
+    # path today - `ClientSubmitRequest` (Task 4) and the pad's own auto-seed
+    # (`App.tsx`) between them account for exactly `scope`, `budget_text`,
+    # `client_email` and `client_phone`, and none of those four reaches these
+    # four fields. But `strip_sentinels` documents itself as applying
+    # "regardless of which field is being cleaned", and `region` alone is
+    # interpolated five times below - the day any preset field is wired to a
+    # client-writable source, whichever of these four fields it lands on
+    # must not be the one place someone forgot to route it through the same
+    # helper. Cheap now, while nothing depends on it; expensive to notice
+    # later, after something does.
+    currency = strip_sentinels(req.currency).upper() or "PHP"
+    region = strip_sentinels(req.market_region) or "Philippines"
     client_name = strip_sentinels(req.client_name)
-    project_name = _clean(req.project_name)
+    project_name = strip_sentinels(req.project_name)
     budget_hint = strip_sentinels(req.budget_hint)
-    timeline_hint = _clean(req.timeline_hint)
+    timeline_hint = strip_sentinels(req.timeline_hint)
     target_total = max(0.0, float(req.target_total or 0.0))
     tax_inclusive = bool(req.tax_inclusive)
     taxed = bool(getattr(req, "taxed", True))
