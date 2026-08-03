@@ -163,8 +163,20 @@ export default function ClientShell({ token }: ClientShellProps) {
           across and pair the two short fields, which is what makes it fit
           without scrolling. Every other face is a heading and a sentence, and
           a wide column would only make those harder to read. */}
+      {/* `max-h-full`, not `max-h-dvh`, and the difference is a clipping bug
+          rather than a preference. The parent is `h-dvh` with `py-10`, so on a
+          1080px screen it offers its child a 1000px content box while
+          `max-h-dvh` caps that child at 1080. A card between those two numbers
+          overflows its parent without ever exceeding its own max-height - so
+          `overflow-y-auto` never engages, `scrollHeight` still equals
+          `clientHeight`, and the card is quietly clipped by the padded flex
+          parent with nothing to scroll it back into view. Measured at exactly
+          that boundary: 1000px of content in a 1000px box with "Something
+          else" open, one line of copy away from losing the Send button with no
+          way to reach it. `max-h-full` resolves against the box that is
+          actually available. */}
       <div
-        className={`max-h-dvh w-full overflow-y-auto ${
+        className={`max-h-full w-full overflow-y-auto ${
           status === 'ready' && view?.state === 'issued' ? 'max-w-[58rem]' : 'max-w-[32rem]'
         }`}
       >
