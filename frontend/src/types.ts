@@ -766,17 +766,96 @@ export type IntakeState =
   | 'proposal_sent'
 
 /**
+ * One round of changes a client asked for - one entry of
+ * `intakes.Intake.revisions`.
+ *
+ * The server's field is a bare `List[dict]` whose entries carry exactly these
+ * two keys, with no Pydantic model standing behind them. So this is the shape
+ * `lib/api` coerces every entry to on the way in, not a shape the API
+ * guarantees on the way out - the same reason `Intake.preset` below stays
+ * opaque rather than pretending to a structure nothing validates.
+ */
+export type IntakeRevision = {
+  /** What the client wrote, verbatim - never rewritten, like their scope. */
+  asked: string
+  /** When they wrote it. ISO-8601, the shape `storage.utc_now_iso` produces. */
+  at: string
+}
+
+/**
+ * What the studio fixes about a quotation before the client has said anything:
+ * the object `IntakeScreen` writes into `Intake.preset` when it generates a
+ * link, and the object `App.tsx` reads back out of it to seed the pad when
+ * somebody prices the request.
+ *
+ * `Intake.preset` itself stays `Record<string, unknown>` because that is
+ * genuinely what the server's field is - an opaque `dict`, per its own
+ * docstring, validated in full only when it is actually used to generate a
+ * quotation. This type is the studio client's own convention for what it puts
+ * in there, not a contract the API enforces. The field names are the pad's own
+ * form names (`market_region`, `tax_mode`, `payment_cadence`), so a preset
+ * reads as the same configuration `BriefForm` already submits rather than as a
+ * second vocabulary for it.
+ *
+ * What is deliberately absent: the target cost, the tier cap, and a written
+ * per-payment schedule. Each of those is a figure that depends on what the
+ * client actually asked for and how it was scoped, and at the moment a link is
+ * generated there is nothing to base one on - they stay on the pad, where the
+ * scope is on screen beside them.
+ *
+ * Anything added here has to be written by `IntakeScreen` and read by
+ * `App.tsx`'s `readPreset` in the same change. A key only one end knows about
+ * is a setting that silently does nothing: written and never applied, or
+ * applied from a key nothing ever writes.
+ */
+export type IntakePreset = {
+  kind: QuotationKind
+  /** The studio's own word for an `other` kind. Ignored for the other five,
+   *  exactly as the pad's own field is. */
+  kind_label: string
+  /** ISO 4217. `create_intake` normalises this one field server-side; the rest
+   *  of the preset it stores as given. */
+  currency: string
+  market_region: string
+  tax_mode: TaxMode
+  pricing_basis: PricingBasis
+  /** The deposit as a percentage, as typed rather than as a number - empty
+   *  means PRISM proposes a schedule, which is not the same as zero. */
+  deposit_pct: string
+  /** How many equal payments follow the deposit, as typed. */
+  instalments: string
+  payment_cadence: PaymentCadence
+  deposit_trigger: string
+  /** Tier names separated by commas, as typed. One name is a label, not a
+   *  tier, and the pad refuses it the same way. */
+  tiers: string
+}
+
+/**
  * One client request and everything that has happened to it - `intakes.Intake`.
  *
  * Storage-side and workspace-scoped, like `Member` and `Invite`: it never
  * reaches Gemini itself, only records what a client asked for and which job,
  * bundles and document came out of it.
+ *
+ * `intakes.Intake.token` has no name here, and must not acquire one. It carries
+ * `exclude=True` server-side precisely so the credential that gates an
+ * unauthenticated route never rides along with a queue any member may read -
+ * `GET /api/intakes` and `GET /api/intakes/{id}` do not send it, so a field for
+ * it here could only ever hold an empty string and would read as a promise the
+ * wire does not keep. The link is carried by `IntakeIssued` below, from the two
+ * calls that mint one.
  */
 export type Intake = {
   id: string
   state: IntakeState
   created_at: string
   created_by: string
+  /** When the client's link stops working - `intakes.LIFETIME_DAYS` from the
+   *  day it was minted or last reissued. Sixty days rather than an invitation's
+   *  fourteen: a client deciding whether to commission a studio at all is on a
+   *  slower clock than a teammate accepting a place already offered to them. */
+  token_expires_at: string
 
   // What the client said. Kept verbatim, never rewritten.
   client_email: string
@@ -803,8 +882,41 @@ export type Intake = {
   priced_budget: string
   error: string
 
+  /** Every change the client has asked for, in the order they asked - a log,
+   *  unlike `bundle_ids`, which a second Generate replaces wholesale. Coerced
+   *  entry by entry in `lib/api`, since the server's own field has no model
+   *  behind it. */
+  revisions: IntakeRevision[]
+  /** Which of `bundle_ids` was actually sent to the client. Named explicitly
+   *  rather than assumed to be `bundle_ids[0]`: a re-quoted request can have
+   *  more than one candidate on file, and a studio reading a quotation that is
+   *  not the one the client is looking at is the whole reason this exists. */
+  sent_bundle_id: string
+  /** When `POST /api/intakes/{id}/send` ran - the moment `quoted` became
+   *  `sent`, and the only honest answer to "when were they shown this". Never
+   *  the bundle's own `created_at`: a studio can sit on a finished quotation
+   *  for days before handing it over. Empty in every state before `sent`. */
+  sent_at: string
+
   closed_at: string
   closed_by: string
+}
+
+/**
+ * An intake plus the one thing a plain `Intake` never carries: the client's
+ * own link - `main.IntakeIssued`.
+ *
+ * Returned by exactly two calls, `createIntake` and `relinkIntake`, because
+ * those are the two that mint a token under an admin's own hand. There is no
+ * third way to read it: the server declined to build a `GET
+ * /api/intakes/{id}/link` (see `IntakeIssued`'s own docstring), so a link is
+ * shown once, when it is made, and a studio that loses one reissues rather
+ * than looks it up. That is why the screen showing it must not navigate away.
+ */
+export type IntakeIssued = Intake & {
+  /** `{APP_ORIGIN}/#/c/<token>` - the whole client-facing surface, built from
+   *  the token the wire otherwise never carries. */
+  link: string
 }
 
 // --- the client's own view of an intake ---------------------------------------

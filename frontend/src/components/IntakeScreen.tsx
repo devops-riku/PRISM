@@ -1,53 +1,163 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { createIntake } from '../lib/api'
+import { formatDate } from '../lib/format'
 import { useRole } from '../lib/role'
-import { ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL, WELL_TEXTAREA } from './tokens'
+import CurrencySelect from './CurrencySelect'
+import Dropdown from './Dropdown'
+import { FieldLabel } from './FieldRow'
+import KindPicker from './KindPicker'
+import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
+import type {
+  IntakeIssued,
+  IntakePreset,
+  PaymentCadence,
+  PricingBasis,
+  QuotationKind,
+  StudioDefaults,
+  TaxMode,
+} from '../types'
 
 /**
- * Recording what a client asked for, before anybody prices it.
+ * Setting up a client request, and handing over the link it lives behind.
  *
- * Four fields and nothing else: this screen writes down what the client said,
- * not what the studio thinks it is worth. Pricing happens on the pad, from the
- * queue this feeds - keeping the two apart means the words a client actually
- * used are never quietly edited into a scope that flatters the estimate.
+ * This screen used to type the client's four fields on their behalf. It does
+ * not any more: from Stage 2 the client writes their own scope and their own
+ * budget through the link generated here, so what is left is everything about
+ * the quotation that is the studio's to decide before anybody has said
+ * anything - what kind of work it is, what currency and market it is priced
+ * in, how tax is handled, what the payment terms are, and whether it is quoted
+ * at tiers.
  *
- * Admin-only, like `createIntake` itself: recording a request opens the queue
+ * That configuration is stored on the request as its preset and read back the
+ * moment somebody opens the pad from the queue, so a studio that sets its
+ * terms here does not set them twice. The exact key set is `IntakePreset` in
+ * `types.ts`, and `App.tsx`'s `readPreset` is the other half of it - a key
+ * written here that nothing reads back is a control that silently does
+ * nothing.
+ *
+ * **The link is shown once.** `Intake.token` is excluded from the wire on
+ * purpose, so the queue cannot look one up and there is no route that will;
+ * `createIntake` and `relinkIntake` are the only two calls that ever carry a
+ * link, and each carries it exactly once, in the response that mints it. So
+ * generating does not navigate anywhere - it stays here and shows the link,
+ * because leaving would throw away the only copy of it there will ever be.
+ *
+ * Admin-only, like `createIntake` itself: generating a link opens the queue
  * whoever prices it next works from, which is nearer to inviting somebody than
  * to drafting a quotation. A member is shown why instead of a form the server
  * would refuse.
  */
-export default function IntakeScreen() {
+
+type IntakeScreenProps = {
+  /** The studio's saved defaults. The preset opens on them for the same
+   *  reason the pad does - a studio that quotes in USD should not have to
+   *  correct a form that guessed PHP - and `App.tsx` gates this screen on
+   *  them having arrived, so there is no window where they land late and the
+   *  fields below have already been read. */
+  defaults: Partial<StudioDefaults>
+}
+
+export default function IntakeScreen({ defaults }: IntakeScreenProps) {
   const { isAdmin } = useRole()
-  const [email, setEmail] = useState('')
-  const [phone, setPhone] = useState('')
-  const [scope, setScope] = useState('')
-  const [budget, setBudget] = useState('')
+
+  // Every field below is one key of `IntakePreset`, named the way the pad
+  // names it rather than the way the wire does - `submit` is the one place the
+  // two vocabularies meet.
+  const [kind, setKind] = useState<QuotationKind>('software')
+  const [kindLabel, setKindLabel] = useState('')
+  const [currency, setCurrency] = useState(defaults.currency || 'PHP')
+  const [marketRegion, setMarketRegion] = useState(defaults.market_region || 'Philippines')
+  // The studio default may still be the older boolean, so the mode falls back
+  // to it rather than to a hard-coded guess - the same ladder `BriefForm`
+  // climbs, and it has to be the same one or a link generated here would open
+  // a pad on a different tax basis than the studio saved.
+  const [taxMode, setTaxMode] = useState<TaxMode>(
+    defaults.tax_mode || (defaults.tax_inclusive ? 'inclusive' : 'exclusive'),
+  )
+  const [pricingBasis, setPricingBasis] = useState<PricingBasis>('rate_card')
+  const [depositPct, setDepositPct] = useState('')
+  const [instalments, setInstalments] = useState('3')
+  const [cadence, setCadence] = useState<PaymentCadence>('monthly')
+  const [depositTrigger, setDepositTrigger] = useState('Signed statement of work')
+  const [tiers, setTiers] = useState('')
+
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // The whole reason this screen does not navigate on success. Non-null means
+  // a link exists on screen and nowhere else.
+  const [issued, setIssued] = useState<IntakeIssued | null>(null)
+  const [copyNote, setCopyNote] = useState('')
 
-  const trimmedScope = scope.trim()
+  // Distinct, non-empty names. One name is a label, not a tier - and the pad
+  // refuses to prepare a quotation from one, so a preset carrying one would
+  // generate a link whose pad opens already blocked.
+  const tierNames = [
+    ...new Set(
+      tiers
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean),
+    ),
+  ]
+  const blocker =
+    tierNames.length === 1 ? 'Name a second tier, or clear the field to quote one price.' : ''
+
+  const deposit = Number(depositPct) || 0
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (busy || !trimmedScope) return
+    if (busy || blocker) return
     setBusy(true)
     setError('')
-    createIntake({
-      client_email: email.trim(),
-      client_phone: phone.trim(),
-      scope: trimmedScope,
-      // Nothing here yet decides currency, market or tiers - that is the
-      // pad's job once this request is being priced. An empty preset is
-      // exactly what a request recorded from words alone has to say about it.
-      budget_text: budget.trim(),
-      preset: {},
-    })
-      .then(() => {
-        window.location.hash = '#/intakes'
-      })
-      .catch((failure) => setError(failure?.message || 'That request was not recorded.'))
+    setCopyNote('')
+
+    // Typed as `IntakePreset` rather than assembled loosely: this object and
+    // `App.tsx`'s `readPreset` are the two ends of one agreement, and the type
+    // is what keeps a renamed key from quietly becoming a setting nobody
+    // applies. Deliberately absent - the target cost, the tier cap, and a
+    // written per-payment schedule - because each depends on what the client
+    // actually asked for, and at this moment they have not asked yet.
+    const preset: IntakePreset = {
+      kind,
+      kind_label: kindLabel.trim(),
+      currency,
+      market_region: marketRegion.trim(),
+      tax_mode: taxMode,
+      pricing_basis: pricingBasis,
+      deposit_pct: depositPct.trim(),
+      instalments: instalments.trim(),
+      payment_cadence: cadence,
+      deposit_trigger: depositTrigger.trim(),
+      tiers: tiers.trim(),
+    }
+
+    createIntake({ preset })
+      .then((made) => setIssued(made))
+      .catch((failure) => setError(failure?.message || 'That link was not generated.'))
       .finally(() => setBusy(false))
+  }
+
+  /**
+   * Put the link on the clipboard, and say so in words.
+   *
+   * `navigator.clipboard` needs a secure context, so it is simply absent over
+   * plain HTTP on anything but localhost. Checked rather than optional-chained:
+   * `clipboard?.writeText(...).then(...)` short-circuits the whole chain, which
+   * means a studio on a LAN address would press Copy, see nothing happen, and
+   * have no idea why. The field above is readable and selectable either way -
+   * that is the fallback, and this says so.
+   */
+  const copy = (link: string) => {
+    const board = navigator.clipboard
+    if (!board) {
+      setCopyNote('This browser will not let a page copy for you. Select the link and copy it.')
+      return
+    }
+    board
+      .writeText(link)
+      .then(() => setCopyNote('Copied. The link is on your clipboard.'))
+      .catch(() => setCopyNote('That link could not be copied. Select it and copy it by hand.'))
   }
 
   return (
@@ -56,85 +166,288 @@ export default function IntakeScreen() {
         <div className="shrink-0 border-b border-rule px-5 py-3 sm:px-6">
           <h2 className={`${DISPLAY} text-[20px]`}>New client request</h2>
           <p className="mt-2 max-w-[64ch] font-body text-[13px] leading-[1.6] text-void">
-            What the client told you, in their words. You price it on the next screen.
+            {issued
+              ? 'The request is on the queue. Send the client their link.'
+              : 'Set how this one will be priced, then generate a link for the client to fill in.'}
           </p>
         </div>
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
-          {isAdmin ? (
-            <form onSubmit={submit} className="max-w-[40rem]">
-              <div>
-                <label htmlFor="intake_email" className={MONO_LABEL}>
-                  Client email
-                </label>
-                <input
-                  id="intake_email"
-                  type="email"
-                  required
-                  value={email}
-                  disabled={busy}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="client@example.com"
-                  className={`${WELL} mt-2`}
-                />
-              </div>
+          {!isAdmin ? (
+            <div className="max-w-[60ch]">
+              <p className={MONO_LABEL}>Not yours to generate</p>
+              <p className="mt-2 font-body text-[15px] leading-[1.6] text-void">
+                A client link opens the queue whoever prices it next works from, so the server keeps
+                this to this workspace&rsquo;s admins. Ask one of them to generate it, or open the
+                queue to see what has already come in.
+              </p>
+              <a href="#/intakes" className="mt-4 inline-block font-body text-[14px] text-ballpoint">
+                Open the queue
+              </a>
+            </div>
+          ) : issued ? (
+            <div className="max-w-[40rem]">
+              <p className={MONO_LABEL}>Link generated</p>
+              <p className="mt-2 max-w-[58ch] font-body text-[15px] leading-[1.6] text-ink">
+                Send this to the client. They open it with no account, describe what they need in
+                their own words, and the request comes back to the queue priced the way you just
+                set it.
+              </p>
 
               <div className="mt-4">
-                <label htmlFor="intake_phone" className={MONO_LABEL}>
-                  Contact no.
-                </label>
-                <input
-                  id="intake_phone"
-                  type="tel"
-                  value={phone}
-                  disabled={busy}
-                  onChange={(event) => setPhone(event.target.value)}
-                  placeholder="Optional"
-                  className={`${WELL} mt-2`}
-                />
-              </div>
-
-              <div className="mt-4">
-                <label htmlFor="intake_scope" className={MONO_LABEL}>
-                  Scope
-                </label>
-                <textarea
-                  id="intake_scope"
-                  required
-                  value={scope}
-                  disabled={busy}
-                  onChange={(event) => setScope(event.target.value)}
-                  placeholder="A booking site for a dive shop in Cebu. Guests pick a date and pay a deposit online."
-                  className={`${WELL_TEXTAREA} pad-brief mt-2`}
-                />
-              </div>
-
-              <div className="mt-4">
-                <label htmlFor="intake_budget" className={MONO_LABEL}>
-                  Budget
-                </label>
-                <input
-                  id="intake_budget"
-                  type="text"
-                  value={budget}
-                  disabled={busy}
-                  onChange={(event) => setBudget(event.target.value)}
-                  placeholder="Whatever they said - a figure, a range, or nothing"
-                  className={`${WELL} mt-2`}
-                />
-                <p className="mt-2 max-w-[56ch] font-body text-[13px] leading-[1.6] text-void">
-                  Their figure, as they said it. It guides the quotation; it does not set the
-                  price.
+                <FieldLabel htmlFor="intake_link">The client&rsquo;s link</FieldLabel>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    id="intake_link"
+                    type="text"
+                    readOnly
+                    value={issued.link}
+                    onFocus={(event) => event.currentTarget.select()}
+                    className={`${WELL} min-w-[18rem] flex-1 font-label text-[13px]`}
+                  />
+                  <button type="button" className={ACTION} onClick={() => copy(issued.link)}>
+                    Copy link
+                  </button>
+                </div>
+                <p role="status" className="mt-2 font-body text-[13px] leading-[1.6] text-ballpoint">
+                  {copyNote}
                 </p>
               </div>
 
-              <button
-                type="submit"
-                disabled={busy || !email.trim() || !trimmedScope}
-                className={`${ACTION_PRIMARY} mt-5`}
-              >
-                {busy ? 'Recording' : 'Record request'}
-              </button>
+              <p className="mt-3 max-w-[58ch] font-body text-[13px] leading-[1.6] text-void">
+                Copy it now: this is the only time it is shown. The queue does not carry client
+                links and nothing can look one up, so a lost link is replaced by reissuing it &mdash;
+                which stops the link you just generated from working.
+                {issued.token_expires_at
+                  ? ` This one works until ${formatDate(issued.token_expires_at)}.`
+                  : ''}
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <a href="#/intakes" className={ACTION_PRIMARY}>
+                  Open the queue
+                </a>
+                <button
+                  type="button"
+                  className={ACTION}
+                  onClick={() => {
+                    setIssued(null)
+                    setCopyNote('')
+                  }}
+                >
+                  Generate another
+                </button>
+              </div>
+              <p className="mt-2 font-body text-[12.5px] leading-[1.6] text-faint">
+                Generating another keeps this configuration and leaves this link behind. Copy it
+                first.
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={submit} className="max-w-[46rem]">
+              <section>
+                <h3 className={`${DISPLAY} text-[17px]`}>Kind of work</h3>
+                <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
+                  It decides what the second document is, and the words the quotation is written
+                  in. The client is not asked this &mdash; it is the studio&rsquo;s reading of the
+                  work, not theirs.
+                </p>
+                <div className="mt-3">
+                  <KindPicker
+                    value={kind}
+                    label={kindLabel}
+                    onChange={setKind}
+                    onLabel={setKindLabel}
+                    disabled={busy}
+                  />
+                </div>
+              </section>
+
+              <section className="mt-6 border-t border-hairline pt-5">
+                <h3 className={`${DISPLAY} text-[17px]`}>How it is priced</h3>
+                <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
+                  Rates are set for the market below and quoted straight into the currency. Nothing
+                  is converted.
+                </p>
+                <div className="mt-3 grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2">
+                  <div>
+                    <FieldLabel htmlFor="intake_currency">Currency</FieldLabel>
+                    <CurrencySelect
+                      id="intake_currency"
+                      value={currency}
+                      onChange={setCurrency}
+                      disabled={busy}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="intake_market">Market</FieldLabel>
+                    <input
+                      id="intake_market"
+                      type="text"
+                      value={marketRegion}
+                      disabled={busy}
+                      onChange={(event) => setMarketRegion(event.target.value)}
+                      placeholder="Philippines"
+                      className={WELL}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="intake_tax">Tax basis</FieldLabel>
+                    <Dropdown
+                      id="intake_tax"
+                      value={taxMode}
+                      disabled={busy}
+                      onChange={setTaxMode}
+                      options={[
+                        { value: 'exclusive', label: 'Exclusive', hint: 'Tax added on top' },
+                        { value: 'inclusive', label: 'Inclusive', hint: 'Tax already in the rates' },
+                        { value: 'none', label: 'No tax', hint: 'Zero-rated or exempt' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="intake_basis">Quoted from</FieldLabel>
+                    <Dropdown
+                      id="intake_basis"
+                      value={pricingBasis}
+                      disabled={busy}
+                      onChange={setPricingBasis}
+                      options={[
+                        { value: 'rate_card', label: 'Your rate card' },
+                        { value: 'requirements', label: 'The requirements, at market rates' },
+                      ]}
+                    />
+                  </div>
+                </div>
+                <p className="mt-3 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
+                  {pricingBasis === 'rate_card'
+                    ? 'Roles and rates come from the card in Settings, and are enforced. With no card configured this falls back to market rates.'
+                    : 'The card is ignored. PRISM scopes the roles it needs and quotes them at market rates for the chosen market.'}
+                </p>
+              </section>
+
+              <section className="mt-6 border-t border-hairline pt-5">
+                <h3 className={`${DISPLAY} text-[17px]`}>Payment terms</h3>
+                <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
+                  Your standard terms, which the client reads on the quotation. A schedule written
+                  payment by payment is set on the pad instead, once the phases are known.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 font-body text-[15px]">
+                  <label htmlFor="intake_deposit" className="sr-only">
+                    Deposit percentage
+                  </label>
+                  <input
+                    id="intake_deposit"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={depositPct}
+                    disabled={busy}
+                    onChange={(event) => setDepositPct(event.target.value.replace(/[^\d.]/g, ''))}
+                    placeholder="0"
+                    className={`${WELL} w-[104px] text-right tabular-nums`}
+                  />
+                  <span>% on signing, then the balance in</span>
+                  <label htmlFor="intake_instalments" className="sr-only">
+                    Number of equal payments
+                  </label>
+                  <input
+                    id="intake_instalments"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={instalments}
+                    disabled={busy}
+                    onChange={(event) => setInstalments(event.target.value.replace(/[^\d]/g, ''))}
+                    className={`${WELL} w-[104px] text-right tabular-nums`}
+                  />
+                  <span>equal payments, due</span>
+                  <Dropdown
+                    id="intake_cadence"
+                    aria-label="When each payment falls due"
+                    value={cadence}
+                    disabled={busy}
+                    onChange={setCadence}
+                    className="w-[200px]"
+                    options={[
+                      { value: 'monthly', label: 'monthly' },
+                      { value: 'phase', label: 'on each phase' },
+                      { value: 'milestone', label: 'on agreed milestones' },
+                    ]}
+                  />
+                </div>
+
+                {deposit > 0 ? (
+                  <div className="mt-4">
+                    <FieldLabel htmlFor="intake_trigger">
+                      The deposit becomes payable on
+                    </FieldLabel>
+                    <input
+                      id="intake_trigger"
+                      type="text"
+                      value={depositTrigger}
+                      disabled={busy}
+                      onChange={(event) => setDepositTrigger(event.target.value)}
+                      placeholder="Signed statement of work"
+                      className={`${WELL} max-w-[420px]`}
+                    />
+                  </div>
+                ) : null}
+
+                <p className="mt-3 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
+                  {deposit > 0
+                    ? `${deposit}% on signing, then the balance in ${instalments || 1} equal payments.`
+                    : 'Leave the deposit at 0 and PRISM proposes a schedule for this quotation.'}
+                </p>
+              </section>
+
+              <section className="mt-6 border-t border-hairline pt-5">
+                <h3 className={`${DISPLAY} text-[17px]`}>Tiers</h3>
+                <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
+                  Optional. Name two or more levels and PRISM quotes the same scope at each, as
+                  separate quotations. The cap that holds them down is set on the pad, where the
+                  scope is on screen beside it.
+                </p>
+                <div className="mt-3 max-w-[420px]">
+                  <label htmlFor="intake_tiers" className="sr-only">
+                    Tier names, separated by commas
+                  </label>
+                  <input
+                    id="intake_tiers"
+                    type="text"
+                    value={tiers}
+                    disabled={busy}
+                    onChange={(event) => setTiers(event.target.value)}
+                    placeholder="Basic, Standard, Extended"
+                    aria-describedby="intake_tiers_help"
+                    className={WELL}
+                  />
+                </div>
+                <p
+                  id="intake_tiers_help"
+                  className={`mt-2 max-w-[62ch] font-body text-[13px] leading-[1.6] ${
+                    blocker ? 'text-alert' : 'text-void'
+                  }`}
+                >
+                  {blocker ||
+                    (tierNames.length > 1
+                      ? `${tierNames.length} quotations from one scope — ${tierNames.join(', ')} — each held below the tier above it.`
+                      : 'Leave it empty for one quotation.')}
+                </p>
+              </section>
+
+              <div className="mt-6 border-t border-hairline pt-5">
+                <button
+                  type="submit"
+                  disabled={busy || Boolean(blocker)}
+                  aria-disabled={busy || Boolean(blocker)}
+                  className={ACTION_PRIMARY}
+                >
+                  {busy ? 'Generating' : 'Generate link'}
+                </button>
+                <p className="mt-2 max-w-[58ch] font-body text-[13px] leading-[1.6] text-void">
+                  The link appears here, once. Nothing is emailed &mdash; you send it to the client
+                  yourself.
+                </p>
+              </div>
 
               {error ? (
                 <p role="alert" className="mt-4 font-body text-[14px] text-alert">
@@ -142,20 +455,6 @@ export default function IntakeScreen() {
                 </p>
               ) : null}
             </form>
-          ) : (
-            <div className="max-w-[60ch]">
-              <p className="font-label text-[12px] uppercase tracking-[0.14em] text-faint">
-                Not yours to record
-              </p>
-              <p className="mt-2 font-body text-[15px] leading-[1.6] text-void">
-                Recording a client request opens the queue whoever prices it next works from, so
-                the server keeps this to this workspace&rsquo;s admins. Ask one of them to log it,
-                or open the queue to see what has already come in.
-              </p>
-              <a href="#/intakes" className="mt-4 inline-block font-body text-[14px] text-ballpoint">
-                Open the queue
-              </a>
-            </div>
           )}
         </div>
       </section>

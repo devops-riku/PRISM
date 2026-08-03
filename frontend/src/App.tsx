@@ -36,7 +36,17 @@ import TierSwitcher from './components/TierSwitcher'
 import ErrorNotice from './components/ErrorNotice'
 import { formatDate } from './lib/format'
 import { prefersReducedMotion } from './components/motion'
-import type { Intake, ProposalBundle, StudioDefaults, Workspace } from './types'
+import type {
+  Intake,
+  IntakePreset,
+  PaymentCadence,
+  PricingBasis,
+  ProposalBundle,
+  QuotationKind,
+  StudioDefaults,
+  TaxMode,
+  Workspace,
+} from './types'
 
 /** Every screen this router can name. `routeFor` answers with one of them. */
 type Route =
@@ -242,6 +252,91 @@ function describeError(error: unknown): ErrorReport | null {
     code: status || null,
     headline: 'The quotation did not come back.',
     next: raw || 'Check the API window for what it reported, then prepare the quotation again.',
+  }
+}
+
+/**
+ * The known members of every union in `IntakePreset`.
+ *
+ * Listed here rather than derived from anything, because there is nothing
+ * honest to derive them from: `QuotationKind`, `TaxMode`, `PricingBasis` and
+ * `PaymentCadence` are TypeScript unions that vanish at build time, and the
+ * server's matching fields are plain `str` with no validator behind them. So
+ * the set has to exist at runtime for `readPreset` to check membership against
+ * it, and typing each array as `readonly T[]` is what makes a stale entry a
+ * compile error rather than a value that silently never matches.
+ */
+const KIND_IDS: readonly QuotationKind[] = [
+  'software',
+  'accounting',
+  'engineering',
+  'design',
+  'marketing',
+  'other',
+]
+const TAX_MODES: readonly TaxMode[] = ['exclusive', 'inclusive', 'none']
+const PRICING_BASES: readonly PricingBasis[] = ['rate_card', 'requirements']
+const PAYMENT_CADENCES: readonly PaymentCadence[] = ['monthly', 'phase', 'milestone']
+
+/**
+ * One union field off an opaque preset - by membership, never by cast.
+ *
+ * `preset` is `Record<string, unknown>` because the server's own field is an
+ * unvalidated `dict`: what is stored there is whatever some version of this
+ * client wrote, including a value from a build that named its options
+ * differently. A cast would compile and hand `BriefForm` a string outside its
+ * own union, which then reaches the pad's dropdowns as a value with no option
+ * to match and reads as an empty control nobody chose. `undefined` instead
+ * means "not configured", and the form keeps the default it opened with.
+ */
+function presetMember<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  const text = typeof value === 'string' ? value : ''
+  return allowed.find((entry) => entry === text)
+}
+
+/**
+ * One text field off the same preset. Empty and absent are the same answer
+ * here: a preset carrying `market_region: ''` must not blank the pad's own
+ * 'Philippines' default, because nothing was configured either way.
+ */
+function presetText(value: unknown): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text || undefined
+}
+
+/**
+ * The PAD configuration a studio fixed when it generated this request's link,
+ * read back for the pad that is about to price it.
+ *
+ * The other end is `IntakeScreen`'s `submit`, which writes this exact key set
+ * as an `IntakePreset`; the two have to agree, and the type is what says so.
+ * Every value is optional coming out of here even though it is required going
+ * in, for two reasons that are both real: a request generated before this
+ * feature shipped carries `preset: {}`, and a preset written by a future build
+ * can carry a value this one does not recognise. Both mean the same thing to
+ * the form - leave that field on its default.
+ *
+ * Not read back: the target cost, the tier cap, and a written per-payment
+ * schedule. `IntakeScreen` does not write them, deliberately (see
+ * `IntakePreset`'s own docstring), and reading a key nothing writes would be
+ * the same mistake in the other direction.
+ */
+function readPreset(preset: Record<string, unknown>): Partial<IntakePreset> {
+  // `fetchIntake` only checks that `id` is a string, so this field is exactly
+  // as trustworthy as `intake.scope` is below - which is to say, not.
+  const source = preset && typeof preset === 'object' ? preset : {}
+  return {
+    kind: presetMember(source.kind, KIND_IDS),
+    kind_label: presetText(source.kind_label),
+    currency: presetText(source.currency),
+    market_region: presetText(source.market_region),
+    tax_mode: presetMember(source.tax_mode, TAX_MODES),
+    pricing_basis: presetMember(source.pricing_basis, PRICING_BASES),
+    deposit_pct: presetText(source.deposit_pct),
+    instalments: presetText(source.instalments),
+    payment_cadence: presetMember(source.payment_cadence, PAYMENT_CADENCES),
+    deposit_trigger: presetText(source.deposit_trigger),
+    tiers: presetText(source.tiers),
   }
 }
 
@@ -631,7 +726,14 @@ export default function App() {
           {route === 'profile' ? <ProfileScreen /> : null}
           {route === 'teams' ? <TeamScreen /> : null}
           {route === 'intakes' ? <IntakeListScreen /> : null}
-          {route === 'intakeNew' ? <IntakeScreen /> : null}
+          {/* Gated on the defaults the same way the pad below is, and for a
+              sharper reason: the preset this screen writes is read back into a
+              pad that has already opened on those same defaults, so a preset
+              built before they arrived would hard-code PHP over a studio that
+              quotes in USD. `fetchSettings` falls back to `{}` rather than
+              staying null, so this is a first-paint wait and never a screen
+              that fails to appear. */}
+          {route === 'intakeNew' && defaults ? <IntakeScreen defaults={defaults} /> : null}
           {route === 'invite' ? (
             <InviteScreen token={(window.location.hash || '').replace('#/invite/', '')} />
           ) : null}
@@ -773,6 +875,13 @@ export default function App() {
                       scope: String(intake.scope ?? ''),
                       budget: String(intake.budget_text ?? ''),
                       clientName: String(intake.client_email ?? ''),
+                      // The rest of the prefill is the configuration the studio
+                      // fixed when it generated this request's link, spread
+                      // flat beside the client's own words because it seeds the
+                      // same form in the same single pass. Same discipline as
+                      // the three above, extended to the fields that are unions
+                      // rather than free text - see `readPreset`.
+                      ...readPreset(intake.preset),
                     }
                   : undefined
               }

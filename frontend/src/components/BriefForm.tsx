@@ -12,6 +12,7 @@ import JobStrip from './JobStrip'
 import { ACTION, ACTION_PRIMARY, WELL, WELL_TEXTAREA } from './tokens'
 import { groupedInputHandler } from '../lib/format'
 import type {
+  IntakePreset,
   Job,
   PaymentCadence,
   PricingBasis,
@@ -65,14 +66,25 @@ type SchedulePreview = {
   text: string
 }
 
-/** What a client request arrives with, before a studio member has touched
- *  anything on the pad. Keyed by name rather than reusing `Intake` directly,
- *  so this file does not have to know the record's other dozen fields. */
+/**
+ * What a client request arrives with, before a studio member has touched
+ * anything on the pad. Keyed by name rather than reusing `Intake` directly, so
+ * this file does not have to know the record's other dozen fields.
+ *
+ * Two halves, and they read differently on purpose. The first three are the
+ * client's own words, always present because `App.tsx` coerces them to strings
+ * whether the record carried them or not. The rest is `IntakePreset` - the
+ * configuration the studio fixed when it generated the client's link - and
+ * every field of it is optional here: absent means nothing was configured, and
+ * the form keeps the default it opened with rather than being blanked by a key
+ * that was never written. The snake_case is the wire's own, unchanged, exactly
+ * as `StudioDefaults` arrives on `defaults` beside it.
+ */
 type BriefPrefill = {
   scope: string
   budget: string
   clientName: string
-}
+} & Partial<IntakePreset>
 
 type BriefFormProps = {
   /** The studio's saved defaults, or `{}` when they could not be read. */
@@ -83,8 +95,9 @@ type BriefFormProps = {
   /** The client request this pad was opened from, if any. Sent back to the
    *  server so the resulting quotation is recorded against it. */
   intakeId?: string
-  /** The client's own words, seeded into the form once. Absent when the pad
-   *  was opened on its own rather than from a request. */
+  /** The client's own words and the studio's own preset, seeded into the form
+   *  once. Absent when the pad was opened on its own rather than from a
+   *  request. */
   prefill?: BriefPrefill
 }
 
@@ -131,10 +144,22 @@ export default function BriefForm({
   const [images, setImages] = useState<File[]>([])
   const [step, setStep] = useState(0)
 
-  // Seeds the scope, budget hint and client name from `prefill` the moment it
-  // arrives, and never again — a studio member who edits the scope and then
+  // Seeds the client's words and the studio's preset from `prefill` the moment
+  // it arrives, and never again — a studio member who edits the scope and then
   // triggers a re-render (the defaults finally loading, a job tick) must not
   // have their edit reverted underneath them.
+  //
+  // Everything `prefill` carries is set in this one pass, deliberately. The
+  // latch fires exactly once and never re-arms on its own — only a remount
+  // does that, which `App.tsx` keys on the request's id — so a field seeded
+  // anywhere but here would simply never be seeded at all, and the form would
+  // open half-configured with no second chance at the other half.
+  //
+  // The preset half is applied only where it says something. An absent field
+  // means the studio configured nothing there (a request generated before the
+  // preset existed carries `{}`, and `readPreset` drops any value it does not
+  // recognise), so the form keeps the default it opened with — which is the
+  // studio's own saved default, and a better answer than an empty control.
   const seeded = useRef(false)
   useEffect(() => {
     if (!prefill || seeded.current) return
@@ -142,6 +167,23 @@ export default function BriefForm({
     setBrief(prefill.scope)
     setBudgetHint(prefill.budget)
     setClientName(prefill.clientName)
+
+    if (prefill.kind) setKind(prefill.kind)
+    if (prefill.kind_label) setKindLabel(prefill.kind_label)
+    if (prefill.currency) setCurrency(prefill.currency)
+    if (prefill.market_region) setMarketRegion(prefill.market_region)
+    if (prefill.tax_mode) setTaxMode(prefill.tax_mode)
+    if (prefill.pricing_basis) setPricingBasis(prefill.pricing_basis)
+    if (prefill.deposit_pct) setDepositPct(prefill.deposit_pct)
+    if (prefill.instalments) setInstalments(prefill.instalments)
+    if (prefill.payment_cadence) setCadence(prefill.payment_cadence)
+    if (prefill.deposit_trigger) setDepositTrigger(prefill.deposit_trigger)
+    if (prefill.tiers) setTiers(prefill.tiers)
+    // `termsMode`, the written `rows`, `targetTotal` and `ceiling` are absent
+    // from `IntakePreset` on purpose and so are absent here: each depends on
+    // what the client actually asked for, and at the moment a link is
+    // generated they have not asked yet. They stay on this pad, where the
+    // scope is on screen beside them.
   }, [prefill])
 
   const clock = useElapsed(pending)

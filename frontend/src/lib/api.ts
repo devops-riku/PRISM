@@ -18,6 +18,8 @@ import type {
   Currency,
   DocumentKind,
   Intake,
+  IntakeIssued,
+  IntakeRevision,
   Invite,
   InvitePreview,
   Job,
@@ -1056,8 +1058,47 @@ export async function claimWorkspace(options: CallOptions = {}): Promise<Team> {
 }
 
 /**
- * The client-request queue, newest first. Readable by any member; recording
- * or closing one is an admin's call - see `createIntake` and `closeIntake`.
+ * One `revisions` entry as it actually arrives, before `readRevisions` has
+ * decided whether it is one. Every field is `unknown` because that is the
+ * whole point - the same shape `CurrencyLike` uses in `CurrencySelect`, for
+ * the same reason.
+ */
+type RevisionLike = { asked?: unknown; at?: unknown }
+
+/**
+ * `Intake.revisions`, narrowed to the two keys this client knows about.
+ *
+ * The server's field is `List[dict]` with no model behind it, so what lands
+ * here is whatever was written to disk - and the screens that read it are
+ * going to render a client's own words into the page. Coerced rather than
+ * trusted, exactly as `App.tsx` coerces `intake.scope`: a third key somebody
+ * adds upstream is dropped, and an entry missing one of the two renders as an
+ * empty string rather than as `undefined`.
+ */
+function readRevisions(value: unknown): IntakeRevision[] {
+  if (!Array.isArray(value)) return []
+  return value.map((entry: RevisionLike) => ({
+    asked: String((entry && entry.asked) || ''),
+    at: String((entry && entry.at) || ''),
+  }))
+}
+
+/**
+ * The one place an `Intake` crosses into this client from the wire.
+ *
+ * Applied to every intake every call in this module hands back, so no screen
+ * has to ask whether the one it happens to be holding went through the
+ * coercion above. Nothing else on the record is rewritten: the rest of it is
+ * plain strings and a string array, which `response_model` does guarantee.
+ */
+function readIntake<T extends Intake>(entry: T): T {
+  return { ...entry, revisions: readRevisions(entry.revisions) }
+}
+
+/**
+ * The client-request queue, newest first. Readable by any member; generating
+ * one, sending it, reissuing its link and closing it are each an admin's call -
+ * see the four below.
  */
 export async function listIntakes(options: CallOptions = {}): Promise<Intake[]> {
   const data = await request<Intake[]>('/intakes', options)
@@ -1066,7 +1107,7 @@ export async function listIntakes(options: CallOptions = {}): Promise<Intake[]> 
       kind: 'parse',
     })
   }
-  return data
+  return data.map(readIntake)
 }
 
 /** One client request. 404s when the id is absent or malformed. */
@@ -1078,32 +1119,83 @@ export async function fetchIntake(id: string, options: CallOptions = {}): Promis
   if (!data || typeof data !== 'object' || typeof data.id !== 'string') {
     throw new ApiError('That answer was not a client request.', { kind: 'parse' })
   }
-  return data
+  return readIntake(data)
 }
 
 /**
- * Record a client request. Admin-only - recording one is nearer to inviting
- * somebody than to drafting a quotation, per `main.create_intake`.
+ * Generate a client request from the studio's own PAD configuration, and get
+ * back the link that request lives behind. Admin-only - issuing one is nearer
+ * to inviting somebody than to drafting a quotation, per `main.create_intake`.
+ *
+ * `IntakeIssued`, not `Intake`: the response carries a `link` and this is one
+ * of only two calls that ever does. `relinkIntake` is the other, and there is
+ * no third - so a caller that drops this return value has thrown away the only
+ * copy of that link there will ever be.
+ *
+ * The body is the preset alone. The client's own email, phone, scope and
+ * budget used to be typed here by the studio; from Stage 2 they arrive through
+ * the client's own link (`POST /api/client/{token}/submit`) and `IntakeRequest`
+ * no longer has fields for them. `preset` stays a loose record to mirror the
+ * server's own loose `dict` - `IntakePreset` in `types.ts` is what the studio's
+ * screens agree to put in it.
  */
 export async function createIntake(
-  body: {
-    client_email: string
-    client_phone: string
-    scope: string
-    budget_text: string
-    preset: Record<string, unknown>
-  },
+  body: { preset: Record<string, unknown> },
   options: CallOptions = {},
-): Promise<Intake> {
-  if (!String(body.scope ?? '').trim()) {
-    throw new ApiError('A request needs a scope.', { kind: 'validation' })
-  }
-  return request<Intake>('/intakes', {
+): Promise<IntakeIssued> {
+  const issued = await request<IntakeIssued>('/intakes', {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({ preset: body.preset || {} }),
     headers: { 'Content-Type': 'application/json' },
     signal: options.signal,
   })
+  return readIntake(issued)
+}
+
+/**
+ * Hand a prepared quotation to the client: `quoted -> sent`. Admin-only, and
+ * `bundleId` is required rather than inferred - the server refuses a bundle
+ * that is not this request's own, and a re-quoted request can have more than
+ * one candidate on file, so which one the client sees is a decision somebody
+ * makes rather than an accident of ordering.
+ */
+export async function sendIntake(
+  id: string,
+  bundleId: string,
+  options: CallOptions = {},
+): Promise<Intake> {
+  const intakeId = String(id ?? '').trim()
+  if (!intakeId) throw new ApiError('No request id to send.', { kind: 'validation' })
+  const bundle = String(bundleId ?? '').trim()
+  if (!bundle) throw new ApiError('Say which quotation to send.', { kind: 'validation' })
+
+  const sent = await request<Intake>(`/intakes/${encodeURIComponent(intakeId)}/send`, {
+    method: 'POST',
+    body: JSON.stringify({ bundle_id: bundle }),
+    headers: { 'Content-Type': 'application/json' },
+    signal: options.signal,
+  })
+  return readIntake(sent)
+}
+
+/**
+ * Reissue a client's link, killing the one before it outright. Admin-only.
+ *
+ * Destructive in a way the name does not say on its own: the link a client is
+ * holding - possibly the one they are reading their quotation through right
+ * now - stops working the moment this returns. It is also the only way back to
+ * a link that was never copied, which is why the answer is `IntakeIssued` and
+ * why a caller has to show what it gets.
+ */
+export async function relinkIntake(id: string, options: CallOptions = {}): Promise<IntakeIssued> {
+  const intakeId = String(id ?? '').trim()
+  if (!intakeId) throw new ApiError('No request id to reissue.', { kind: 'validation' })
+
+  const issued = await request<IntakeIssued>(`/intakes/${encodeURIComponent(intakeId)}/relink`, {
+    method: 'POST',
+    signal: options.signal,
+  })
+  return readIntake(issued)
 }
 
 /** Not going ahead. Admin-only; 404s when the id is absent or malformed. */
@@ -1111,8 +1203,9 @@ export async function closeIntake(id: string, options: CallOptions = {}): Promis
   const intakeId = String(id ?? '').trim()
   if (!intakeId) throw new ApiError('No request id to close.', { kind: 'validation' })
 
-  return request<Intake>(`/intakes/${encodeURIComponent(intakeId)}/close`, {
+  const closed = await request<Intake>(`/intakes/${encodeURIComponent(intakeId)}/close`, {
     method: 'POST',
     signal: options.signal,
   })
+  return readIntake(closed)
 }
