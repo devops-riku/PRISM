@@ -165,9 +165,13 @@ function buildSections(rows: Intake[]): Section[] {
  * The three row actions that ask before they act.
  *
  * One value rather than three booleans, and carried with the row id rather
- * than beside it: this screen can only have one confirm open and one request
- * in flight at a time, and a bare id would have opened Close's confirm the
- * moment somebody pressed Reissue.
+ * than beside it: a bare id would have opened Close's confirm the moment
+ * somebody pressed Reissue.
+ *
+ * One confirm open and one request in flight at a time, and both halves of
+ * that are enforced rather than assumed - see `act`'s `inFlight` guard, which
+ * exists because the second half used to be an assertion in this very comment
+ * and nothing else.
  */
 type RowAction = 'close' | 'send' | 'reissue'
 
@@ -179,25 +183,40 @@ function forRow(pending: Pending | null, id: string): RowAction | '' {
 }
 
 /**
- * What reissuing costs the client, which is a different thing in each of
- * three situations rather than one warning worn thin over all of them.
+ * What reissuing costs the client - which is a different thing in each of
+ * five situations, and every one of them is read off what the client's own
+ * side actually renders rather than off what the lifecycle name suggests.
  *
- * Before anything has been sent, the link is a form they have not filled in
- * and losing it costs them nothing they have done. Once a quotation is on the
- * other side of it, it is the document they are deciding on and the only two
- * buttons they can answer with. Once they have accepted, those buttons are
- * already spent (`clientview.of` sends `can_revise: false, can_finalize:
- * false` on a finalized intake) and what the link is now is their only copy
- * of what they agreed to - which is a real cost, and a different one.
+ * That distinction is the whole reason this is five branches and not two. The
+ * obvious split is "before a quotation" and "after one", and it is wrong at
+ * both ends. Before: only `issued` still has a form behind the link -
+ * `clientview._WAITING` is `{submitted, preparing, quoted, quote_failed}` and
+ * collapses all four to one waiting page, so telling an admin they are
+ * costing a client a form is false in four states out of five, and false in
+ * the most damaging direction: the client filled that form in yesterday and
+ * would be left staring at a dead page. After: `clientview.of` sets both
+ * `can_revise` and `can_finalize` to `intake.state == SENT`, so the two
+ * buttons exist in exactly one state, not three - `ClientQuotation` suppresses
+ * the whole panel under `revision_requested`, and by `finalized` they are
+ * spent.
+ *
+ * So each branch says what that client would actually lose sight of, and none
+ * of them claims a control the client does not have.
  */
 function reissueCost(state: IntakeState): string {
-  if (state === 'sent' || state === 'revision_requested') {
+  if (state === 'issued') {
+    return 'The client has not filled in their form yet, and the link they hold is the only way to it. Reissuing kills that one, so they cannot open the form until you send them the new one.'
+  }
+  if (state === 'sent') {
     return 'The client reads their quotation through the link they already have. Reissuing kills it, so until you send them the new one they lose the page - and with it the two buttons they ask for a change or finalize with.'
+  }
+  if (state === 'revision_requested') {
+    return 'The client has asked for a change and is waiting on it, and reads the quotation through the link they already have. Reissuing kills it, so until you send them the new one they lose sight of the very thing they asked you to change.'
   }
   if (state === 'finalized' || state === 'proposal_sent') {
     return 'The client has accepted this quotation, and the link is their only copy of what they agreed to. Reissuing kills it, so they cannot open it again until you send them the new one.'
   }
-  return 'The link the client already has stops working, so they cannot open their form until you send them the new one.'
+  return 'The client has already sent you their scope and is waiting to hear back - there is no form left for them to fill in. Reissuing kills the link that waiting page is behind, so until you send them the new one they have nowhere to check.'
 }
 
 type ConfirmPanelProps = {
@@ -275,6 +294,14 @@ type IssuedLinkProps = {
  * already set; this component only exists while there is a link to show, so
  * "arrived" and "changed" are the same event, a double-run focuses a node
  * that is already focused, and there is nothing for a latch to guard.
+ *
+ * `link` is only a sound key because the row this hangs off no longer
+ * remounts when it changes section - see the flat list in the render below,
+ * which is there for exactly this. While each section had its own wrapper
+ * element, sending a row that was showing a link remounted the panel and this
+ * effect fired again on a link that had not changed: the token re-announced
+ * itself aloud, focus was yanked back here, and `copyNote` was reset so a
+ * link the studio had already copied said nothing about it.
  */
 function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
   const headingRef = useRef<HTMLHeadingElement | null>(null)
@@ -341,10 +368,21 @@ function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
         {copyNote}
       </p>
 
+      {/* "Leaving this screen takes it with you" is not padding. The queue is
+          covered in links that replace it - Price this, View quotation, the
+          empty-state link - and this panel lives in `IntakeListScreen`'s own
+          state, so any of them drops it. Those links are deliberately not
+          given `target="_blank"` the way the send confirm's are: the confirm
+          owns the two links inside it and can reason about them, whereas
+          turning every navigation on a busy queue into a new tab because one
+          row might be holding a panel is a screen-wide surprise for a rare
+          state. So the hazard is said out loud instead, where the studio is
+          already being told to copy it now, and the recovery is the one the
+          next sentence describes. */}
       <p className="mt-2 max-w-[58ch] font-body text-[13px] leading-[1.6] text-void">
-        Copy it now: this is the only time it is shown. The queue does not carry client links and
-        nothing can look one up, so a lost link is replaced by reissuing it again &mdash; which
-        stops this one from working in its turn.
+        Copy it now: this is the only time it is shown, and leaving this screen takes it with you.
+        The queue does not carry client links and nothing can look one up, so a lost link is
+        replaced by reissuing it again &mdash; which stops this one from working in its turn.
         {expiresAt ? ` This link works until ${formatDate(expiresAt)}.` : ''}
       </p>
 
@@ -358,10 +396,21 @@ function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
 type IntakeRowProps = {
   row: Intake
   isAdmin: boolean
+  /** Closed rows read as done-with. Carried per row since the flat list has
+   *  no per-section wrapper to hold it. */
+  muted: boolean
   /** Which of this row's actions is waiting on a confirm, if any. */
   confirming: RowAction | ''
-  /** Which of this row's actions has a request in flight, if any. */
+  /** Which of this row's actions has a request in flight, if any - the label
+   *  on the button that started it. */
   busy: RowAction | ''
+  /** Whether a request is in flight **anywhere** on this screen. Every action
+   *  button reads this rather than `busy`, because the lock is screen-wide:
+   *  a control that stays live on row B while row A is mid-request is a
+   *  control that does nothing when pressed. */
+  locked: boolean
+  /** Bumped each time an action lands on this row; 0 when none has. */
+  landedSeq: number
   /** The link a reissue on this row put on screen. Empty until one does. */
   link: string
   onRequest: (id: string, action: RowAction) => void
@@ -375,8 +424,11 @@ type IntakeRowProps = {
 function IntakeRow({
   row,
   isAdmin,
+  muted,
   confirming,
   busy,
+  locked,
+  landedSeq,
   link,
   onRequest,
   onCancel,
@@ -426,6 +478,17 @@ function IntakeRow({
   // `PREPARING` with a job id and `QUOTE_FAILED` with an error, and neither
   // touches `bundle_ids`). Without this the row shows an error and a retry
   // with no hint that a finished quotation is sitting at `#/q/<id>`.
+  //
+  // **The `||` chain must not fall through a deleted bundle, and it does not.**
+  // `DELETE /api/proposals/{id}` does not prune `bundle_ids` (`main.py`'s
+  // `_quoted_bundle` says so in as many words), so a `sent_bundle_id` can name
+  // a bundle that no longer exists and this will hand back a dead `#/q/<id>`.
+  // Falling back to `bundle_ids[0]` there looks like the fix and is the bug:
+  // it would quietly open a *different* document, which is the precise thing
+  // this whole rule exists to prevent, and it would do it at the moment the
+  // studio is least able to notice. A link that goes nowhere is a failure the
+  // studio can see and act on; a link to the wrong quotation is one they
+  // cannot. Left as it is on purpose - do not "fix" it by widening the chain.
   const bundleId =
     row.state === 'quoted'
       ? row.bundle_ids[0] || ''
@@ -436,13 +499,58 @@ function IntakeRow({
   const asked = row.state === 'revision_requested' ? row.revisions.at(-1) : undefined
   const when = stateDate(row, asked)
 
-  // Guarded rather than assumed: `send_intake` refuses a bundle that is not
-  // this request's own, so a `quoted` row with an empty list has nothing to
-  // offer and a Send button on it would be a door that only looks open.
-  const canSend = row.state === 'quoted' && row.bundle_ids.length > 0
+  // Two guards, both against the same server.
+  //
+  // `isAdmin`, because `send_intake` calls `_require_admin` exactly as `close`
+  // and `relink` do - a member who pressed this would read the whole "you
+  // cannot unsend it" confirm, press Send it, and be told only an admin can.
+  // The same reasoning the row menu below already applies to Close and Reissue
+  // link; sending is on that side of the line too, and the server is the
+  // boundary either way.
+  //
+  // And a non-empty `bundle_ids`, because `send_intake` refuses a bundle that
+  // is not this request's own - so a `quoted` row with an empty list has
+  // nothing to offer.
+  const canSend = isAdmin && row.state === 'quoted' && row.bundle_ids.length > 0
+
+  /**
+   * Where focus goes when an action on this row finishes.
+   *
+   * Every one of the three unmounts the control that started it - the confirm
+   * closes, and on `send` and `close` the row changes section on top of that -
+   * so without this, focus falls to `<body>` and a keyboard user is returned
+   * to the top of the document after every send. `ConfirmPanel` solves the
+   * opening half of this; this is the closing half, and leaving one done and
+   * the other not is worse than doing neither.
+   *
+   * The row itself rather than a control inside it, because the row is the
+   * answer: an `<article>` taking focus is read out with its content, so what
+   * gets announced is the request and the state it has just become. Keyed on a
+   * counter rather than a boolean-and-a-callback, so reissuing the same row
+   * twice lands twice, and no callback identity ends up in a dependency list.
+   *
+   * No `focus-landing` here, deliberately, and it is the one place in this app
+   * that wants the ring. `index.css` takes the outline off headings that only
+   * ever receive focus programmatically, on the grounds that there is nothing
+   * to act on and nowhere for a ring to send a sighted user next. A row is the
+   * opposite case on both counts: View quotation and the row menu are inside
+   * it, so the ring is doing exactly what the base layer intends - saying
+   * "here, and your next Tab goes in here".
+   */
+  const rowRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!landedSeq) return
+    rowRef.current?.focus()
+  }, [landedSeq])
 
   return (
-    <article className="row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6">
+    <article
+      ref={rowRef}
+      tabIndex={-1}
+      className={`row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6 ${
+        muted ? 'opacity-60' : ''
+      }`}
+    >
       <div className="min-w-[16rem] flex-1">
         <p className="font-body text-[15px] text-ink">{row.client_email || 'No email on file'}</p>
         {scopeLine ? (
@@ -490,7 +598,7 @@ function IntakeRow({
           <span className="inline-flex gap-2">
             <button
               type="button"
-              disabled={Boolean(busy)}
+              disabled={locked}
               className={`${ACTION} border-alert text-alert`}
               onClick={() => onClose(row.id)}
             >
@@ -599,6 +707,7 @@ function IntakeRow({
                     </a>
                     <button
                       type="button"
+                      disabled={locked}
                       className={ACTION_PRIMARY}
                       onClick={() => onSend(row.id, id)}
                     >
@@ -622,6 +731,7 @@ function IntakeRow({
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  disabled={locked}
                   className={ACTION_PRIMARY}
                   onClick={() => onSend(row.id, row.bundle_ids[0] || '')}
                 >
@@ -657,7 +767,7 @@ function IntakeRow({
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={Boolean(busy)}
+              disabled={locked}
               className={`${ACTION} border-alert text-alert`}
               onClick={() => onReissue(row.id)}
             >
@@ -686,9 +796,31 @@ export default function IntakeListScreen() {
   const { isAdmin } = useRole()
   const [rows, setRows] = useState<Intake[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  /**
+   * What went wrong, and whether it was this screen arriving or somebody
+   * acting.
+   *
+   * The heading travels with the message rather than being a constant above
+   * it, because one banner now serves two entirely different failures. A
+   * queue that would not load is "Not loaded"; a send or a reissue that was
+   * refused is "Not done". Either word over the other one's message is a lie
+   * of exactly the kind this codebase spends its comments avoiding - "Not
+   * done - The request queue did not load" blames an action nobody took.
+   */
+  const [problem, setProblem] = useState<{ heading: string; detail: string } | null>(null)
   const [confirming, setConfirming] = useState<Pending | null>(null)
   const [busy, setBusy] = useState<Pending | null>(null)
+  /**
+   * Which row an action has just landed on, and a sequence number so the same
+   * action landing twice on the same row is still two events.
+   *
+   * Read by the row to take focus, and never cleared: a landing that has
+   * already been consumed is indistinguishable from one that has not if the
+   * value stops changing, and clearing it from the child would mean passing a
+   * callback whose identity changes every render straight into an effect's
+   * dependencies. The counter sidesteps both.
+   */
+  const [landed, setLanded] = useState<{ id: string; seq: number } | null>(null)
   /**
    * The links reissues have put on screen, by row.
    *
@@ -711,10 +843,15 @@ export default function IntakeListScreen() {
       .then((found) => {
         if (!live) return
         setRows(found)
-        setError('')
+        setProblem(null)
       })
       .catch((failure) => {
-        if (live) setError(failure?.message || 'The request queue did not load.')
+        if (live) {
+          setProblem({
+            heading: 'Not loaded',
+            detail: failure?.message || 'The request queue did not load.',
+          })
+        }
       })
       .finally(() => {
         if (live) setLoading(false)
@@ -732,14 +869,43 @@ export default function IntakeListScreen() {
     })
 
   /**
+   * True from the moment a row action's request leaves until it comes back.
+   *
+   * A ref as well as `busy` state, not instead of it: `busy` is what the rows
+   * render from, and a state variable read inside an event handler is the
+   * value from the last render, so two handlers running before React has
+   * re-rendered would both see `null` and both start. The ref is written
+   * synchronously and read synchronously, which is what a mutual exclusion
+   * actually needs. All three calls are `async` functions, so `call()` always
+   * hands back a promise and `finally` always runs - the ref cannot be
+   * stranded true by a synchronous throw.
+   */
+  const inFlight = useRef(false)
+
+  /**
    * The one shape all three row actions share.
    *
    * `call` is a thunk rather than a promise so the request genuinely leaves
    * after the latch below is set, and so the two actions that need to do
    * something with their own answer on the way through can.
+   *
+   * **One request at a time, screen-wide, and that is enforced rather than
+   * merely intended.** `busy` was a single slot any row could overwrite, so
+   * starting an action on row B while row A's was in flight left row A
+   * rendering as idle - its "Reissuing" label gone, its buttons re-enabled -
+   * and invited a second reissue of the same row. Two relinks in flight is the
+   * one genuinely silent failure this screen can produce: each mints a token
+   * and kills the one before it (`intakes.relink`), both resolve into `links`,
+   * last writer wins, and if the responses land out of order the panel shows a
+   * token the second call already revoked. The studio copies it, sends it, and
+   * the client is told the link is not valid. Every other double-action fails
+   * loudly - a second `quoted -> sent` is a move `ALLOWED` refuses and comes
+   * back a visible 409 - so this one is worth a lock rather than a comment.
    */
   const act = (id: string, action: RowAction, call: () => Promise<Intake>, failed: string) => {
-    setError('')
+    if (inFlight.current) return
+    inFlight.current = true
+    setProblem(null)
     // Set synchronously before the request leaves, not when it comes back: a
     // second click inside the round trip would otherwise reach the server as a
     // move `ALLOWED` refuses - advance(closed -> closed), or a second
@@ -752,9 +918,15 @@ export default function IntakeListScreen() {
         // confirm somebody opened on row B while A's request was in flight.
         setConfirming((current) => (current && current.id === id ? null : current))
         setRows((current) => current.map((row) => (row.id === id ? updated : row)))
+        // The row is about to change, and on `send` and `close` it changes
+        // section too. Say where it went - see the row's own landing effect.
+        setLanded((current) => ({ id, seq: (current ? current.seq : 0) + 1 }))
       })
-      .catch((failure) => setError(failure?.message || failed))
-      .finally(() => setBusy((current) => (current && current.id === id ? null : current)))
+      .catch((failure) => setProblem({ heading: 'Not done', detail: failure?.message || failed }))
+      .finally(() => {
+        inFlight.current = false
+        setBusy((current) => (current && current.id === id ? null : current))
+      })
   }
 
   const handleClose = (id: string) =>
@@ -804,16 +976,16 @@ export default function IntakeListScreen() {
           <p className={MONO_LABEL}>{loading ? 'Reading' : `${rows.length} on file`}</p>
         </div>
 
-        {error ? (
+        {problem ? (
           <p role="alert" className="border-b border-rule px-5 py-3 font-body text-[15px] sm:px-6">
             <span className="block font-label text-[12px] uppercase tracking-[0.14em] text-alert">
-              Not done
+              {problem.heading}
             </span>
-            <span className="mt-1 block">{error}</span>
+            <span className="mt-1 block">{problem.detail}</span>
           </p>
         ) : null}
 
-        {!loading && rows.length === 0 && !error ? (
+        {!loading && rows.length === 0 && !problem ? (
           <p className="px-5 py-12 text-center font-body text-[15px] text-void sm:px-6">
             No client requests yet. Start one from{' '}
             <a href="#/" className="text-ballpoint underline underline-offset-[3px]">
@@ -825,31 +997,56 @@ export default function IntakeListScreen() {
 
         {sections.length ? (
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pb-2">
-            {sections.map((section) => (
-              <div key={section.key} className={section.muted ? 'opacity-60' : ''}>
-                <h3
-                  className={`${MONO_LABEL} border-b border-rule bg-duplicate px-5 py-2 sm:px-6`}
-                >
-                  {section.heading} · {section.rows.length}
-                </h3>
-                {section.rows.map((row) => (
-                  <IntakeRow
-                    key={row.id}
-                    row={row}
-                    isAdmin={isAdmin}
-                    confirming={forRow(confirming, row.id)}
-                    busy={forRow(busy, row.id)}
-                    link={links.get(row.id) || ''}
-                    onRequest={(id, action) => setConfirming({ id, action })}
-                    onCancel={() => setConfirming(null)}
-                    onClose={handleClose}
-                    onSend={handleSend}
-                    onReissue={handleReissue}
-                    onDismissLink={forget}
-                  />
-                ))}
-              </div>
-            ))}
+            {/*
+              One flat list of keyed children, not a wrapper element per
+              section. This is load-bearing rather than tidiness: React
+              reconciles by key **within one parent**, so a row wrapped in its
+              own section element is a different child the moment it changes
+              section - unmounted from the old wrapper, mounted into the new
+              one, and every piece of state it was holding thrown away.
+
+              That is not hypothetical. Sending a `quoted` row moves it from
+              "Quoted" into "With the client"; if that row was showing a
+              reissued link, the panel remounted, and three things happened at
+              once: an atomic `role="status"` announced itself again with the
+              token read aloud in the middle of the studio's next task, focus
+              was pulled back to its heading from wherever they had put it, and
+              the "Copied" line was blanked so an already-copied link read as
+              though it never had been. Flat, the row keeps its identity, React
+              moves the node, and the panel simply stays where it was.
+
+              `muted` moves onto the heading and the rows themselves, since
+              there is no longer a wrapper to carry it.
+            */}
+            {sections.flatMap((section) => [
+              <h3
+                key={`heading-${section.key}`}
+                className={`${MONO_LABEL} border-b border-rule bg-duplicate px-5 py-2 sm:px-6 ${
+                  section.muted ? 'opacity-60' : ''
+                }`}
+              >
+                {section.heading} · {section.rows.length}
+              </h3>,
+              ...section.rows.map((row) => (
+                <IntakeRow
+                  key={row.id}
+                  row={row}
+                  isAdmin={isAdmin}
+                  muted={Boolean(section.muted)}
+                  confirming={forRow(confirming, row.id)}
+                  busy={forRow(busy, row.id)}
+                  locked={Boolean(busy)}
+                  landedSeq={landed && landed.id === row.id ? landed.seq : 0}
+                  link={links.get(row.id) || ''}
+                  onRequest={(id, action) => setConfirming({ id, action })}
+                  onCancel={() => setConfirming(null)}
+                  onClose={handleClose}
+                  onSend={handleSend}
+                  onReissue={handleReissue}
+                  onDismissLink={forget}
+                />
+              )),
+            ])}
           </div>
         ) : null}
       </section>
