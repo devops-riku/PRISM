@@ -721,7 +721,31 @@ Change only that container's background and border classes to
 `bg-accent-soft` and `border-ballpoint/30`. Leave its layout, padding and type
 alone.
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 5: The comment that did not land**
+
+Task 2's review left one minor, and it is a documentation gap in the file you
+are already editing. The light `--well-border` was corrected from `#ded3be` to
+`#8c836e` mid-task, and the explanation for it went into the plan document but
+never into `index.css`. So a reader of that file alone finds `#8c836e` sitting
+beside a `--color-rule` of `#ded3be` with nothing saying why they differ - next
+to a dark `--well-border` that is thoroughly commented for exactly this reason.
+
+Add above the light `--well-border` declaration (around line 673):
+
+```css
+    /* NOT `--color-rule`, for the same reason the dark one is not: a hairline
+       and a findable input edge are different jobs and one value cannot be
+       quiet enough for both. `#ded3be` - the same hex as `--color-rule` - was
+       specified here first and measures 1.46 against paper. Measured 3.70 and
+       3.33 against light paper and light canvas.
+
+       Worth separating: the light theme's inputs were bordered at 1.46 long
+       before the dark theme existed. This is not a regression that was fixed,
+       it is a gap the contrast gate found the first time anything measured
+       it. */
+```
+
+- [ ] **Step 6: Verify**
 
 ```bash
 cd frontend && node scripts/check-contrast.mjs && npm run typecheck && npm run build
@@ -735,7 +759,7 @@ Then screenshot the home screen and confirm three things: a visible wash at the
 top centre that has faded out before the cards, a navbar distinguishable from
 the page, and the stat card tinted against the five plain ones.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add frontend/src/index.css frontend/src/App.tsx frontend/src/components/HomeScreen.tsx
