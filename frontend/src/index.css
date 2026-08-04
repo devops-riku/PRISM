@@ -28,20 +28,36 @@
    ══════════════════════════════════════════════════════════════════════════ */
 
 @theme {
-  /* ── Colour — the Clarity Kit palette, verbatim ───────────────────────
-     The accent is never a large fill except on the primary button. */
-  --color-canvas: #f6f3ee; /* the page itself, warm off-white       */
-  --color-paper: #fffdfa; /* cards, sheets, inputs                 */
-  --color-duplicate: #f1ede5; /* secondary fill: wells, chips, stripes  */
-  --color-rule: #e4ded4; /* borders                               */
-  --color-hairline: #efeae2; /* dividers inside a card                */
-  --color-ink: #1d1b17; /* headings                              */
-  --color-body: #4a443b; /* body copy                             */
-  --color-void: #6b6459; /* secondary copy                        */
-  --color-faint: #8a8378; /* eyebrows, captions, table headers     */
-  --color-ballpoint: #35655a; /* the one action colour, deep pine      */
-  --color-accent-deep: #24463e; /* hover                                 */
-  --color-accent-soft: #edf1ef; /* accent tint background                */
+  /* ── Colour — indigo and sand ─────────────────────────────────────────
+     The kit's roles, unchanged; its values, replaced. Two colours were given
+     - #343148 and #D7C49E - and the other twelve are derived from them, which
+     is the whole reason this file names tokens by JOB rather than by hue: the
+     accent moved from deep pine to deep indigo and not one component had to
+     be rewired.
+
+     The accent is never a large fill except on the primary button. The sand is
+     the exception that proves it: it is a TINT, carried by `accent-soft` and
+     `duplicate`, never type on type.
+
+     EVERY PAIR WAS MEASURED, not eyeballed. Headings 12.3:1 on paper, body
+     10.1, secondary copy 6.89, captions 5.1, button text 12.3, indigo on sand
+     7.31 - all past WCAG AA for body text. The one that had to move was
+     `faint` on `canvas`: the first attempt sat at 4.27 and needed 4.5. Worth
+     recording that the palette this replaces was at 3.39 on the same pair and
+     had been all along, so the captions on every screen are more legible now
+     than they were, not less. */
+  --color-canvas: #f4f1ea; /* the page itself, sand-tinted          */
+  --color-paper: #fffdf8; /* cards, sheets, inputs                 */
+  --color-duplicate: #ede5d5; /* secondary fill: wells, chips, stripes  */
+  --color-rule: #ded3be; /* borders                               */
+  --color-hairline: #eae2d2; /* dividers inside a card                */
+  --color-ink: #343148; /* headings                              */
+  --color-body: #413e55; /* body copy                             */
+  --color-void: #5a5670; /* secondary copy                        */
+  --color-faint: #6e6a82; /* eyebrows, captions, table headers     */
+  --color-ballpoint: #343148; /* the one action colour, deep indigo    */
+  --color-accent-deep: #252338; /* hover                                 */
+  --color-accent-soft: #d7c49e; /* accent tint background, the sand      */
   --color-alert: #a8443a; /* the single warm red, real problems    */
   --color-alert-soft: #fcf4f2; /* its tint                              */
 
@@ -111,11 +127,15 @@
   --radius-pill: 99px;
 
   /* ── Shadows — the kit's four, no others ─────────────────────────────── */
-  --shadow-sheet: 0 1px 2px rgb(40 33 22 / 0.04), 0 18px 40px -28px
-    rgb(40 33 22 / 0.16);
-  --shadow-raised: 0 10px 24px -18px rgb(40 33 22 / 0.3);
-  --shadow-action: 0 8px 18px -12px rgb(53 101 90 / 0.9);
-  --shadow-ring: 0 0 0 4px rgb(53 101 90 / 0.12);
+  /* Mixed from the ink and the accent, so a shadow is the palette's own
+     darkness rather than a grey borrowed from somewhere else. `40 33 22` was
+     the old warm-brown ink and `53 101 90` the old pine; both are now the
+     indigo, `52 49 72`. */
+  --shadow-sheet: 0 1px 2px rgb(52 49 72 / 0.05), 0 18px 40px -28px
+    rgb(52 49 72 / 0.18);
+  --shadow-raised: 0 10px 24px -18px rgb(52 49 72 / 0.32);
+  --shadow-action: 0 8px 18px -12px rgb(52 49 72 / 0.85);
+  --shadow-ring: 0 0 0 4px rgb(52 49 72 / 0.14);
 
   /* ── Layout ───────────────────────────────────────────────────────────
      `max-w-sheet` for the pad and the documents, `max-w-ledger` for the
