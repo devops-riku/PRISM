@@ -12,13 +12,15 @@
 
     <!-- A quotation pad is paper. There is no dark mode. -->
     <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#F6F3EE" />
+    <meta name="theme-color" content="#0e0e16" />
 
     <!-- Ballpoint-blue stamp mark: a rubber stamp struck slightly off-square. -->
+    <!-- URL-encoded (%23 is #), which is why colour sweeps miss it. The card
+         surface and the accent from src/index.css, kept in step by hand. -->
     <link
       rel="icon"
       type="image/svg+xml"
-      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2032%2032%27%3E%3Crect%20width=%2732%27%20height=%2732%27%20rx=%278%27%20fill=%27%23F6F3EE%27/%3E%3Ccircle%20cx=%2716%27%20cy=%2716%27%20r=%275%27%20fill=%27%2335655A%27/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2032%2032%27%3E%3Crect%20width=%2732%27%20height=%2732%27%20rx=%278%27%20fill=%27%23181826%27/%3E%3Ccircle%20cx=%2716%27%20cy=%2716%27%20r=%275%27%20fill=%27%238B7CF6%27/%3E%3C/svg%3E"
     />
 
     <!--
@@ -58,6 +60,17 @@
 
       Removed by src/main.tsx the moment React has mounted.
     -->
+    <!--
+      These colours are a COPY of the palette in src/index.css, and they have
+      to be: this screen paints before that stylesheet has loaded, which is the
+      only reason it exists. They are kept in step by hand.
+
+      Say so out loud, because the silence is what went wrong last time - this
+      block sat on the pine palette through two re-skins, so the app opened
+      cream, turned pine, then turned dark, and nobody noticed because nothing
+      points here from anywhere. A copy that admits it is a copy can be found
+      by anyone changing the palette. One that does not, cannot.
+    -->
     <style>
       /* The Prism Preloader, ported from the design file the studio supplied.
          Geometry, colours, easing curves and the phase percentages are its own;
@@ -77,7 +90,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: radial-gradient(60% 60% at 50% 45%, #fbfaf8 0%, #f2efeb 100%);
+        background: radial-gradient(60% 60% at 50% 45%, #181826 0%, #202030 100%);
         transition: opacity 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
       }
 
@@ -131,7 +144,7 @@
         font-family: "Figtree", ui-sans-serif, system-ui, sans-serif;
         font-size: 15px;
         font-weight: 400;
-        color: #5d5a55;
+        color: #8b88a3;
         letter-spacing: 0.55em;
         text-indent: 0.55em;
         animation: prism-word var(--dur) ease-in-out infinite;
@@ -209,14 +222,14 @@
         width: 26px;
         height: 2px;
         border-radius: 2px;
-        background: #ded9d1;
+        background: #2c2c42;
         transition: background-color 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
       }
 
       #boot[data-step="1"] .thread i:nth-child(1),
       #boot[data-step="2"] .thread i:nth-child(-n + 2),
       #boot[data-step="3"] .thread i {
-        background: #35655a;
+        background: #8b7cf6;
       }
 
       /* Only shown once the wait is long enough to be worth explaining. The
@@ -227,7 +240,7 @@
         height: 1em;
         font-family: "Figtree", ui-sans-serif, system-ui, sans-serif;
         font-size: 12px;
-        color: #8a8378;
+        color: #8b88a3;
         opacity: 0;
         transition: opacity 300ms ease;
       }
@@ -264,7 +277,7 @@
           <line
             class="beam"
             x1="42" y1="118" x2="176" y2="118"
-            stroke="#1f3f3a" stroke-width="2.6" stroke-linecap="round"
+            stroke="#8b7cf6" stroke-width="2.6" stroke-linecap="round"
             pathLength="1" stroke-dasharray="1"
           />
           <!-- The prism, with its corners turned rather than mitred: three
@@ -278,7 +291,7 @@
           <path
             class="edge"
             d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
-            stroke="#191817" stroke-width="3" fill="none"
+            stroke="#8b7cf6" stroke-width="3" fill="none"
             pathLength="1" stroke-dasharray="1"
           />
           <line
@@ -290,7 +303,7 @@
           <line
             class="ray-b"
             x1="244" y1="118" x2="390" y2="118"
-            stroke="#1f3f3a" stroke-width="2.6" stroke-linecap="round"
+            stroke="#8b7cf6" stroke-width="2.6" stroke-linecap="round"
             pathLength="1" stroke-dasharray="1"
           />
           <line
