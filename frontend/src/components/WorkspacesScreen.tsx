@@ -200,15 +200,24 @@ export default function WorkspacesScreen({ onChanged }: WorkspacesScreenProps) {
                       </button>
                     </span>
                   ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => open(row.id)}
-                        className="font-body text-[15px] text-ink hover:text-ballpoint"
-                      >
-                        {row.name}
-                      </button>
-                      <p className={`${MONO_LABEL} mt-1`}>
+                    // The whole block, not the name alone. A row whose only
+                    // target was six words of text meant aiming at them, while
+                    // the obvious place to click - anywhere on the row - did
+                    // nothing.
+                    //
+                    // A <button> filling the block rather than a click handler
+                    // on the <article>: the menu beside it is interactive too,
+                    // and a button inside a button is invalid HTML that
+                    // browsers resolve by dropping one of them. Two siblings in
+                    // a flex row give the large target without nesting, and the
+                    // block stays reachable by Tab as one stop.
+                    <button
+                      type="button"
+                      onClick={() => open(row.id)}
+                      className="block w-full text-left"
+                    >
+                      <span className="block font-body text-[15px] text-ink">{row.name}</span>
+                      <span className={`${MONO_LABEL} mt-1 block`}>
                         {[
                           row.studio_name,
                           `${row.quotations} quotations`,
@@ -216,14 +225,21 @@ export default function WorkspacesScreen({ onChanged }: WorkspacesScreenProps) {
                         ]
                           .filter(Boolean)
                           .join(' · ')}
-                      </p>
-                    </>
+                      </span>
+                    </button>
                   )}
                 </div>
 
+                {/* Not an action, and never was: this renders only on the
+                    workspace you are already in. It said "Open", which beside a
+                    row reads as a verb - the whole reason the row looked like
+                    it needed a button. "Current" says the same fact and cannot
+                    be mistaken for an instruction, and the dot matches the one
+                    the header already puts before this workspace's name. */}
                 {here ? (
-                  <span className="font-label text-[12px] uppercase tracking-[0.14em] text-ballpoint">
-                    Open
+                  <span className="flex items-center gap-1.5 font-label text-[12px] uppercase tracking-[0.14em] text-ballpoint">
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-ballpoint" />
+                    Current
                   </span>
                 ) : null}
 
