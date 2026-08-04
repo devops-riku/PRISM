@@ -50,13 +50,15 @@ import type { ClientIntakeView, ClientIssuedView, QuotationKind } from '../../ty
  *
  * Every field here is length-bounded and stored verbatim by `/submit`
  * (`_normalise_client_email`/`_normalise_client_phone`/`_normalise_scope`/
- * `_normalise_budget_text` in `main.py`) - none of it is validated for shape
- * server-side beyond a length ceiling, so the `required`/`type="email"`
- * attributes here are for this screen's own sake, not a contract the API
- * enforces. `EMAIL_SHAPE` below is the one exception worth the trouble:
- * this address is the studio's only route back to whoever filled this in,
- * and the server only strips and bounds it, so a shape check has to happen
- * here or nowhere.
+ * `_normalise_budget_text` in `main.py`). Two of those four now check more
+ * than a ceiling: `scope` has a floor and `budget_text` must carry a digit,
+ * both refused server-side, and `scopeShortfall`/`budgetShortfall` below are
+ * this screen's copy of those rules so a client learns it at the field rather
+ * than by spending their one write. The other two are bounds only, so the
+ * `required`/`type="email"` attributes on them are for this screen's own sake
+ * rather than a contract the API enforces - and `EMAIL_SHAPE` is the one that
+ * has to be here or nowhere, because that address is the studio's only route
+ * back to whoever filled this in and the server merely strips and bounds it.
  *
  * No button here is ever `disabled` - not the step's own forward button for
  * incomplete fields, and, since this form grew a file picker, not the last
@@ -83,6 +85,61 @@ import type { ClientIntakeView, ClientIssuedView, QuotationKind } from '../../ty
  * with a dot. Permissive on purpose - this only has to catch `asdf`, not
  * reject every legal address a strict RFC 5322 pattern would. */
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+// --- the floor under a scope, mirroring `main.py`'s `_scope_shortfall` -------
+//
+// Written out again here for the reason `ClientDropzone`'s own rules are: the
+// server is the authority and refuses regardless, but a client who only finds
+// out by pressing Send has spent their one write to learn it. `/submit` runs
+// once from `issued` and there is no move back, so a refusal that arrives
+// after the press is a dead link, not a correction.
+//
+// These are the same three numbers as `config.MIN_CLIENT_SCOPE_*`. They are
+// not derived and cannot be - there is nothing to import across the boundary -
+// so the server is named at each step and the two are checked against each
+// other by reading, exactly as `slotFor` is against `resolve_type`.
+//
+// Note what this is NOT. There is no dictionary and no entropy score: both
+// refuse legitimate terse or non-English scopes, and a heuristic rejection on
+// an anonymous door is the silent correction this codebase's rules exist to
+// avoid. Every rule below is a fact about the string that the person reading
+// the refusal can verify by looking at what they typed.
+const MIN_SCOPE_CHARS = 25
+const MIN_SCOPE_DISTINCT = 8
+const MIN_SCOPE_LETTERS = 5
+
+/** `''` when the scope will be accepted; otherwise what to tell the client.
+ * Exported for the parity harness that runs this table against the server's
+ * own `_scope_shortfall`; nothing else imports it. */
+export function scopeShortfall(scope: string): string {
+  if (!scope) return 'Describe the work before sending.'
+  if (scope.length < MIN_SCOPE_CHARS) {
+    return `Describe the work in a bit more detail - a sentence or two is enough, and about ${MIN_SCOPE_CHARS} characters is the minimum. This is the only thing the quotation is built from.`
+  }
+  const body = scope.replace(/\s+/g, '')
+  if (new Set(body).size < MIN_SCOPE_DISTINCT) {
+    return 'That reads as placeholder text rather than a description. Say what you need, who it is for, and anything that matters about how it should work.'
+  }
+  // `\p{L}` rather than A-Z, so Tagalog, Cyrillic and CJK all count as the
+  // letters they are and only digits and punctuation do not - the same line
+  // `str.isalpha()` draws on the server.
+  const letters = new Set([...body].filter((character) => /\p{L}/u.test(character)))
+  if (letters.size < MIN_SCOPE_LETTERS) {
+    return 'Describe the work in words as well as numbers - what it is, and what it has to do.'
+  }
+  return ''
+}
+
+/** The budget is a target cost, so it has to carry a number. Mirrors
+ * `_normalise_budget_text`; `\p{Nd}` matches the same set `str.isdigit()`
+ * does, so a full-width or Arabic-Indic figure counts. */
+export function budgetShortfall(budget: string): string {
+  if (!budget) return 'Give a rough budget before sending.'
+  if (!/\p{Nd}/u.test(budget)) {
+    return 'Put a rough number on the budget - a range or an approximate figure is fine, like “around 300k” or “under ₱500,000”.'
+  }
+  return ''
+}
 
 /** The four steps, in the order the single form already asked them.
  *
@@ -186,8 +243,13 @@ export default function ClientForm({
 
   const emailMissing = !trimmedEmail
   const emailInvalid = !emailMissing && !EMAIL_SHAPE.test(trimmedEmail)
-  const scopeMissing = !trimmedScope
-  const budgetMissing = !trimmedBudget
+  // One value each, not a missing/invalid pair: the empty case is the first
+  // sentence these functions return, so "nothing typed" and "not enough typed"
+  // travel down the same wire and the field renders whichever applies.
+  const scopeIssue = scopeShortfall(trimmedScope)
+  const budgetIssue = budgetShortfall(trimmedBudget)
+  const scopeMissing = !!scopeIssue
+  const budgetMissing = !!budgetIssue
   // Only for `other`, and only because the whole point of picking it is the
   // word that comes with it: `prompts.kind_block` writes that word into the
   // heading the model works under, and an `other` with nothing typed falls
@@ -527,12 +589,16 @@ export default function ClientForm({
               // The character-count hint only ever renders once there is text,
               // and the error only ever renders while there is none - the two
               // are mutually exclusive by construction, never both at once.
+              // Both can now apply at once - a scope of "a" has a character
+              // count AND a shortfall - so this joins them rather than
+              // choosing, which the empty-vs-nonempty version could not do.
               aria-describedby={
-                trimmedScope
-                  ? 'client-scope-hint'
-                  : attemptedSteps.has(2) && scopeMissing
-                    ? 'client-scope-error'
-                    : undefined
+                [
+                  trimmedScope ? 'client-scope-hint' : '',
+                  attemptedSteps.has(2) && scopeMissing ? 'client-scope-error' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined
               }
               // Shorter than `WELL_TEXTAREA`'s own 184px floor, which is sized
               // for the pad's brief - a studio writing a full scope from notes.
@@ -554,8 +620,8 @@ export default function ClientForm({
               </p>
             ) : null}
             {attemptedSteps.has(2) && scopeMissing ? (
-              <p id="client-scope-error" className="mt-1.5 font-body text-[13px] text-alert">
-                Describe the work before sending.
+              <p id="client-scope-error" className="mt-1.5 font-body text-[13px] leading-[1.5] text-alert">
+                {scopeIssue}
               </p>
             ) : null}
           </div>
@@ -585,8 +651,8 @@ export default function ClientForm({
               set your price, and you&rsquo;re not held to it.
             </p>
             {attemptedSteps.has(2) && budgetMissing ? (
-              <p id="client-budget-error" className="mt-1 font-body text-[13px] text-alert">
-                Give a rough budget before sending.
+              <p id="client-budget-error" className="mt-1 font-body text-[13px] leading-[1.5] text-alert">
+                {budgetIssue}
               </p>
             ) : null}
           </div>

@@ -190,6 +190,40 @@ MAX_IMAGE_BYTES: int = _env_int("MAX_IMAGE_BYTES", 8 * 1024 * 1024)
 #: exists to stop a pasted database from reaching the model.
 MAX_BRIEF_CHARS: int = _env_int("MAX_BRIEF_CHARS", 20_000)
 
+#: The floor under a CLIENT's scope, and the studio's own brief has no
+#: equivalent on purpose - a studio typing two words into its own pad is
+#: quoting for itself and can read what comes back. A stranger holding a link
+#: gets ONE write: `/submit` runs once from `issued` and there is no
+#: `submitted -> issued` move, so a scope of "a" is not a first draft, it is
+#: the whole request, and the only remedy is the studio relinking - which mints
+#: a new token the queue does not carry, so the client has to be found again
+#: out of band.
+#:
+#: Nothing here is a gibberish detector, and that distinction is the point.
+#: Entropy scoring or a dictionary on an anonymous door refuses legitimate
+#: terse scopes and non-English input, which is a silent correction in a
+#: codebase whose rule is to report instead. These three are structural facts
+#: about a string that anyone can check by looking at it, and every refusal
+#: names which one failed and what to do about it.
+MIN_CLIENT_SCOPE_CHARS: int = _env_int("MIN_CLIENT_SCOPE_CHARS", 25)
+
+#: Distinct characters, spaces excluded. This is what actually catches a mash:
+#: "asdasdasdasdasdasdasdasdasd" is 27 characters and clears the floor above,
+#: but it is three. So is "aaaa...", and so is "hehe hehe hehe hehe hehe".
+MIN_CLIENT_SCOPE_DISTINCT: int = _env_int("MIN_CLIENT_SCOPE_DISTINCT", 8)
+
+#: Distinct LETTERS - `str.isalpha()`, so Tagalog, Cyrillic and CJK all count
+#: and only digits and punctuation do not. Without it "1234567890123456789012345"
+#: passes both rules above. Set to 0 to switch this one off.
+MIN_CLIENT_SCOPE_LETTERS: int = _env_int("MIN_CLIENT_SCOPE_LETTERS", 5)
+
+#: The budget is a target cost, so it has to carry a number - "around 300k",
+#: "under ₱500,000" and "2.5M" all do; "a" and "not sure" do not. A studio
+#: cannot shape a quotation to "not sure", and the field is required already,
+#: so requiring the one thing that makes it mean something is cheaper than a
+#: quotation built against nothing. Set to 0 to accept words alone.
+MIN_CLIENT_BUDGET_DIGITS: int = _env_int("MIN_CLIENT_BUDGET_DIGITS", 1)
+
 #: Everything a client may attach to one intake, added together. Deliberately
 #: its own name rather than a second use of `MAX_DOCUMENT_BYTES` above: those
 #: are the studio's own limits on the studio's own uploads, and a studio

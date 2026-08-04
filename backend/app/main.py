@@ -1053,10 +1053,56 @@ def _normalise_budget_hint(raw: str) -> str:
     return hint
 
 
+def _scope_shortfall(scope: str) -> str:
+    """Which floor a client's scope failed, in words a stranger can act on, or
+    `""` if it passed.
+
+    Three structural facts about the string, checked in the order a person
+    would notice them, and NOT a gibberish detector - see the constants'
+    own note in `config.py` for why that distinction is deliberate. Each
+    message names the remedy rather than the rule: nobody outside this file
+    knows what "distinct characters" means, and a refusal a client cannot act
+    on is a dead end on a door that only opens once.
+    """
+    if len(scope) < config.MIN_CLIENT_SCOPE_CHARS:
+        return (
+            f"Describe the work in a bit more detail - a sentence or two is "
+            f"enough, and about {config.MIN_CLIENT_SCOPE_CHARS} characters is "
+            f"the minimum. This is the only thing the quotation is built from."
+        )
+    body = "".join(scope.split())
+    if len(set(body)) < config.MIN_CLIENT_SCOPE_DISTINCT:
+        return (
+            "That reads as placeholder text rather than a description. Say what "
+            "you need, who it is for, and anything that matters about how it "
+            "should work."
+        )
+    if config.MIN_CLIENT_SCOPE_LETTERS and (
+        len({character for character in body if character.isalpha()})
+        < config.MIN_CLIENT_SCOPE_LETTERS
+    ):
+        return (
+            "Describe the work in words as well as numbers - what it is, and "
+            "what it has to do."
+        )
+    return ""
+
+
 def _normalise_scope(raw: str) -> str:
-    """An intake's `scope` reaches the same prompt a brief does - Stage 1 has
-    no anonymous write to it, but Stage 2 will, and the ceiling is cheap to
-    have in place before that matters."""
+    """An intake's `scope` reaches the same prompt a brief does, so it carries
+    the same ceiling - and, since Stage 2 made this an anonymous write, a floor
+    the studio's own brief does not have.
+
+    The asymmetry was backwards before this. `_normalise_brief` refuses an
+    empty brief with an actionable sentence; this, on the LESS trusted door,
+    accepted the empty string outright - the browser blocked it and curl did
+    not. And `/submit` runs once from `issued` with no move back, so whatever
+    arrives here is not a draft, it is the client's entire request. A scope of
+    "a" produced a full priced quotation, because there is no path in the
+    generation pipeline that can decline: `response_schema=Estimate` is forced
+    and `schemas.py` gives the model no field in which to say it cannot price
+    something. The refusal has to happen at the door or nowhere.
+    """
     scope = (raw or "").strip()
     if len(scope) > config.MAX_BRIEF_CHARS:
         raise HTTPException(
@@ -1066,12 +1112,23 @@ def _normalise_scope(raw: str) -> str:
                 f"{config.MAX_BRIEF_CHARS:,} - summarise it or attach the detail separately."
             ),
         )
+    shortfall = _scope_shortfall(scope)
+    if shortfall:
+        raise HTTPException(status_code=400, detail=shortfall)
     return scope
 
 
 def _normalise_budget_text(raw: str) -> str:
     """The client's own budget words, bounded the same way `scope` is - see
-    `_normalise_scope`."""
+    `_normalise_scope` - and required to carry a number.
+
+    The field is a target cost. "around 300k", "under ₱500,000" and "2.5M" all
+    say something a studio can shape a quotation against; "a" does not, and
+    neither does "not sure". It was already a required field, so this only
+    makes the requirement mean what it says. `str.isdigit()` rather than an
+    ASCII test, so Arabic-Indic and full-width digits count as the numbers
+    they are.
+    """
     text = (raw or "").strip()
     if len(text) > config.MAX_BRIEF_CHARS:
         raise HTTPException(
@@ -1081,6 +1138,17 @@ def _normalise_budget_text(raw: str) -> str:
                 f"{config.MAX_BRIEF_CHARS:,} - summarise it rather than pasting the whole thread."
             ),
         )
+    if config.MIN_CLIENT_BUDGET_DIGITS:
+        digits = sum(1 for character in text if character.isdigit())
+        if digits < config.MIN_CLIENT_BUDGET_DIGITS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Put a rough number on the budget - a range or an "
+                    "approximate figure is fine, like “around 300k” or “under "
+                    "₱500,000”."
+                ),
+            )
     return text
 
 

@@ -209,7 +209,13 @@ with TestClient(app) as client:
 
     def submit(token: str, files=None, **fields):
         """One multipart submit, from an address no other submit has used."""
-        body = {"client_email": "buyer@client.com", "scope": "A scope.", "budget_text": "100k"}
+        body = {
+            "client_email": "buyer@client.com",
+            # Long enough to clear the client door's scope floor. This
+            # file is about files, not about `_normalise_scope`.
+            "scope": "A booking site for a two-branch dental clinic in Makati.",
+            "budget_text": "100k",
+        }
         body.update(fields)
         caller = TestClient(app, client=(next(_addresses), 50000))
         return caller.post(f"/api/client/{token}/submit", data=body, files=files or [])
@@ -705,7 +711,9 @@ with TestClient(app) as client:
     second = submit(
         both.token,
         files=[("documents", ("overwrite.pdf", PDF, "application/pdf"))],
-        scope="OVERWRITE ATTEMPT",
+        # Long enough to clear the scope floor, so the refusal this case
+        # asserts is the one-write-only rule and not `_normalise_scope`.
+        scope="OVERWRITE ATTEMPT on an intake that already has files.",
     )
     ok(
         "a second submit against the same token is refused with this door's usual "

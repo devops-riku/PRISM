@@ -101,6 +101,15 @@ def ok(label: str, condition: bool) -> None:
 
 
 TEST_JWT_SECRET = "check-client-api-test-secret-do-not-reuse-32byte"
+
+#: A scope that clears `_normalise_scope`'s floor, and a budget that clears
+#: `_normalise_budget_text`'s digit rule - for every case in this file whose
+#: subject is something OTHER than those two rules. The placeholders they
+#: replaced ("fine", "x", "y") were legal until the client's door grew a
+#: minimum, and a fixture that trips a rule it was not written to exercise
+#: fails a long way from whatever actually broke.
+GOOD_SCOPE = "A booking site for a two-branch dental clinic in Makati."
+GOOD_BUDGET = "around 300k"
 config.SUPABASE_JWT_SECRET = TEST_JWT_SECRET
 ok("real auth is actually on before anything else runs", auth_module.required())
 
@@ -602,8 +611,11 @@ with TestClient(app) as client:
         data={
             "client_email": "attacker@evil.example",
             "client_phone": "000",
-            "scope": "OVERWRITE ATTEMPT",
-            "budget_text": "OVERWRITE ATTEMPT",
+            # Both long enough to pass the door's own floor, so the refusal
+            # this case asserts is the state machine's and not the
+            # scope rule's - the two are different reasons for a 4xx.
+            "scope": "OVERWRITE ATTEMPT on an intake already submitted.",
+            "budget_text": "OVERWRITE ATTEMPT 999",
         },
     )
     ok(
@@ -668,7 +680,7 @@ with TestClient(app) as client:
         )
         _walk(candidate.id, *steps)
         resp = submit_client.post(
-            f"/api/client/{candidate.token}/submit", data={"scope": "x", "budget_text": "y"}
+            f"/api/client/{candidate.token}/submit", data={"scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET}
         )
         ok(
             f"submit from {label}: refused with the same opaque body as an unknown token",
@@ -682,7 +694,7 @@ with TestClient(app) as client:
     )
     intakes.close(closed_candidate.id, "admin@neptune.ph")
     resp = submit_client.post(
-        f"/api/client/{closed_candidate.token}/submit", data={"scope": "x", "budget_text": "y"}
+        f"/api/client/{closed_candidate.token}/submit", data={"scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET}
     )
     ok(
         "submit from closed: refused with the same opaque body as an unknown token",
@@ -704,7 +716,7 @@ with TestClient(app) as client:
 
     over_scope = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        data={"client_email": "x@y.com", "scope": LONG_TEXT, "budget_text": "fine"},
+        data={"client_email": "x@y.com", "scope": LONG_TEXT, "budget_text": GOOD_BUDGET},
     )
     ok("submit: an over-length scope is refused with 400", over_scope.status_code == 400)
     ok(
@@ -725,7 +737,7 @@ with TestClient(app) as client:
 
     over_budget = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        data={"client_email": "x@y.com", "scope": "fine", "budget_text": LONG_TEXT},
+        data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": LONG_TEXT},
     )
     ok("submit: an over-length budget is refused with 400", over_budget.status_code == 400)
     ok(
@@ -735,6 +747,121 @@ with TestClient(app) as client:
     ok(
         "submit: refusing on length still did not move the intake off issued",
         intakes.get(length_fixture.id).state == intakes.ISSUED,
+    )
+
+    # --- The FLOOR under a client's scope, and the digit under their budget -
+    #
+    # The ceiling above has a mirror image, and until this it did not exist:
+    # `_normalise_brief` refuses an empty brief on the STUDIO's own door with
+    # an actionable sentence, while this door - the anonymous one - took the
+    # empty string. The browser blocked it and `curl` did not.
+    #
+    # What makes it matter rather than merely being untidy is that `/submit`
+    # runs once from `issued` with no move back, so a scope of "a" is not a
+    # first draft, it is the client's whole request; and nothing downstream can
+    # decline it, because `response_schema=Estimate` is forced and `schemas.py`
+    # gives the model no field in which to say it cannot price something. A
+    # priced quotation for "a" was the actual observed behaviour.
+    #
+    # Every case below asserts the intake is STILL `issued` afterwards. That is
+    # the half that would hurt if it regressed: a refusal that consumed the one
+    # write would leave the client holding a dead link and the studio with no
+    # way to reach them except relinking, which mints a token the queue does
+    # not carry.
+    # Its own two source addresses. Eleven scope cases plus four budget cases
+    # is nineteen writes against a limiter that allows twenty per IP per
+    # minute, so sharing `submit_client` with the rest of this file put the
+    # section over the line and every 429 read as the floor refusing a scope
+    # it had in fact never seen.
+    floor_client = _client_for("203.0.113.60")
+    budget_client = _client_for("203.0.113.61")
+
+    workspaces.use(home.id)
+    floor_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+
+    #: (label, scope, accepted) - the three rules and, deliberately, three
+    #: legitimate scopes that must NOT be swept up with them. The Tagalog one
+    #: is there because a dictionary or an entropy score would refuse it, and
+    #: refusing a client for writing in their own language is the failure mode
+    #: this deliberately does not have.
+    SCOPE_FLOOR_CASES = (
+        ("empty", "", False),
+        ("one space", " ", False),
+        ("one letter", "a", False),
+        ("a keyboard mash", "asdasdas", False),
+        ("a word repeated past the length floor", "hehe hehe hehe hehe hehe hehe", False),
+        ("a mash past the length floor", "asdasdasdasdasdasdasdasdasd", False),
+        ("digits with no words", "1234567890123456789012345", False),
+        ("punctuation only", "............................", False),
+        ("a real brief", "A booking site for a two-branch dental clinic in Makati.", True),
+        ("terse but real", "Rebrand. Full identity, logo and guidelines.", True),
+        ("written in Tagalog", "Pagpapaganda ng aming tindahan sa Cubao, bagong ilaw at estante.", True),
+    )
+    for label, candidate_scope, accepted in SCOPE_FLOOR_CASES:
+        response = floor_client.post(
+            f"/api/client/{floor_fixture.token}/submit",
+            data={"client_email": "x@y.com", "scope": candidate_scope, "budget_text": GOOD_BUDGET},
+        )
+        if accepted:
+            # Accepting consumes the fixture, so each accepted case gets its own.
+            ok(
+                f"submit: {label} is accepted - the floor refuses junk, not brevity "
+                f"and not other languages",
+                response.status_code == 200,
+            )
+            workspaces.use(home.id)
+            floor_fixture = intakes.create(
+                client_email="", client_phone="", scope="", budget_text="", preset={},
+                created_by="admin@neptune.ph",
+            )
+            continue
+        ok(f"submit: {label} is refused with 400", response.status_code == 400)
+        ok(
+            f"submit: {label} left the intake on issued - the link is not spent",
+            intakes.get(floor_fixture.id).state == intakes.ISSUED,
+        )
+        ok(
+            f"submit: {label} was told what to do about it, not what rule it broke",
+            isinstance(response.json().get("detail"), str)
+            and len(response.json()["detail"]) > 30
+            and "distinct" not in response.json()["detail"],
+        )
+
+    BUDGET_CASES = (
+        ("no number at all", "not sure", False),
+        ("a single letter", "a", False),
+        ("a round number", "around 300k", True),
+        ("a range", "150,000 - 200,000 PHP", True),
+    )
+    for label, candidate_budget, accepted in BUDGET_CASES:
+        response = budget_client.post(
+            f"/api/client/{floor_fixture.token}/submit",
+            data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": candidate_budget},
+        )
+        if accepted:
+            ok(f"submit: a budget with {label} is accepted", response.status_code == 200)
+            workspaces.use(home.id)
+            floor_fixture = intakes.create(
+                client_email="", client_phone="", scope="", budget_text="", preset={},
+                created_by="admin@neptune.ph",
+            )
+            continue
+        ok(f"submit: a budget with {label} is refused with 400", response.status_code == 400)
+        ok(
+            f"submit: a budget with {label} left the intake on issued",
+            intakes.get(floor_fixture.id).state == intakes.ISSUED,
+        )
+
+    # The studio's own door keeps its own rule, and this is the assertion that
+    # says so: the floor is the CLIENT's, and a studio typing two words into
+    # its own pad is quoting for itself and can read what comes back.
+    ok(
+        "the floor is the client door's alone - `_normalise_brief` still accepts "
+        "a short studio brief that `_normalise_scope` would now refuse",
+        main_module._normalise_brief("a") == "a",  # noqa: SLF001
     )
 
     # --- client_email/client_phone are bounded too, not just scope/budget ---
@@ -753,7 +880,7 @@ with TestClient(app) as client:
 
     over_email = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        data={"client_email": LONG_CONTACT, "client_phone": "fine", "scope": "fine", "budget_text": "fine"},
+        data={"client_email": LONG_CONTACT, "client_phone": "fine", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
     )
     ok("submit: an over-length email is refused with 400", over_email.status_code == 400)
     ok(
@@ -769,7 +896,7 @@ with TestClient(app) as client:
 
     over_phone = submit_client.post(
         f"/api/client/{length_fixture.token}/submit",
-        data={"client_email": "fine", "client_phone": LONG_CONTACT, "scope": "fine", "budget_text": "fine"},
+        data={"client_email": "fine", "client_phone": LONG_CONTACT, "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
     )
     ok("submit: an over-length phone number is refused with 400", over_phone.status_code == 400)
     ok(
@@ -801,8 +928,8 @@ with TestClient(app) as client:
         data={
             "client_email": "weird\x07@client.com",
             "client_phone": "09\x0017\x08000",
-            "scope": "fine",
-            "budget_text": "fine",
+            "scope": GOOD_SCOPE,
+            "budget_text": GOOD_BUDGET,
         },
     )
     ok("submit with control characters in the contact fields: still 200", scrubbed.status_code == 200)
@@ -846,7 +973,7 @@ with TestClient(app) as client:
         main_module.intakes.advance = _advance_that_cannot_save
         save_failed = submit_client.post(
             f"/api/client/{save_failure_fixture.token}/submit",
-            data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+            data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
         )
     finally:
         main_module.intakes.advance = _real_advance
@@ -870,7 +997,7 @@ with TestClient(app) as client:
         main_module.intakes.advance = _advance_that_cannot_save_reworded
         save_failed_reworded = submit_client.post(
             f"/api/client/{reworded_fixture.token}/submit",
-            data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+            data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
         )
     finally:
         main_module.intakes.advance = _real_advance
@@ -895,7 +1022,7 @@ with TestClient(app) as client:
     intakes.close(ordinary_refusal_fixture.id, "admin@neptune.ph")
     ordinary_refusal = submit_client.post(
         f"/api/client/{ordinary_refusal_fixture.token}/submit",
-        data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+        data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
     )
     ok(
         "a plain IntakeError (illegal move) still answers the ordinary opaque 404, not 500",
@@ -1238,7 +1365,7 @@ with TestClient(app) as client:
         client_email="", client_phone="", scope="", budget_text="", preset={},
         created_by="admin@neptune.ph",
     )
-    rate_body = {"client_email": "rate@client.com", "scope": "x", "budget_text": "y"}
+    rate_body = {"client_email": "rate@client.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET}
 
     rate_statuses = [
         rate_ip_a.post(f"/api/client/{rate_fixture.token}/submit", data=rate_body).status_code
@@ -1310,7 +1437,7 @@ with TestClient(app) as client:
     )
     under_cap_resp = oversized_client.post(
         f"/api/client/{under_cap_fixture.token}/submit",
-        data={"client_email": "x@y.com", "scope": "fine", "budget_text": "fine"},
+        data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
     )
     ok(
         "a body comfortably inside the cap is unaffected by it - the same address's "
@@ -1340,7 +1467,7 @@ with TestClient(app) as client:
         for eviction_client in eviction_clients:
             eviction_client.post(
                 f"/api/client/{eviction_fixture.token}/submit",
-                data={"scope": "x", "budget_text": "y"},
+                data={"scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
             )
         ok(
             "the rate limiter's dict reached its tracked-key cap rather than growing to one "
