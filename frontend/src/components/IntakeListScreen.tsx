@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { MouseEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import {
   ApiError,
   closeIntake,
   fetchIntakeLink,
   intakeFileUrl,
   listIntakes,
-  openFile,
   relinkIntake,
   sendIntake,
 } from '../lib/api'
@@ -14,7 +13,7 @@ import { formatBytes, formatDate } from '../lib/format'
 import RowMenu from './RowMenu'
 import { useRole } from '../lib/role'
 import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
-import { INLINE_KINDS } from '../types'
+import { openAttachment } from '../lib/openAttachment'
 import type { Intake, IntakeAttachment, IntakeRevision, IntakeState } from '../types'
 
 /**
@@ -403,42 +402,6 @@ function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
   )
 }
 
-/**
- * Fetch one of a client's own files with the session in a header, rather than
- * letting the browser follow the link on its own.
- *
- * The same shape `ProposalView.tsx`'s and `SheetHeader.tsx`'s own `take`
- * helpers already are, copied rather than imported: this file has no
- * dependency on either component, and reaching into one for a six-line
- * closure would be a stranger coupling than repeating it. The href stays
- * real underneath - worth being able to copy or open in a new tab - but a
- * plain navigation cannot carry the `Authorization` header this route needs
- * once accounts are configured, so the click is taken here and the file
- * arrives as a blob, exactly as every other authed file in this app already
- * does.
- *
- * `download` mirrors the server's own `Content-Disposition` choice rather
- * than forcing a save regardless of kind: a raster image opens in a new tab,
- * the same thing `inline` on the response is for, and a document downloads,
- * matching `attachment`. `openFile` never reads the response header itself
- * - it cannot, the header describes bytes already in a blob by the time this
- * runs - so this is a second, independent read of the same fact from the one
- * place the frontend already has it: the manifest's own `kind`.
- */
-function openAttachment(
-  url: string,
-  name: string,
-  download: boolean,
-): (event: MouseEvent<HTMLAnchorElement>) => void {
-  return (event) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
-    event.preventDefault()
-    openFile(url, download ? { download: name } : {}).catch((failure) => {
-      window.alert(failure?.message || 'That file could not be opened.')
-    })
-  }
-}
-
 type AttachmentsProps = {
   intakeId: string
   attachments: IntakeAttachment[]
@@ -503,18 +466,16 @@ function AttachmentsBlock({ intakeId, attachments, closed }: AttachmentsProps) {
             }
             const url = intakeFileUrl(intakeId, file.id)
             // `intakefiles.INLINE_TYPES` is the plan's single source of
-            // truth for the raster allowlist - mirrored once, in
-            // `types.ts`'s `INLINE_KINDS`, and read here rather than
-            // restated as a shape of its own (`kind.startsWith('image/')`
-            // only coincides with the real set today and is exactly the
-            // drift the plan warns about).
-            const isRaster = INLINE_KINDS.has(file.kind)
+            // truth for the raster allowlist. `openAttachment` reads it now
+            // - one statement of inline-vs-download, in `lib/openAttachment`,
+            // for both the screens that open a client's file - so the kind is
+            // handed over rather than the decision.
             return (
               <li key={file.id} className="truncate">
                 <a
                   href={url}
                   className="font-body text-[13px] text-ballpoint underline underline-offset-[3px]"
-                  onClick={openAttachment(url, label, !isRaster)}
+                  onClick={openAttachment(url, label, file.kind)}
                 >
                   {label}
                 </a>{' '}

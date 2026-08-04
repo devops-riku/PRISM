@@ -998,6 +998,11 @@ export default function App() {
               job={creation.job}
               onSubmit={handleSubmit}
               intakeId={intake ? intake.id : ''}
+              // What the client attached, so the pad can say so. Already
+              // priced either way - `create_proposal` loads them from the
+              // intake by id - so this is the screen catching up with what
+              // the server was already doing, not a new input.
+              clientFiles={intake ? intake.attachments : []}
               prefill={
                 intake
                   ? {

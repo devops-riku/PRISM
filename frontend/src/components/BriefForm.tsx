@@ -10,8 +10,11 @@ import type { RailStep } from './StepRail'
 import SubmitTicker, { useElapsed } from './SubmitTicker'
 import JobStrip from './JobStrip'
 import { ACTION, ACTION_PRIMARY, WELL, WELL_TEXTAREA } from './tokens'
-import { groupedInputHandler } from '../lib/format'
+import { formatBytes, groupedInputHandler } from '../lib/format'
+import { intakeFileUrl } from '../lib/api'
+import { openAttachment } from '../lib/openAttachment'
 import type {
+  IntakeAttachment,
   IntakePreset,
   Job,
   PaymentCadence,
@@ -142,6 +145,9 @@ type BriefFormProps = {
   /** The client request this pad was opened from, if any. Sent back to the
    *  server so the resulting quotation is recorded against it. */
   intakeId?: string
+  /** What the client attached to this request, already stored and already
+   *  priced. Empty for a pad that is not answering an intake. */
+  clientFiles?: IntakeAttachment[]
   /** The client's own words and the studio's own preset, seeded into the form
    *  once. Absent when the pad was opened on its own rather than from a
    *  request. */
@@ -154,6 +160,7 @@ export default function BriefForm({
   job,
   onSubmit,
   intakeId = '',
+  clientFiles = [],
   prefill,
 }: BriefFormProps) {
   // What this pad opens on. Only the first render's value is ever used - that
@@ -552,8 +559,61 @@ export default function BriefForm({
                 </p>
               ) : null}
 
+              {/* What the client already sent, above the studio's own picker
+                  and deliberately not inside it.
+
+                  These files were reaching the model before this block existed
+                  - `create_proposal` loads them from the intake by id and
+                  merges them with whatever the pad uploads. So the pad was
+                  already pricing them and simply did not say so, which reads
+                  as "nothing attached" on the one screen where that is the
+                  question being asked.
+
+                  READ-ONLY, and that is not a simplification. The server
+                  fetches them from the intake regardless of what this form
+                  sends, so a picker that let a studio re-add them would price
+                  the same file twice, and one that let them be removed would
+                  promise something the server does not honour. They are shown,
+                  and they are opened; they are not edited here. Closing the
+                  request is what removes them. */}
+              {clientFiles.length > 0 ? (
+                <div className="mt-3">
+                  <FieldLabel htmlFor="client-attachments">From the client</FieldLabel>
+                  <ul
+                    id="client-attachments"
+                    className="mt-1.5 flex flex-col gap-1 rounded-lg border border-rule bg-duplicate px-3 py-2.5"
+                  >
+                    {clientFiles.map((file) => (
+                      <li key={file.id} className="truncate font-body text-[13px] text-body">
+                        <a
+                          href={intakeFileUrl(intakeId, file.id)}
+                          onClick={openAttachment(
+                            intakeFileUrl(intakeId, file.id),
+                            file.name || 'Attachment',
+                            file.kind,
+                          )}
+                          className="underline decoration-rule underline-offset-2 hover:decoration-ballpoint"
+                        >
+                          {file.name || 'Attachment'}
+                        </a>{' '}
+                        <span className="font-label text-[12px] uppercase tracking-[0.14em] tabular-nums text-void">
+                          {formatBytes(file.bytes)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 font-body text-[13px] leading-[1.6] text-void">
+                    {clientFiles.length === 1 ? 'This file is' : 'These files are'} already read into
+                    the quotation. Anything you add below is read alongside{' '}
+                    {clientFiles.length === 1 ? 'it' : 'them'}.
+                  </p>
+                </div>
+              ) : null}
+
               <div className="mt-3">
-                <FieldLabel htmlFor="images">Reference material</FieldLabel>
+                <FieldLabel htmlFor="images">
+                  {clientFiles.length > 0 ? 'Your own reference material' : 'Reference material'}
+                </FieldLabel>
                 <ImageDropzone id="images" onChange={handleImages} disabled={pending} />
                 <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
                   Screenshots, or the client&rsquo;s own scope as a PDF, Word or Excel file &mdash;
