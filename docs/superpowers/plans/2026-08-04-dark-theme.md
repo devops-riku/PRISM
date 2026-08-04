@@ -823,9 +823,11 @@ export function readTheme(): Theme {
 /** Apply and remember.
  *
  *  The attribute is REMOVED rather than set to 'dark', so the default is the
- *  absence of a choice: the CSS carries one selector instead of two, and an
- *  install that has never touched this is in exactly the same state as one
- *  that switched to light and back. */
+ *  absence of a choice: the CSS carries one selector instead of two. An
+ *  install that has never touched this RENDERS the same as one that switched
+ *  to light and back - which is what makes removing it safe. They are not
+ *  indistinguishable, only equivalent on screen: raw storage can still tell
+ *  them apart. */
 export function applyTheme(theme: Theme): void {
   const root = document.documentElement
   if (theme === 'light') root.setAttribute('data-theme', 'light')
@@ -840,7 +842,21 @@ export function applyTheme(theme: Theme): void {
 }
 
 export function toggleTheme(): Theme {
-  const next: Theme = readTheme() === 'light' ? 'dark' : 'light'
+  // The DOM, not storage. `applyTheme` sets the attribute OUTSIDE its
+  // try/catch, so the attribute is correct even when the write that follows
+  // it fails - and on a browser where writes never persist (Safari's private
+  // mode, a locked profile: the cases `readTheme` goes to trouble to survive)
+  // asking storage what the current theme is returns the pre-failure answer
+  // for ever, and this button stops doing anything after one press. The label
+  // freezes and the click does nothing: a dead control, which is worse than a
+  // wrong colour.
+  //
+  // An earlier draft of this module read `readTheme()` here, which defeated
+  // its own storage-failure handling by trusting storage for the one question
+  // it already knew the answer to.
+  const current: Theme =
+    document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+  const next: Theme = current === 'light' ? 'dark' : 'light'
   applyTheme(next)
   return next
 }
