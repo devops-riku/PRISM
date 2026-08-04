@@ -597,7 +597,7 @@ export default function DesignEditor({ design, studioName, onChange }: DesignEdi
             value={look.cover}
             options={COVERS}
             onChange={(cover) => set({ cover })}
-            note="Print view only. The PDF keeps its own cover."
+            note="Applies to the print view and the PDF."
           />
           <Segmented
             label="Margins"

@@ -215,6 +215,20 @@
      above is a bonus on the browsers that still take it, never the thing
      legibility depends on. */
 
+  /* The viewport itself, on every screen but the quotation. See `pinned` in
+     App.tsx for what this is actually stopping: a Headless UI dropdown renders
+     into a portal at the end of <body>, so it is a sibling of the pinned shell
+     rather than a child, and `overflow-hidden` on that shell cannot contain
+     it. An absolutely positioned sibling still grows the document.
+
+     On <html> AND <body>, because `overflow` on the root propagates to the
+     viewport only while the body has not declared its own - naming both is
+     what makes the rule independent of that. */
+  html[data-pinned],
+  html[data-pinned] body {
+    overflow: hidden;
+  }
+
   body {
     background-color: var(--color-canvas);
     color: var(--color-body);

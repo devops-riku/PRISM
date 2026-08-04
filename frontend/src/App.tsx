@@ -473,6 +473,34 @@ export default function App() {
   // Where the reader is right now, readable from inside a job callback that was
   // created a minute and a half ago. A finished job must not drag someone off
   // the page they walked to while it ran.
+  // Every screen but the quotation is pinned to the viewport - its shell is
+  // `h-dvh overflow-hidden` and only a panel inside it scrolls. That was not
+  // enough, and the reason is worth writing down because the class names look
+  // like it should be.
+  //
+  // `overflow-hidden` on the shell contains the shell's own CHILDREN. The
+  // dropdowns on these screens are Headless UI anchored panels, and an anchored
+  // panel renders into a portal at the end of <body> - a SIBLING of the shell,
+  // positioned absolutely. An absolutely positioned element contributes to the
+  // document's scrollable overflow no matter what its siblings clip, so a
+  // dropdown near the bottom of a long form made the page itself taller than
+  // the window and put a second scrollbar down the edge of a screen that is
+  // supposed to have none.
+  //
+  // Measured: portal absolute -> document 1080 against a 702 viewport; the same
+  // portal contained -> 702, no bar. Clamping the root is the fix that does not
+  // touch how the panels position themselves.
+  //
+  // The quotation route is deliberately excluded: it is a document somebody
+  // reads top to bottom and the page is meant to scroll.
+  const pinned = route !== 'quotation'
+  useEffect(() => {
+    const root = document.documentElement
+    if (pinned) root.setAttribute('data-pinned', '')
+    else root.removeAttribute('data-pinned')
+    return () => root.removeAttribute('data-pinned')
+  }, [pinned])
+
   const routeNow = useRef(route)
   routeNow.current = route
   // Which quotation asked for the revision that is currently running.

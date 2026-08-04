@@ -30,7 +30,7 @@ from functools import lru_cache
 from typing import List, NamedTuple, Sequence
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -394,7 +394,67 @@ def _table_flowable(rows: List[List[str]], width: float, sheet: Sheet) -> Table:
     return table
 
 
-def _flowables(markdown_text: str, width: float, sheet: Sheet, *, cover_break: bool = False) -> list:
+def _cover_styles(sheet: Sheet, cover: str) -> dict:
+    """The cover page's own styles, for the three looks the design offers.
+
+    Only the cover: past the first rule the document reads the same in all
+    three, which is why these are built here rather than folded into
+    `_stylesheet`. Mirrors `html._overrides` rule for rule - a studio choosing
+    "banner", seeing one in the print view and none in the PDF, is the bug this
+    exists to close.
+    """
+    base = sheet.styles
+    if cover == "banner":
+        return {
+            "title": ParagraphStyle(
+                "cover-title-banner", parent=base["title"],
+                textColor=colors.white, alignment=TA_LEFT, spaceAfter=0,
+            ),
+            "h3": ParagraphStyle("cover-h3-banner", parent=base["h3"], alignment=TA_LEFT),
+            "body": ParagraphStyle("cover-body-banner", parent=base["body"], alignment=TA_LEFT),
+        }
+    if cover == "left":
+        return {
+            "title": ParagraphStyle("cover-title-left", parent=base["title"], alignment=TA_LEFT),
+            "h3": ParagraphStyle("cover-h3-left", parent=base["h3"], alignment=TA_LEFT),
+            "body": ParagraphStyle("cover-body-left", parent=base["body"], alignment=TA_LEFT),
+        }
+    return {
+        "title": ParagraphStyle("cover-title-centre", parent=base["title"], alignment=TA_CENTER),
+        "h3": ParagraphStyle("cover-h3-centre", parent=base["h3"], alignment=TA_CENTER),
+        "body": ParagraphStyle("cover-body-centre", parent=base["body"], alignment=TA_CENTER),
+    }
+
+
+def _banner(text: str, width: float, sheet: Sheet, style: ParagraphStyle):
+    """The banner cover's title: type on a filled accent block.
+
+    A one-cell table rather than a custom Flowable, because a table already
+    knows how to fill its own background and wrap a Paragraph inside padding.
+    The padding is the HTML's own `34mm 12mm`, in this renderer's units.
+    """
+    return Table(
+        [[Paragraph(text, style)]],
+        colWidths=[width],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), sheet.accent),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12 * mm),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12 * mm),
+            ("TOPPADDING", (0, 0), (-1, -1), 30 * mm),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 30 * mm),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]),
+    )
+
+
+def _flowables(
+    markdown_text: str,
+    width: float,
+    sheet: Sheet,
+    *,
+    cover_break: bool = False,
+    cover: str = "centred",
+) -> list:
     """Translate a whole document into flowables.
 
     `cover_break` turns the FIRST horizontal rule into a page break. The
@@ -406,8 +466,15 @@ def _flowables(markdown_text: str, width: float, sheet: Sheet, *, cover_break: b
     lines = str(markdown_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     flow: list = []
     index = 0
+    #: True only while the cover page is being built, and turned off by the
+    #: same rule that ends it, so nothing past the cover is styled as one.
+    on_cover = cover_break
+    cover_styles = _cover_styles(sheet, cover)
 
-    if cover_break:
+    # The banner starts at the top of the page and carries its own offset, so
+    # it must not also be pushed down - the same thing `html._overrides` says
+    # as `margin-top:0`.
+    if cover_break and cover != "banner":
         flow.append(Spacer(1, 58 * mm))
 
     while index < len(lines):
@@ -438,7 +505,12 @@ def _flowables(markdown_text: str, width: float, sheet: Sheet, *, cover_break: b
             level = len(heading.group(1))
             text = _inline(heading.group(2), sheet.money)
             key = {1: "title", 2: "h2", 3: "h3"}.get(level, "h4")
-            flow.append(Paragraph(text, sheet.styles[key]))
+            if on_cover and key == "title" and cover == "banner":
+                flow.append(_banner(text, width, sheet, cover_styles["title"]))
+            elif on_cover and key in cover_styles:
+                flow.append(Paragraph(text, cover_styles[key]))
+            else:
+                flow.append(Paragraph(text, sheet.styles[key]))
             index += 1
             continue
 
@@ -451,6 +523,7 @@ def _flowables(markdown_text: str, width: float, sheet: Sheet, *, cover_break: b
             if cover_break:
                 flow.append(PageBreak())
                 cover_break = False
+                on_cover = False
             else:
                 flow.append(Spacer(1, 8))
             index += 1
@@ -498,7 +571,12 @@ def _flowables(markdown_text: str, width: float, sheet: Sheet, *, cover_break: b
                 break
             paragraph.append(nxt)
             index += 1
-        flow.append(Paragraph(_inline(" ".join(paragraph), sheet.money), sheet.styles["body"]))
+        # The cover's own paragraphs follow its alignment too - "For <client>"
+        # and "Prepared by <studio>" sit under the title and would read as
+        # a mistake left-aligned beneath a centred one. `html._overrides`
+        # centres `.doc--cover>p` for exactly this.
+        style = cover_styles["body"] if on_cover else sheet.styles["body"]
+        flow.append(Paragraph(_inline(" ".join(paragraph), sheet.money), style))
 
     return flow
 
@@ -664,7 +742,9 @@ def render_pdf(
         ]
     )
 
-    story = _flowables(markdown_text, doc.width, sheet, cover_break=cover_break)
+    story = _flowables(
+        markdown_text, doc.width, sheet, cover_break=cover_break, cover=look.cover
+    )
     if not story:
         story = [Paragraph("This document is empty.", sheet.styles["body"])]
 
