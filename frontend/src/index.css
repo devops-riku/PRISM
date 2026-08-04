@@ -659,12 +659,16 @@
      exactly as it did before the app went dark, because the utilities never
      changed - only the values the variables hold.
 
-     Four places use it: the document body (`MarkdownView`, which both the
-     quotation and the proposal render through), `ClientShell`'s two roots,
-     and `DesignEditor`'s preview sheet. Three of those are the same argument -
-     this is what the client receives, so it should look like what the client
-     receives - and the fourth is a picture of a printed page, which a dark
-     preview would not preview.
+     THREE places use it: `ClientShell`'s two roots and `DesignEditor`'s
+     preview sheet. The first two are one argument - this is what the client
+     receives, so it should look like what the client receives - and the third
+     is a picture of a printed page, which a dark preview would not preview.
+
+     It was four. The document body (`MarkdownView`) carried this too, on the
+     same "show what the client receives" reasoning, until the studio asked
+     for the on-screen document to follow the app instead. That file's own
+     comment records the trade; this line records that the count moved, because
+     a stale "four" is how the next reader concludes a call site went missing.
 
      IT PAINTS ITS OWN PAPER as well as setting the variables, so a sheet
      dropped into a dark card renders as paper on a mount rather than as dark
@@ -689,32 +693,58 @@
      */
   html[data-theme='light'],
   .sheet-light {
-    --color-canvas: #f4f1ea;
-    --color-paper: #fffdf8;
-    --color-duplicate: #ede5d5;
-    --color-rule: #ded3be;
-    --color-hairline: #eae2d2;
-    --color-ink: #343148;
-    --color-body: #413e55;
-    --color-void: #5a5670;
-    --color-faint: #6e6a82;
-    --color-ballpoint: #343148;
-    --color-accent-deep: #252338;
-    --color-accent-soft: #d7c49e;
-    --color-alert: #a8443a;
-    --color-alert-soft: #fcf4f2;
+    /* ASH AND WHITE, and the warm sand this replaced is worth naming so nobody
+       reintroduces it as a "fix": canvas was `#f4f1ea`, paper `#fffdf8`, and
+       the accent was `#d7c49e` sand under `#343148` indigo ink. The studio
+       asked for neutral. Every value below is on the grey axis - equal-ish R,
+       G and B - except the alert pair, which stays warm on purpose (see
+       there).
+
+       THE ACCENT IS THE INK, deliberately: `--color-ballpoint` and
+       `--color-ink` are the same `#16161a`. That is what monochrome means
+       here - a primary button is black with white type on it, not a coloured
+       button. It also means the accent no longer separates an action from a
+       heading BY HUE, so anything that relied on the accent alone to say
+       "this is clickable" now has to say it with weight, underline or
+       position. The dark theme is unaffected: there the accent is still
+       violet and still the one action colour.
+
+       `--color-accent-deep` is the hover and it is pure `#000000`, the one
+       direction left to go when the resting state is already near-black. */
+    --color-canvas: #f6f6f7;
+    --color-paper: #ffffff;
+    --color-duplicate: #efeff1;
+    --color-rule: #dcdce0;
+    --color-hairline: #e9e9ec;
+    --color-ink: #16161a;
+    --color-body: #35353c;
+    --color-void: #56565f;
+    --color-faint: #6e6e78;
+    --color-ballpoint: #16161a;
+    --color-accent-deep: #000000;
+    --color-accent-soft: #eaeaee;
+
+    /* The two warm values in an otherwise grey block, and that is the point:
+       an alert says something is wrong, and in a monochrome palette there is
+       no other channel left to say it with. Greying these would make a
+       failure look like a caption. */
+    --color-alert: #a8342a;
+    --color-alert-soft: #fdf3f2;
 
     /* NOT `--color-rule`, for the same reason the dark one is not: a hairline
        and a findable input edge are different jobs and one value cannot be
-       quiet enough for both. `#ded3be` - the same hex as `--color-rule` - was
-       specified here first and measures 1.46 against paper. Measured 3.70 and
-       3.33 against light paper and light canvas.
+       quiet enough for both. An input edge is a control you have to locate,
+       so WCAG asks 3:1 of it, and it has to clear that against every ground
+       an input actually sits on - paper, canvas AND the duplicate fill that
+       wells use. `#86868e` is the lightest grey that does: 3.61 on paper,
+       3.34 on canvas, 3.15 on a well. Anything lighter passes on paper and
+       quietly fails inside a well.
 
-       Worth separating: the light theme's inputs were bordered at 1.46 long
-       before the dark theme existed. This is not a regression that was fixed,
-       it is a gap the contrast gate found the first time anything measured
-       it. */
-    --well-border: #8c836e;
+       Worth separating, since it is easy to misread as a regression: light
+       inputs were bordered at 1.46 long before the dark theme existed - the
+       same hex as `--color-rule`. That was a gap the contrast gate found the
+       first time anything measured it, not something this branch broke. */
+    --well-border: #86868e;
 
     color-scheme: light;
     background-color: var(--color-paper);
@@ -785,6 +815,29 @@
     background-repeat: no-repeat;
     background-position: right 0.8rem center;
     background-size: 10px 6px;
+  }
+
+  /* The same arrow, stroked for a light ground, and the duplicated path is a
+     known cost rather than an oversight.
+
+     A data-URI cannot read a custom property, so the stroke above is baked -
+     `#A6A3BC` is the DARK `--color-void`, and on white it measures 2.45
+     against the 3:1 a control you have to find is held to. It was 2.41 on the
+     old sand paper, so this is a long-standing light-mode bug rather than
+     anything the ash palette introduced; it is fixed here because light mode
+     is now a shipping theme rather than a document island.
+
+     Why not one rule with a mask: `mask-image` masks the WHOLE element, so an
+     arrow-shaped mask on a `select` takes its text with it. Why not a
+     wrapper with `::after`: a replaced element needs a real extra span at
+     every call site, which is a bigger change than a duplicated path.
+
+     So: two copies, and they must move together. `%2356565F` is the LIGHT
+     `--color-void` (7.26 on paper); the copy above is the dark one (7.17).
+     Change one, change both. */
+  html[data-theme='light'] select.well,
+  .sheet-light select.well {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2356565F' stroke-width='1.6'/%3E%3C/svg%3E");
   }
 
   /* ── The brief field ──────────────────────────────────────────────────
@@ -1192,8 +1245,11 @@
          pinned to light on a dark ground. That value is already measured
          elsewhere in this file at 5.27 on paper / 5.77 on canvas, so the box
          itself stays comfortably findable. A checked box still reachable
-         inside `ClientShell` or a design preview keeps the light ground and
-         the 12.32.
+         inside `ClientShell` or a design preview keeps the light ground, now
+         at 17.77 - it read 12.32 when the light accent was the `#343148`
+         indigo, and the ash palette made the tick's ground near-black, so the
+         number went UP. Recorded because a figure in a comment is only true
+         about the palette it was measured against.
 
          Against the dark violet fill this tick measures 3.28 - clears the
          3:1 floor a graphical control needs, so left as is. Among the values
