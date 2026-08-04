@@ -158,7 +158,12 @@ export default function ProposalView({ documentId }: ProposalViewProps) {
             <dt className={MONO_LABEL}>The figures</dt>
             <dd className="mt-1 font-body text-[13px] leading-[1.6] text-void">
               Printed from{' '}
-              <a href={`#/q/${document.quotation_id}`} className="text-ballpoint">
+              {/* `underline` is not decoration here. This is an inline link in
+                  a run of prose, and in light mode the accent is the ink, so
+                  colour alone no longer separates it from the sentence around
+                  it. The underline is the non-colour cue that keeps it a link
+                  in both palettes. */}
+              <a href={`#/q/${document.quotation_id}`} className="text-ballpoint underline">
                 {document.quotation_ref || document.quotation_id}
               </a>
               , not restated.
