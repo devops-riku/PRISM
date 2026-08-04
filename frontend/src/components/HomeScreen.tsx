@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { listJobs } from '../lib/api'
 import { useRole } from '../lib/role'
@@ -145,6 +145,34 @@ export default function HomeScreen() {
     pill.current?.querySelector<HTMLElement>(`[data-tab="${next}"]`)?.focus()
   }
 
+  // Where the thumb sits, measured rather than assumed - see `.pill__thumb`
+  // in index.css for why a CSS-only version does not survive two labels of
+  // different length.
+  //
+  // `useLayoutEffect`, so the values are written before the browser paints and
+  // the thumb is never seen at 0 width on first render. Re-measured on resize
+  // AND after webfonts land: label widths change when Figtree replaces the
+  // fallback, and a thumb measured against the fallback is wrong from then on.
+  useLayoutEffect(() => {
+    const root = pill.current
+    if (!root) return
+    const place = () => {
+      const seat = root.querySelector<HTMLElement>(`[data-tab="${side}"]`)
+      if (!seat) return
+      root.style.setProperty('--thumb-x', `${seat.offsetLeft}px`)
+      root.style.setProperty('--thumb-w', `${seat.offsetWidth}px`)
+    }
+    place()
+    const observer = new ResizeObserver(place)
+    observer.observe(root)
+    let live = true
+    document.fonts?.ready.then(() => live && place()).catch(() => {})
+    return () => {
+      live = false
+      observer.disconnect()
+    }
+  }, [side])
+
   useEffect(() => {
     let live = true
     listJobs()
@@ -182,7 +210,19 @@ export default function HomeScreen() {
         </div>
 
         <div className="mt-10 mb-6 flex justify-center">
-          <div ref={pill} className="pill" role="tablist" aria-label="Whose work" onKeyDown={moveSide}>
+          <div
+            ref={pill}
+            className="pill"
+            data-side={side}
+            role="tablist"
+            aria-label="Whose work"
+            onKeyDown={moveSide}
+          >
+            {/* The white stop, as one element that slides between the two
+                seats. Decorative and hidden from assistive tech: which side is
+                chosen is already said by `aria-selected` on the tabs, and a
+                second announcement of the same fact is noise. */}
+            <span aria-hidden="true" className="pill__thumb" />
             {SIDES.map(([id, label]) => (
               <button
                 key={id}
@@ -209,7 +249,18 @@ export default function HomeScreen() {
             subtree. The panel role and its dynamic label live on this
             wrapping div instead, leaving <nav> underneath with its native
             landmark role and its own static label intact. */}
-        <div id="home-panel" role="tabpanel" aria-labelledby={`home-tab-${side}`}>
+        {/* Keyed on the side, so React remounts it and `.step-panel`'s rise
+            runs once per switch - the same class and the same reasoning the
+            pad's own steps use, rather than a second animation that means the
+            same thing. The cards under it are what actually changed; the thumb
+            above says which way, and this says something arrived. */}
+        <div
+          key={side}
+          id="home-panel"
+          role="tabpanel"
+          aria-labelledby={`home-tab-${side}`}
+          className="step-panel"
+        >
           <nav
             aria-label="Where to go"
             className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"

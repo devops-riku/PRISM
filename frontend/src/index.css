@@ -389,8 +389,16 @@
   }
 
   /* A two-way switch, not a nav. Used where one screen answers the same
-     question for two different audiences. */
+     question for two different audiences.
+
+     The white stop is ONE element that slides, not a background painted onto
+     whichever tab is on. Cross-fading two backgrounds reads as a flash - both
+     stops are briefly half-lit and nothing appears to have moved - where a
+     single object travelling between two seats is the thing a switch actually
+     is. It also means the shadow moves with it instead of being raised and
+     dropped in place. */
   .pill {
+    position: relative;
     display: inline-flex;
     gap: 2px;
     padding: 3px;
@@ -399,25 +407,61 @@
     border: 1px solid var(--color-rule);
   }
 
+  /* Placed from the seat it is sitting in, not from a fraction of the pill.
+     The obvious version - equal halves and `translateX(100%)` - does not
+     survive contact with the labels: "For You" and "For Client" are different
+     widths, and `flex: 1 1 0` will not equalise them because a flex item's
+     default `min-width: auto` refuses to shrink below its own text. Measured
+     6px of overhang on both seats. So `HomeScreen` reads the chosen tab's
+     `offsetLeft`/`offsetWidth` and writes them here, which is also what lets
+     the labels change - or be translated - without this file knowing. */
+  .pill__thumb {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 0;
+    width: var(--thumb-w, 0);
+    transform: translateX(var(--thumb-x, 0));
+    border-radius: var(--radius-pill);
+    background-color: var(--color-paper);
+    box-shadow: var(--shadow-sheet);
+    /* Under the labels. Without this the thumb paints over the text it is
+       supposed to sit behind. */
+    z-index: 0;
+  }
+
   .pill__tab {
+    position: relative;
+    z-index: 1;
     padding: 0.45rem 1.1rem;
     border-radius: var(--radius-pill);
     font-family: var(--font-label);
     font-size: 13px;
     color: var(--color-void);
+    white-space: nowrap;
     cursor: pointer;
     /* .15s ease, not --ease-press: that curve is reserved for the kit's four
        keyframe moments and the thread's width. This is a plain colour swap,
        the same kind .well and .action-primary already run on .15s ease. */
-    transition:
-      background-color 0.15s ease,
-      color 0.15s ease;
+    transition: color 0.15s ease;
   }
 
   .pill__tab--on {
-    background-color: var(--color-paper);
     color: var(--color-ink);
-    box-shadow: var(--shadow-sheet);
+  }
+
+  /* Movement is opt-in, the way DESIGN.md asks. With reduced motion the thumb
+     is still in the right seat on every render - it simply arrives there
+     without travelling, which is the outcome, not a degraded version of it. */
+  @media (prefers-reduced-motion: no-preference) {
+    .pill__thumb {
+      /* Width as well as position, because the two seats are not the same
+         size. Transform alone would slide a "For You"-sized thumb under
+         "For Client" and leave it short. */
+      transition:
+        transform 0.22s ease,
+        width 0.22s ease;
+    }
   }
 
   /* ── Heading type ─────────────────────────────────────────────────────
