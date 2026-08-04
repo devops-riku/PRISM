@@ -9,7 +9,7 @@ import DesignEditor from './DesignEditor'
 import Dropdown from './Dropdown'
 import PolicyEditor from './PolicyEditor'
 import TemplateEditor from './TemplateEditor'
-import { ACTION, ACTION_PRIMARY, DISPLAY, MONO_LABEL, WELL } from './tokens'
+import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
 
 const UNITS = ['hour', 'day', 'week', 'month', 'item', 'lump_sum'] as const
 
@@ -99,7 +99,11 @@ function Section({ id, title, blurb, children, last = false, wide = false }: Sec
     <section
       id={`set-${id}`}
       aria-labelledby={`set-${id}-title`}
-      className={`grid scroll-mt-6 grid-cols-1 gap-x-8 gap-y-4 px-5 py-6 sm:px-7 ${
+      // sm:px-6, matching the header/footer bars above and below this
+      // scrolling column — px-5 py-6 sm:px-6 stays the shared horizontal
+      // edge for the whole card now; py-6 is this section's own content
+      // rhythm and is untouched.
+      className={`grid scroll-mt-6 grid-cols-1 gap-x-8 gap-y-4 px-5 py-6 sm:px-6 ${
         // A few sections carry an editor that needs the whole width - a table, a
         // page preview. For those the label sits above rather than beside, since
         // squeezing a preview into two thirds of a column to keep a heading
@@ -414,8 +418,12 @@ export default function SettingsPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <section className="flex min-h-0 flex-1 flex-col overflow-clip rounded-[22px] border border-rule bg-paper shadow-sheet">
-        <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-4 sm:px-7">
+      {/* rounded-xl via the CARD token, and px-5 py-3 … sm:px-6 below on the
+          header/footer bars — the same panel spec every list screen beside
+          this one in the nav uses. This card used to be rounded-[22px] with
+          px-5 py-4 … sm:px-7 throughout, built to its own spec. */}
+      <section className={`flex min-h-0 flex-1 flex-col overflow-clip ${CARD}`}>
+        <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 sm:px-6">
           <div>
             <h2 className={`${DISPLAY} text-[20px]`}>Settings</h2>
             <p className="mt-1 font-body text-[13.5px] text-faint">
@@ -957,7 +965,7 @@ export default function SettingsPanel() {
             {savingError ? (
               <p
                 role="alert"
-                className="shrink-0 border-t border-rule px-5 py-3 font-body text-[15px] text-alert sm:px-7"
+                className="shrink-0 border-t border-rule px-5 py-3 font-body text-[15px] text-alert sm:px-6"
               >
                 {savingError}
               </p>
@@ -965,7 +973,7 @@ export default function SettingsPanel() {
 
             {/* Save stays on screen. A button you have to scroll to find is a
                 button people stop pressing. */}
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-4 border-t border-rule px-5 py-3 sm:px-7">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-4 border-t border-rule px-5 py-3 sm:px-6">
               <p aria-live="polite" className="font-label text-[12px] text-void">
                 {dirty ? 'Changes are not saved yet' : savedAt ? `Saved at ${savedAt}` : ''}
               </p>
@@ -975,7 +983,7 @@ export default function SettingsPanel() {
             </div>
           </form>
         ) : (
-          <p className="px-5 py-8 text-center font-label text-[12px] uppercase tracking-[0.14em] text-void sm:px-7">
+          <p className="px-5 py-8 text-center font-label text-[12px] uppercase tracking-[0.14em] text-void sm:px-6">
             Reading defaults
           </p>
         )}
