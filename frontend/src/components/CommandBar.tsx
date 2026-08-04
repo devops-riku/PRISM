@@ -228,7 +228,18 @@ export default function CommandBar() {
                     index === cursor ? 'bg-accent-soft' : ''
                   }`}
                 >
-                  <span className="w-[74px] shrink-0 font-label text-[11px] uppercase tracking-[0.12em] text-faint">
+                  {/* 84px, and `whitespace-nowrap` regardless.
+                      Measured in the real Instrument Sans at 11px with this
+                      tracking: QUOTATION is 75.5px, PROPOSAL 70.2, GO TO 41.1.
+                      The column was 74 - a pixel and a half short of the
+                      longest of the three, so the widest label broke to
+                      "QUOTATIO / N" and took the row's height with it.
+                      The fixed width is what lines the titles up, so it stays
+                      fixed rather than becoming `min-w`; `nowrap` is the belt
+                      to its braces, so a label added later overflows visibly
+                      instead of silently wrapping and misaligning every row
+                      after it. */}
+                  <span className="w-[84px] shrink-0 whitespace-nowrap font-label text-[11px] uppercase tracking-[0.12em] text-faint">
                     {item.kind}
                   </span>
                   <span className="min-w-0 flex-1">
