@@ -322,7 +322,7 @@ export default function HomeScreen() {
             </span>
             <span
               className={`mt-2 block font-label text-[12px] font-medium uppercase tracking-[0.14em] ${
-                running ? 'text-paper/80' : 'text-faint'
+                running ? 'text-ballpoint' : 'text-faint'
               }`}
             >
               Being prepared
