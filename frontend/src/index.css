@@ -429,17 +429,21 @@
 }
 
 @layer components {
-  /* The wash behind the hero. One radial, anchored to the top centre and gone
-     by 70% of the way down, in the accent at 7% strength.
+  /* The lighting behind every page. TWO SOURCES, not one: a broad key light
+     from the top centre and a weaker fill offset to one side. One flat radial
+     is what made this read as dull - a single symmetrical wash centred on the
+     page is close enough to no gradient at all, because nothing in it implies
+     a direction. Two sources at different positions and strengths is the
+     cheapest thing that makes a flat surface look lit.
 
-     IT IS A DARK-MODE DEVICE, and light mode switches it off rather than
-     softening it. The glow existed to lift a near-black page where a violet
-     accent at 12% read as atmosphere. Two things changed: the accent became
-     near-white, so the same 12% is a milky haze rather than a tint - hence
-     7% - and in light mode the accent became near-BLACK, which paints a grey
-     smudge across the top of a white page. That does not read as depth, it
-     reads as a rendering fault, and there is no percentage of it that reads
-     as anything else. So the light override is `none`.
+     BOTH THEMES NOW, and light mode is not the dark one softened. The rule
+     is that the key light must be BRIGHTER than the ground it sits on, which
+     means it is the accent in dark and near-white in light. Getting that
+     backwards is what the previous version did: it painted the light theme's
+     near-black accent across the top of a cream page, which reads as a smudge
+     rather than as depth, so the override was switched off entirely rather
+     than fixed. `#fff` on `#faf7f2` is only a couple of percent of lift, and
+     a couple of percent is all a lit surface needs.
 
      On the SHELL rather than on `body`, because a gradient on `body` is
      painted behind the whole document, and most of these shells are fixed
@@ -451,19 +455,46 @@
      them - the quotation route's glow is meant to scroll away with the top
      of the page, not stay pinned to it. */
   .page-glow {
-    background-image: radial-gradient(
-      ellipse 90% 55% at 50% 0%,
-      color-mix(in oklab, var(--color-ballpoint) 7%, transparent),
-      transparent 70%
-    );
+    background-image:
+      radial-gradient(
+        ellipse 82% 48% at 50% -6%,
+        color-mix(in oklab, var(--color-ballpoint) 11%, transparent),
+        transparent 66%
+      ),
+      radial-gradient(
+        ellipse 58% 42% at 88% 2%,
+        color-mix(in oklab, var(--color-ink) 6%, transparent),
+        transparent 60%
+      );
     background-repeat: no-repeat;
   }
 
-  /* Not `.sheet-light` here, deliberately: this is page furniture, and the
-     only element carrying `page-glow` is a shell. A sheet dropped into a dark
-     app should not switch the shell's wash off underneath it. */
-  html[data-theme='light'] .page-glow {
-    background-image: none;
+  /* The light theme's own two sources. `#fff` for the key rather than a token,
+     because there is no token brighter than `--color-paper` and the whole job
+     of this layer is to be brighter than the surface under it. The fill keeps
+     the accent, at half the dark theme's strength - olive on cream is a warmer
+     and more visible tint than olive on near-black, so the same number would
+     be twice as loud.
+
+     The second selector is COMPOUND - `.sheet-light.page-glow`, both classes
+     on one element - and the distinction matters. A descendant selector would
+     mean "any glow inside a light sheet", which would let a paper sheet
+     relight the dark shell it was dropped into. This means "an element that
+     is itself both", which is exactly `ClientShell`'s two roots: they are
+     always paper regardless of what the visitor's browser has stored, so
+     without this a client who had once chosen dark would get the dark theme's
+     key light - the accent at 11% - painted across a cream page. That is the
+     same smudge this whole comment is about, arriving by the one route the
+     attribute selector cannot see. */
+  html[data-theme='light'] .page-glow,
+  .sheet-light.page-glow {
+    background-image:
+      radial-gradient(ellipse 82% 48% at 50% -6%, rgb(255 255 255 / 0.9), transparent 64%),
+      radial-gradient(
+        ellipse 58% 42% at 88% 2%,
+        color-mix(in oklab, var(--color-ballpoint) 5%, transparent),
+        transparent 58%
+      );
   }
 
   /* ── The route announcer's landing point ─────────────────────────────
@@ -1581,9 +1612,26 @@
        makes its last row wait 900ms, which stops reading as choreography and
        starts reading as the app being slow - the opposite of what motion is
        here to say. Past the sixth item everything lands together, and nobody
-       has ever noticed. */
+       has ever noticed.
+
+       `backwards`, NOT `both`, and this one is a correctness fix rather than a
+       preference. The other rules in this block animate elements that are
+       nothing but the animation; this one lands on cards and rows that also
+       have a resting style, a hover style and sometimes an opacity of their
+       own - and a filled-FORWARDS animation keeps applying its last keyframe
+       for the life of the element, above every ordinary declaration in the
+       cascade. With `both`, `opacity: 1` and `translateY(0)` were pinned
+       permanently: a closed request row lost its `opacity-60` the instant its
+       arrival finished, and `.lift:hover` below could not move a card that
+       had already risen. Measured in Chromium, not reasoned about - the hover
+       transform read `matrix(1, 0, 0, 1, 0, 0)` before and after.
+
+       `backwards` fills only the delay, which is the half the stagger needs:
+       a row waiting its turn is hidden, and once it has landed it is an
+       ordinary element again. The `to` keyframe is the resting state anyway,
+       so nothing moves at the hand-off. */
     .rise-in {
-      animation: ck-rise 300ms var(--ease-press) both;
+      animation: ck-rise 300ms var(--ease-press) backwards;
       animation-delay: min(calc(var(--i, 0) * 45ms), 240ms);
     }
 

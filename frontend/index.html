@@ -36,15 +36,24 @@
     -->
     <script>
       ;(function () {
+        // LIGHT UNLESS DARK WAS CHOSEN. The default flipped; the attribute's
+        // meaning did not - `data-theme='light'` is still light, because that
+        // is the same selector `.sheet-light` shares in index.css. So the
+        // common case now WRITES the attribute rather than omitting it, and
+        // this script is load-bearing rather than a nicety: if it never runs,
+        // the app falls back to the dark values in `@theme`. That is why it
+        // is here, in <head>, and why the try/catch defaults to light too.
+        var dark = false
         try {
-          if (window.localStorage.getItem('prism.theme') === 'light') {
-            document.documentElement.setAttribute('data-theme', 'light')
-            var m = document.querySelector('meta[name="theme-color"]')
-            if (m) m.setAttribute('content', '#faf7f2')
-            var s = document.querySelector('meta[name="color-scheme"]')
-            if (s) s.setAttribute('content', 'light')
-          }
+          dark = window.localStorage.getItem('prism.theme') === 'dark'
         } catch (e) {}
+        if (!dark) {
+          document.documentElement.setAttribute('data-theme', 'light')
+          var m = document.querySelector('meta[name="theme-color"]')
+          if (m) m.setAttribute('content', '#faf7f2')
+          var s = document.querySelector('meta[name="color-scheme"]')
+          if (s) s.setAttribute('content', 'light')
+        }
       })()
     </script>
 
