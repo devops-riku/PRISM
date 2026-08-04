@@ -29,8 +29,9 @@ export function readTheme(): Theme {
  *
  *  The attribute is REMOVED rather than set to 'dark', so the default is the
  *  absence of a choice: the CSS carries one selector instead of two, and an
- *  install that has never touched this is in exactly the same state as one
- *  that switched to light and back. */
+ *  install that has never touched this renders the same as one that switched
+ *  to light and back - even though the two are still distinguishable in raw
+ *  storage. */
 export function applyTheme(theme: Theme): void {
   const root = document.documentElement
   if (theme === 'light') root.setAttribute('data-theme', 'light')
@@ -45,7 +46,15 @@ export function applyTheme(theme: Theme): void {
 }
 
 export function toggleTheme(): Theme {
-  const next: Theme = readTheme() === 'light' ? 'dark' : 'light'
+  // The DOM, not storage. `applyTheme` sets the attribute outside its
+  // try/catch, so it is correct even when the write that follows it fails -
+  // and on a browser where writes never persist, asking storage what the
+  // current theme is returns the pre-failure answer for ever and this button
+  // stops doing anything after one press. The module already promises to
+  // survive that case; reading storage here is what broke the promise.
+  const current: Theme =
+    document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+  const next: Theme = current === 'light' ? 'dark' : 'light'
   applyTheme(next)
   return next
 }
