@@ -152,8 +152,10 @@ export default function QuotationList({ onOpen }: QuotationListProps) {
           })}
         </div>
 
+        {/* Same left edge as the header and chips above: px-5 … sm:px-6, not
+            the px-6/sm:px-8 this alert and both empty states used to carry. */}
         {error ? (
-          <p role="alert" className="border-b border-rule px-6 py-4 font-body text-[15px] sm:px-8">
+          <p role="alert" className="border-b border-rule px-5 py-4 font-body text-[15px] sm:px-6">
             <span className="font-label text-[12px] uppercase tracking-[0.14em] text-alert">
               Not loaded
             </span>
@@ -162,13 +164,13 @@ export default function QuotationList({ onOpen }: QuotationListProps) {
         ) : null}
 
         {!loading && rows.length > 0 && shown.length === 0 ? (
-          <p className="px-6 py-12 text-center font-body text-[15px] text-void sm:px-8">
+          <p className="px-5 py-12 text-center font-body text-[15px] text-void sm:px-6">
             Nothing on file matches that filter.
           </p>
         ) : null}
 
         {!loading && rows.length === 0 && !error ? (
-          <p className="px-6 py-12 text-center font-body text-[15px] text-void sm:px-8">
+          <p className="px-5 py-12 text-center font-body text-[15px] text-void sm:px-6">
             {query
               ? `Nothing on file matches “${query}”.`
               : 'Nothing quoted yet. Prepare a quotation and it will be filed here.'}
