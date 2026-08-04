@@ -55,6 +55,14 @@ type AppHeaderProps = {
   theme: Theme
   /** Flips it. `App.tsx` owns the state; this only ever calls the setter. */
   onToggleTheme: () => void
+  /**
+   * Which container the shell beneath this route is capped at. The header
+   * carries its own width rather than inheriting one, so it has to be told -
+   * get it wrong and the wordmark and the avatar stop sitting above the
+   * content they belong to. `'app'` is every working screen; `'sheet'` is
+   * the quotation route, the one page still at the reading measure.
+   */
+  width: 'app' | 'sheet'
 }
 
 export default function AppHeader({
@@ -63,6 +71,7 @@ export default function AppHeader({
   onClose = '',
   theme,
   onToggleTheme,
+  width,
 }: AppHeaderProps) {
   const studio = studioName.trim() || 'PRISM'
 
@@ -74,7 +83,9 @@ export default function AppHeader({
   const email = user?.email || ''
 
   return (
-    <header className="mx-auto mb-4 flex w-full max-w-sheet shrink-0 items-center justify-between gap-4 border-b border-hairline bg-paper/60 pb-6 sm:pb-8">
+    <header
+      className={`mx-auto mb-4 flex w-full shrink-0 items-center justify-between gap-4 border-b border-hairline bg-paper/60 pb-6 sm:pb-8 ${width === 'sheet' ? 'max-w-sheet' : 'max-w-app'}`}
+    >
       <div className="flex items-center gap-3">
         <a
           href="#/"

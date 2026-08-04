@@ -152,10 +152,22 @@
   --shadow-ring: 0 0 0 4px rgb(139 124 246 / 0.22);
 
   /* ── Layout ───────────────────────────────────────────────────────────
-     `max-w-sheet` for the pad and the documents, `max-w-ledger` for the
-     admin table, which needs the extra width for six columns. */
+     `max-w-sheet` for the documents, `max-w-app` for the rest of the app's
+     chrome, `max-w-ledger` for the admin table, which needs the extra width
+     for six columns. */
   --container-sheet: 1080px;
   --container-ledger: 1180px;
+
+  /* The app's own chrome - lists, the queue, the home screen, the pad. Wider
+     than a sheet on purpose: `--container-sheet` is a READING measure for
+     prose on a printed page, and a five-across grid of cards is not prose.
+     Capping the app at the paper width left about 420px of empty page either
+     side on a 1920 screen and made the whole product read as a column.
+
+     Documents keep `--container-sheet`. That is the distinction the two names
+     carry, and it is the reason this is a new token rather than a bigger
+     number in the old one. */
+  --container-app: 1400px;
 
   /* ── Motion — the kit's curves ────────────────────────────────────────── */
   --ease-press: cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -377,15 +389,17 @@
 
 @layer components {
   /* The wash behind the hero. One radial, anchored to the top centre and gone
-     by two thirds of the way down, in the accent at a tenth of its strength.
+     by 70% of the way down, in the accent at 12% strength.
 
-     On the SHELL rather than on `body`, because the shells are what carry
-     `overflow: hidden` and a fixed height - a gradient on the body would be
-     painted behind a page that never scrolls.
+     On the SHELL rather than on `body`, because a gradient on `body` is
+     painted behind the whole document, and most of these shells are fixed
+     to the viewport - with the quotation route as the exception that
+     scrolls.
 
-     `background-attachment` is deliberately not set: the shells do not scroll,
-     so there is nothing to fix against, and it costs a compositing layer on
-     every one of them. */
+     `background-attachment` is deliberately not set: the fixed shells have
+     nothing to fix against, and it costs a compositing layer on every one of
+     them - the quotation route's glow is meant to scroll away with the top
+     of the page, not stay pinned to it. */
   .page-glow {
     background-image: radial-gradient(
       ellipse 90% 55% at 50% 0%,

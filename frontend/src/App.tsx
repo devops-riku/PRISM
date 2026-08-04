@@ -827,6 +827,11 @@ export default function App() {
   // are on, and the way out of it. It replaced four navigation links that were
   // on screen at all times, three of which always pointed somewhere you had
   // chosen not to be.
+  //
+  // Its own width follows the shell it sits above, not a width of its own
+  // choosing - `quotation` is the one route still on the sheet's reading
+  // measure, so it is the one case that asks for `sheet` here. Everything
+  // else is app chrome at `--container-app`.
   const nav = (
     <AppHeader
       screenName={SCREEN_NAME[route] || ''}
@@ -834,6 +839,7 @@ export default function App() {
       onClose={route === 'home' ? '' : '#/'}
       theme={theme}
       onToggleTheme={() => setTheme(toggleTheme())}
+      width={route === 'quotation' ? 'sheet' : 'app'}
     />
   )
 
@@ -846,7 +852,7 @@ export default function App() {
   if (workspaceCount === 0 || route === 'workspaces') {
     return (
       <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-        <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
+        <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
           {workspaceCount === 0 ? null : nav}
           <WorkspacesScreen onChanged={(found: Workspace[]) => setWorkspaceCount(found.length)} />
         </main>
@@ -869,7 +875,7 @@ export default function App() {
   ) {
     return (
       <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-        <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
+        <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
           {nav}
           {route === 'quotations' ? <QuotationList /> : null}
           {route === 'jobs' ? <JobList /> : null}
@@ -995,7 +1001,7 @@ export default function App() {
   if (route === 'home') {
     return (
       <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-        <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
+        <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
           {nav}
           <HomeScreen />
         </main>
@@ -1011,7 +1017,7 @@ export default function App() {
   // bar, because the card is already the same height it was a moment ago.
   return (
     <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-      <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
+      <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
         {nav}
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-rule bg-paper shadow-sheet">
           <QuotationHeader
