@@ -1065,9 +1065,21 @@ try:
         "this app being in the path",
         written["CacheControl"] == "no-store",
     )
+    # Built from `KEY_PREFIX` rather than spelling the first segment out, so
+    # renaming the prefix is one edit rather than two - the literal version of
+    # this line is what failed when it moved from `intakes` to `PRISM`, which is
+    # the assertion doing its job but for the wrong reason. The SHAPE is what
+    # this is about: app, then workspace, then intake, then a 12-hex file id
+    # with the stored extension and nothing of the client's own filename.
     ok(
-        "the key is intakes/<workspace>/<intake>/<file_id>.<ext>",
-        written["Key"] == f"intakes/{WORKSPACE.id}/{SEVENTH.id}/{spaces_shot['id']}.png",
+        "the key is <prefix>/<workspace>/<intake>/<file_id>.<ext>",
+        written["Key"]
+        == f"{intakefiles.KEY_PREFIX}/{WORKSPACE.id}/{SEVENTH.id}/{spaces_shot['id']}.png",
+    )
+    ok(
+        "and the prefix really is the app's own name, so PRISM's objects are "
+        "findable as a unit in a bucket that holds other applications' too",
+        intakefiles.KEY_PREFIX == "PRISM",
     )
     ok(
         "and nothing of the client's own filename is in it",

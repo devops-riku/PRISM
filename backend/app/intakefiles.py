@@ -77,10 +77,27 @@ __all__ = [
 #: invisible to both for the same reason `_documents` and `_jobs` are.
 DIRNAME = "_intake_files"
 
-#: The first segment of every Spaces key. A bucket may hold more than this app
-#: one day; everything PRISM writes is under one prefix so it can be found,
-#: lifecycled or removed as a unit.
-KEY_PREFIX = "intakes"
+#: The first segment of every Spaces key: `PRISM/<workspace>/<intake>/<file>`.
+#:
+#: `intakes` before this, which was written on the assumption that the bucket
+#: might hold something else one day. It already did. This install's Space
+#: carries nineteen other top-level prefixes belonging to other applications -
+#: `Hakuhodo/` alone is over five thousand objects - so `intakes/` was not
+#: PRISM's corner of the bucket, it was a folder sitting among other people's
+#: with a name that says nothing about who owns it.
+#:
+#: Named for the app rather than for what it stores, because that is the
+#: question somebody browsing this bucket is actually asking. Everything PRISM
+#: writes is under here, so it can be found, lifecycled, or removed as a unit
+#: without knowing what the second segment means.
+#:
+#: CHANGING THIS STRANDS EVERY OBJECT ALREADY WRITTEN. Reads derive the key from
+#: ids at request time and never store it, so nothing points at the old prefix
+#: except the objects themselves. The move from `intakes` was done by copying
+#: every object to the new prefix first, additively, leaving the originals in
+#: place - so that switch was reversible by changing this line back, and the
+#: same is true of the next one.
+KEY_PREFIX = "PRISM"
 
 #: How long a presigned view URL is good for. Minutes, not hours: the URL is a
 #: bearer credential for one private object, it is handed to a studio member who
