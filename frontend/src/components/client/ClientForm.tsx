@@ -175,6 +175,17 @@ function describeWriteFailure(failure: unknown): { headline: string; next?: stri
         gone: false,
       }
     }
+    if (failure.isRefused) {
+      // The server's own sentence, deliberately. See `isRefused` in
+      // `clientApi.ts`: a 400 from this door names the one thing to change,
+      // and the generic line below would send a client to retry text that
+      // will be refused identically every time.
+      return {
+        headline: failure.message || 'That could not be sent.',
+        next: 'Change it and send again - your link still works.',
+        gone: false,
+      }
+    }
     if (failure.kind === 'http') {
       return { headline: 'That could not be sent just now.', next: 'Try again in a moment.', gone: false }
     }

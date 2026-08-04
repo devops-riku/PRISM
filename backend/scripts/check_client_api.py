@@ -68,6 +68,7 @@ from app import auth as auth_module  # noqa: E402
 from app import config  # noqa: E402
 from app import inbox  # noqa: E402
 from app import intakes  # noqa: E402
+from app.schemas import BriefCheck  # noqa: E402
 from app import main as main_module  # noqa: E402
 from app import members  # noqa: E402
 from app import settings  # noqa: E402
@@ -859,6 +860,80 @@ with TestClient(app) as client:
             f"submit: a budget with {label} left the intake on issued",
             intakes.get(floor_fixture.id).state == intakes.ISSUED,
         )
+
+    # --- The model's own read of the scope, on the client's door too --------
+    #
+    # Patched, never called for real: this file is offline. What is proved here
+    # is the wiring, and above all the property that makes this safe to put on
+    # an anonymous one-shot door AT ALL - a refusal must not spend the link.
+    async def refusing_check(_text):
+        return BriefCheck(is_brief=False, reason="That does not read as a description of work.")
+
+    async def accepting_check(_text):
+        return BriefCheck()
+
+    real_check = main_module.check_brief_is_real
+    ai_client = _client_for("203.0.113.70")
+    ai_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    config.CHECK_BRIEF_IS_REAL = True
+    main_module.check_brief_is_real = refusing_check
+    refused = ai_client.post(
+        f"/api/client/{ai_fixture.token}/submit",
+        data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
+    )
+    ok(
+        "a scope the model says is not a scope is refused with 400, even though "
+        "it clears every structural rule",
+        refused.status_code == 400,
+    )
+    ok(
+        "with the model's own sentence, which is the only thing that tells the "
+        "client what to change",
+        refused.json()["detail"] == "That does not read as a description of work.",
+    )
+    ok(
+        "AND THE LINK IS NOT SPENT - still issued, so the client retypes and "
+        "sends again on the same link rather than losing it",
+        intakes.get(ai_fixture.id).state == intakes.ISSUED,
+    )
+    ok(
+        "nothing of theirs was stored either - the check runs before the files "
+        "are read, so a refusal costs no bytes and no Spaces round trips",
+        intakes.get(ai_fixture.id).attachments == []
+        and intakes.get(ai_fixture.id).scope == "",
+    )
+
+    main_module.check_brief_is_real = accepting_check
+    accepted = ai_client.post(
+        f"/api/client/{ai_fixture.token}/submit",
+        data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
+    )
+    ok(
+        "and the retry goes through on that same link - which is the whole "
+        "argument for putting this check on an anonymous door",
+        accepted.status_code == 200 and intakes.get(ai_fixture.id).state == intakes.SUBMITTED,
+    )
+
+    config.CHECK_BRIEF_IS_REAL = False
+    main_module.check_brief_is_real = refusing_check
+    flag_fixture = intakes.create(
+        client_email="", client_phone="", scope="", budget_text="", preset={},
+        created_by="admin@neptune.ph",
+    )
+    ok(
+        "with CHECK_BRIEF_IS_REAL off the same refusing check is never "
+        "consulted and the submit goes through - the flag is what keeps this "
+        "file offline",
+        ai_client.post(
+            f"/api/client/{flag_fixture.token}/submit",
+            data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
+        ).status_code
+        == 200,
+    )
+    main_module.check_brief_is_real = real_check
 
     # The studio's own door now carries the SAME floor, and this assertion is
     # the reverse of what it used to say. It once recorded that the floor was

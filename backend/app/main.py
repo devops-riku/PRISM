@@ -4358,6 +4358,40 @@ async def submit_client_intake(
     said_scope = _normalise_scope(scope)
     said_budget = _normalise_budget_text(budget_text)
     said_kind = _normalise_client_kind(client_kind)
+    # The same question the studio's own pad is asked, on the same door the
+    # structural floor above guards - because the floor cannot reach the case
+    # that made this necessary. "erwerasdad dklajdlaksdjacsdasd" is thirty
+    # characters, thirteen distinct letters and two words; only reading it
+    # tells it from a scope.
+    #
+    # HERE, rather than inside a job, because there is no job: `/submit` is the
+    # client's whole interaction and it answers synchronously. The call runs in
+    # a worker thread (`anyio.to_thread` inside `check_brief_is_real`), so the
+    # event loop is not parked while it waits.
+    #
+    # BEFORE `_read_client_files` below, which is what makes a refusal free: no
+    # part is parsed, no bytes are held, nothing reaches Spaces, and - the half
+    # that matters - `advance()` is never called, so the intake stays `issued`
+    # and the client's one write is NOT spent. That last point is why this is
+    # safe to put on an anonymous door at all. A refused client retypes and
+    # sends again on the same link; they do not lose it. Every case in
+    # check_client_api.py asserts exactly that, for this refusal as for the
+    # structural ones.
+    #
+    # Fails open like every other caller of this function - see its docstring.
+    # A studio would rather read one nonsense enquiry than have a model outage
+    # quietly stop their clients submitting anything at all.
+    if config.CHECK_BRIEF_IS_REAL:
+        verdict = await check_brief_is_real(said_scope)
+        if not verdict.is_brief:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    verdict.reason
+                    or "That does not read as a description of work. Say what you need, "
+                    "who it is for, and anything that matters about how it should work."
+                ),
+            )
     # Read for `other` alone, exactly as `prompts.kind_block` reads it: every
     # other kind carries its own name already, so a label sent alongside one
     # of them is a word nothing will ever use, and storing it would put a

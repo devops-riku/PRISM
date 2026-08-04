@@ -108,6 +108,24 @@ export class ClientApiError extends Error {
     return this.status === 429
   }
 
+  /**
+   * A refusal of what was SENT, rather than of the caller or the moment - the
+   * scope reads as placeholder text, the budget carries no number, the files
+   * come to more than the cap. Every 400 on this door is authored by the route
+   * itself (`_normalise_scope`, `_normalise_budget_text`, `_read_client_files`
+   * and the brief check), which is what makes its `detail` safe to print where
+   * the general rule in this file says server text never is.
+   *
+   * That rule exists because a 500, a 502 or a proxy's own error page can
+   * carry anything, and none of it is written for a stranger. A 400 here is
+   * the opposite case: it is a sentence written FOR this client, naming the
+   * one thing they have to change, and replacing it with "try again in a
+   * moment" tells them to retry the thing that will fail identically for ever.
+   */
+  get isRefused(): boolean {
+    return this.status === 400
+  }
+
   /** The API could not be reached at all. */
   get isNetwork(): boolean {
     return this.kind === 'network'
