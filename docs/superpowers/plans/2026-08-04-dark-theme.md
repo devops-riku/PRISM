@@ -308,7 +308,19 @@ In `frontend/src/index.css`, inside `@layer components`, immediately before `.we
      document-ish screen defaults to dark and has to ask for this. That is the
      right way round - a new screen matching the app it lives in is a smaller
      mistake than a new studio screen arriving white - but it is a rule rather
-     than something the code will tell you. */
+     than something the code will tell you.
+
+     TWO SELECTORS, ONE BLOCK, and that is deliberate. `html[data-theme=light]`
+     is the whole app in light mode (Task 6); `.sheet-light` is one printed
+     surface inside the dark app. They want the identical fifteen values, and
+     writing them twice is how the two drift - this branch has already shipped
+     that mistake twice with a raster allowlist. One block, two doors into it.
+
+     In light mode `.sheet-light` becomes a no-op that sets what is already
+     set, which is correct rather than wasteful: a document is paper in both
+     modes, so the class asserts the same thing whether or not the app agrees.
+     */
+  html[data-theme='light'],
   .sheet-light {
     --color-canvas: #f4f1ea;
     --color-paper: #fffdf8;
@@ -548,6 +560,272 @@ git commit -m "Sweep: what the dark theme missed"
 ```
 
 If the sweep found nothing, say so and skip the commit rather than making an empty one.
+
+---
+
+## Task 5: The ambient layer and the navbar
+
+**Files:**
+- Modify: `frontend/src/index.css` (a `.page-glow` component class)
+- Modify: `frontend/src/App.tsx` (the five shells, and the `nav` element at 824)
+- Modify: `frontend/src/components/HomeScreen.tsx` (the running-jobs stat card)
+
+**Interfaces:**
+- Consumes: the dark tokens from Task 1.
+- Produces: `.page-glow`, applied by the shells.
+
+The reference is not a flat dark page. It has a soft violet wash behind the
+hero, brightest at the top centre and gone by a third of the way down, and the
+navbar reads as its own surface with a hairline under it. Without those the
+palette is right and the screen still is not.
+
+- [ ] **Step 1: The ambient glow**
+
+In `@layer components` in `index.css`:
+
+```css
+  /* The wash behind the hero. One radial, anchored to the top centre and gone
+     by two thirds of the way down, in the accent at a tenth of its strength.
+
+     On the SHELL rather than on `body`, because the shells are what carry
+     `overflow: hidden` and a fixed height - a gradient on the body would be
+     painted behind a page that never scrolls.
+
+     `background-attachment` is deliberately not set: the shells do not scroll,
+     so there is nothing to fix against, and it costs a compositing layer on
+     every one of them. */
+  .page-glow {
+    background-image: radial-gradient(
+      ellipse 90% 55% at 50% 0%,
+      color-mix(in oklab, var(--color-ballpoint) 12%, transparent),
+      transparent 70%
+    );
+    background-repeat: no-repeat;
+  }
+```
+
+- [ ] **Step 2: Put it on the shells**
+
+In `frontend/src/App.tsx`, add `page-glow` to the `className` of every shell
+`<div>` that already carries `bg-canvas`. There are five. Add the string only;
+change nothing else about them.
+
+Find them with: `grep -n "bg-canvas font-body text-body" src/App.tsx`
+
+- [ ] **Step 3: The navbar reads as its own surface**
+
+In `frontend/src/App.tsx`, the `nav` element defined at line 824. Add
+`border-b border-hairline bg-paper/60` to the outer element's existing classes,
+and nothing else.
+
+`bg-paper/60` rather than `bg-paper`: a solid bar would cut the wash in half
+across the top of the screen, and the glow showing through the navbar is what
+makes it read as a surface on the page rather than a lid on top of it.
+
+- [ ] **Step 4: The stat card takes the accent tint**
+
+In `frontend/src/components/HomeScreen.tsx`, the card showing the running-job
+count - find it by `{figure(running)}` around line 325. In the reference it is
+the one panel carrying the accent rather than the plain card surface.
+
+Change only that container's background and border classes to
+`bg-accent-soft` and `border-ballpoint/30`. Leave its layout, padding and type
+alone.
+
+- [ ] **Step 5: Verify**
+
+```bash
+cd frontend && node scripts/check-contrast.mjs && npm run typecheck && npm run build
+```
+
+Expected: all three exit 0. The glow is a background image and changes no token,
+so the contrast check is confirming nothing regressed rather than measuring the
+glow itself.
+
+Then screenshot the home screen and confirm three things: a visible wash at the
+top centre that has faded out before the cards, a navbar distinguishable from
+the page, and the stat card tinted against the five plain ones.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/index.css frontend/src/App.tsx frontend/src/components/HomeScreen.tsx
+git commit -m "The wash behind the hero, and a navbar that is its own surface"
+```
+
+---
+
+## Task 6: Light mode
+
+**Files:**
+- Create: `frontend/src/lib/theme.ts`
+- Modify: `frontend/index.html` (apply the stored choice before first paint)
+- Modify: `frontend/src/App.tsx` (mount the theme, add the control to `nav`)
+
+**Interfaces:**
+- Consumes: the shared light block from Task 2, which `html[data-theme='light']`
+  already selects. **This task adds no colour values.** If you find yourself
+  typing a hex, stop - the values exist, and duplicating them is exactly what
+  Task 2's own comment warns against.
+- Produces: `readTheme()`, `applyTheme(theme)`, `toggleTheme()` from
+  `frontend/src/lib/theme.ts`.
+
+Dark stays the default. Light is a choice the studio makes and PRISM remembers.
+
+- [ ] **Step 1: The module**
+
+Create `frontend/src/lib/theme.ts`:
+
+```ts
+/**
+ * Which palette the studio is in, and remembering it.
+ *
+ * Dark is the default and stays it: the app was designed dark, and an install
+ * with no stored preference should open the way the screenshots do.
+ *
+ * The switch is one attribute on <html>, because that is where the dark values
+ * live - index.css selects `html[data-theme='light']` to swap them for the
+ * same block `.sheet-light` uses. Nothing else in the app knows a theme
+ * exists, which is the property that made the re-skin a palette rather than 54
+ * files.
+ */
+
+export type Theme = 'dark' | 'light'
+
+const KEY = 'prism.theme'
+
+/** The stored choice, or dark. Never throws: a browser with storage disabled -
+ *  Safari's private mode, a locked-down profile - must still render an app. */
+export function readTheme(): Theme {
+  try {
+    return window.localStorage.getItem(KEY) === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
+/** Apply and remember.
+ *
+ *  The attribute is REMOVED rather than set to 'dark', so the default is the
+ *  absence of a choice: the CSS carries one selector instead of two, and an
+ *  install that has never touched this is in exactly the same state as one
+ *  that switched to light and back. */
+export function applyTheme(theme: Theme): void {
+  const root = document.documentElement
+  if (theme === 'light') root.setAttribute('data-theme', 'light')
+  else root.removeAttribute('data-theme')
+  try {
+    window.localStorage.setItem(KEY, theme)
+  } catch {
+    // A studio that cannot store its preference still gets to use it for this
+    // session. Refusing to switch because the choice cannot be remembered
+    // would be the worse failure.
+  }
+}
+
+export function toggleTheme(): Theme {
+  const next: Theme = readTheme() === 'light' ? 'dark' : 'light'
+  applyTheme(next)
+  return next
+}
+```
+
+- [ ] **Step 2: Apply it before first paint**
+
+In `frontend/index.html`, inside the existing boot script, as the FIRST thing it
+does:
+
+```js
+      // Before anything paints. Reading this in React instead would mean a
+      // dark frame on every load for a studio who chose light - the same flash
+      // this whole block exists to prevent.
+      try {
+        if (window.localStorage.getItem('prism.theme') === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light')
+        }
+      } catch (e) {}
+```
+
+The boot preloader's own colours (Task 3) stay dark regardless. That is a known
+and accepted seam: a studio in light mode sees a dark splash for the width of
+the load. Making the splash follow the theme means reading storage twice and
+branching its inline styles, for a surface that is visible for well under a
+second. If it ever matters, that is its own change.
+
+- [ ] **Step 3: The control**
+
+In `frontend/src/App.tsx`, import from `./lib/theme`:
+
+```tsx
+import { readTheme, toggleTheme } from './lib/theme'
+import type { Theme } from './lib/theme'
+```
+
+Add the state beside the component's other hooks:
+
+```tsx
+  const [theme, setTheme] = useState<Theme>(() => readTheme())
+```
+
+And in the `nav` element, beside the notification bell:
+
+```tsx
+            <button
+              type="button"
+              onClick={() => setTheme(toggleTheme())}
+              aria-label={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
+              title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
+              className="rounded-lg p-2 text-void transition-colors hover:text-ink"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-[18px] w-[18px]"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                {theme === 'light' ? (
+                  <path d="M20 13a8 8 0 1 1-9-9 6.5 6.5 0 0 0 9 9Z" />
+                ) : (
+                  <>
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
+                  </>
+                )}
+              </svg>
+            </button>
+```
+
+The icon shows what pressing it gives you, not what you are in: a moon in dark
+mode is a control that describes its own state and does nothing you can act on.
+
+- [ ] **Step 4: Verify both modes**
+
+```bash
+cd frontend && node scripts/check-contrast.mjs && npm run typecheck && npm run build
+```
+
+The contrast check already measures both palettes - it reads the dark block and
+the shared light block - so light mode is covered without touching the script.
+
+Then in the browser:
+1. Toggle to light. The whole app is the paper palette; open a quotation and
+   confirm the document still looks right.
+2. **Reload.** It must still be light, with no dark frame first.
+3. Toggle back to dark and reload again.
+
+Step 2 is the one that matters. A toggle that works until you refresh is the
+common failure here, and it is invisible until somebody refreshes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/lib/theme.ts frontend/index.html frontend/src/App.tsx
+git commit -m "Light mode, remembered, and applied before the first paint"
+```
 
 ---
 
