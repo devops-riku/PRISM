@@ -760,6 +760,21 @@ def _design_css(look) -> str:
         ":root{",
         f"  --ink:{look.brand_colour};",
         f"  --accent:{look.accent_colour};",
+        # `--ballpoint` too, and its absence here was a real bug rather than a
+        # style choice. The base sheet defines it as `#35655A` - pine, the
+        # default accent from two palettes ago - and NOTHING overrode it, so
+        # every link, the blockquote rule, the checked acceptance box and
+        # `tr.is-total` (the grand total's rules AND its colour) printed pine
+        # while the cover banner, the one rule reading `--accent`, printed the
+        # studio's actual accent.
+        #
+        # It was invisible for as long as the default accent WAS pine: the two
+        # agreed by accident. Changing the default to violet is what exposed
+        # it, which is the shape of bug a per-file review cannot see - the
+        # defect was in this file, the change that revealed it was in another.
+        #
+        # A document has one accent. Both names now resolve to it.
+        f"  --ballpoint:{look.accent_colour};",
         f"  --display:{look.heading_stack};",
         f"  --body:{look.body_stack};",
         "}",
