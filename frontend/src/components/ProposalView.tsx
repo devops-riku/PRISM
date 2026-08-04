@@ -146,12 +146,23 @@ export default function ProposalView({ documentId }: ProposalViewProps) {
         </div>
 
         {/* Where each part of the document came from. The one thing worth
-            knowing before sending it to a client. */}
+            knowing before sending it to a client.
+
+            All three cells describe PROVENANCE - which part was written and
+            which parts were copied - and the wording has to keep that subject
+            visible. "No figures, no terms" stood here alone and read as a
+            claim about the whole proposal, i.e. that it was sent without
+            pricing: the exact opposite of true, and contradicted by the two
+            cells next to it. What the constraint actually governs is the
+            generated prose (`backend/app/prompts.py`, "NO FIGURES" and "NO
+            TERMS AND NO CONDITIONS"), which is a rule about what the model
+            may invent, not about what the document contains. */}
         <dl className="mt-4 grid grid-cols-1 gap-3 border-t border-hairline pt-3 sm:grid-cols-3">
           <div>
             <dt className={MONO_LABEL}>The argument</dt>
             <dd className="mt-1 font-body text-[13px] leading-[1.6] text-void">
-              Written for this quotation. No figures, no terms.
+              Written for this quotation. It quotes no figures and no clauses of its own — the
+              document takes both from the sources here.
             </dd>
           </div>
           <div>
