@@ -50,6 +50,23 @@ def _env_int(name: str, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """`0`, `false`, `no` and `off` turn a flag off; `1`, `true`, `yes` and `on`
+    turn it on. Anything else - including a typo - keeps the default rather than
+    being read as off, because a misspelt value silently disabling a check is
+    the failure nobody notices.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().strip('"').strip("'").lower()
+    if value in {"0", "false", "no", "off"}:
+        return False
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
 # --- Gemini ------------------------------------------------------------------
 
 #: Server-side only. The browser never sees this value; it is not exposed by any
@@ -223,6 +240,20 @@ MIN_CLIENT_SCOPE_LETTERS: int = _env_int("MIN_CLIENT_SCOPE_LETTERS", 5)
 #: so requiring the one thing that makes it mean something is cheaper than a
 #: quotation built against nothing. Set to 0 to accept words alone.
 MIN_CLIENT_BUDGET_DIGITS: int = _env_int("MIN_CLIENT_BUDGET_DIGITS", 1)
+
+
+#: Ask the model whether a brief describes work at all, before pricing it.
+#:
+#: The structural floor above cannot reach this case: "erwerasdad
+#: dklajdlaksdjacsdasd" is thirty characters, thirteen distinct letters and two
+#: words, and only meaning tells it from a real brief. So the model is asked,
+#: once, on its own, before any tier is priced.
+#:
+#: Off switches the check out entirely and every brief proceeds. It exists
+#: because every `check_*.py` in this project runs OFFLINE - the flag is what
+#: keeps them that way without them having to know a network call was added to
+#: the generation path.
+CHECK_BRIEF_IS_REAL: bool = _env_bool("CHECK_BRIEF_IS_REAL", True)
 
 #: Everything a client may attach to one intake, added together. Deliberately
 #: its own name rather than a second use of `MAX_DOCUMENT_BYTES` above: those

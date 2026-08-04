@@ -25,6 +25,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-tokens-")
+# Off, because every check in this project runs OFFLINE. The brief check is a
+# real Gemini call on the generation path; left on, these scripts would reach
+# the network, cost money, and fail on a machine with no key. `app/main.py`
+# reads the flag at call time, so this line is the whole of the opt-out.
+os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # The `clientview` section below drives a real pass through `/api/proposals`
 # via `TestClient` to get a genuine `ProposalBundle` - exactly how
 # `check_intake_gate.py` builds one. `app.config` reads these three once at
@@ -550,7 +555,7 @@ try:
     cv_response = api.post(
         "/api/proposals",
         headers=cv_headers,
-        data={"brief": "Clientview fixture.", "intake_id": cv_intake.id},
+        data={"brief": "Clientview fixture - a booking site for a two-branch clinic.", "intake_id": cv_intake.id},
     )
     ok("clientview fixture: the pad answers 202", cv_response.status_code == 202)
 

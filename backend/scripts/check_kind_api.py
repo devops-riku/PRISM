@@ -54,6 +54,11 @@ for stream in (sys.stdout, sys.stderr):
 # keeps every file this writes out of the studio's own generated/ folder.
 SCRATCH = Path(mkdtemp(prefix="prism-kind-check-"))
 os.environ["GENERATED_DIR"] = str(SCRATCH)
+# Off, because every check in this project runs OFFLINE. The brief check is a
+# real Gemini call on the generation path; left on, these scripts would reach
+# the network, cost money, and fail on a machine with no key. `app/main.py`
+# reads the flag at call time, so this line is the whole of the opt-out.
+os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_ANON_KEY"] = ""
 os.environ["SUPABASE_JWT_SECRET"] = ""

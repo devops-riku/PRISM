@@ -45,6 +45,11 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intake-gate-")
+# Off, because every check in this project runs OFFLINE. The brief check is a
+# real Gemini call on the generation path; left on, these scripts would reach
+# the network, cost money, and fail on a machine with no key. `app/main.py`
+# reads the flag at call time, so this line is the whole of the opt-out.
+os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # `app.config` reads these once at import time via `load_dotenv(..., override=False)`,
 # so a real backend/.env (this repo's has a Supabase project configured) would
 # otherwise win and turn on token verification - every request below is
@@ -71,6 +76,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import config, inbox, intakefiles, intakes, jobs, main, members, workspaces  # noqa: E402
 from app.gemini_service import GeminiConfigError, GeminiResponseError  # noqa: E402
+from app.schemas import BriefCheck  # noqa: E402
 from app.schemas import Estimate  # noqa: E402
 
 FAILURES: list[str] = []
@@ -152,7 +158,16 @@ client = TestClient(app=main.app)
 headers = {"X-Workspace": made.id}
 
 
+#: Every call `stub_estimate` receives, so a case can assert that pricing did
+#: NOT happen. "The intake reached quote_failed" alone cannot tell a refusal
+#: that ran before the tier loop from one that ran after it and threw away the
+#: result - and the whole point of checking the brief first is that a refused
+#: brief costs nothing.
+PRICED_CALLS: list[tuple] = []
+
+
 async def stub_estimate(*args, **kwargs):
+    PRICED_CALLS.append((args, kwargs))
     return Estimate(project_name="Booking platform", currency="PHP")
 
 
@@ -173,7 +188,7 @@ def stub_response_error(*args, **kwargs):
 entry = intakes.create(
     client_email="buyer@client.com",
     client_phone="",
-    scope="A booking site.",
+    scope="A booking site for a two-branch dental clinic in Makati.",
     budget_text="around 300k",
     preset={},
     created_by="riku@neptune.ph",
@@ -190,16 +205,16 @@ main.generate_estimate = stub_estimate
 response = client.post(
     "/api/proposals",
     headers=headers,
-    data={"brief": "A booking site.", "intake_id": entry.id, "budget_hint": "around 300k"},
+    data={"brief": "A booking site for a two-branch dental clinic in Makati.", "intake_id": entry.id, "budget_hint": "around 300k"},
 )
 ok("the pad still answers 202", response.status_code == 202)
 ok("the intake reaches quoted", settle(entry.id, intakes.QUOTED) == intakes.QUOTED)
 
 done = intakes.get(entry.id)
 ok("with the bundle recorded", len(done.bundle_ids) == 1)
-ok("and what was actually priced", done.priced_scope == "A booking site.")
+ok("and what was actually priced", done.priced_scope == "A booking site for a two-branch dental clinic in Makati.")
 ok("and what they hoped to spend", done.priced_budget == "around 300k")
-ok("the client's own words are untouched", done.scope == "A booking site.")
+ok("the client's own words are untouched", done.scope == "A booking site for a two-branch dental clinic in Makati.")
 
 # --- A second Generate on an already-quoted intake replaces, not appends ----
 #
@@ -215,7 +230,7 @@ second_pass = client.post(
     "/api/proposals",
     headers=headers,
     data={
-        "brief": "A booking site, revised scope.",
+        "brief": "A booking site for a two-branch dental clinic, revised scope.",
         "intake_id": entry.id,
         "budget_hint": "around 350k",
     },
@@ -230,7 +245,7 @@ ok(
 )
 ok(
     "and replaces priced_scope with what is now on screen, not the first brief",
-    requoted.priced_scope == "A booking site, revised scope.",
+    requoted.priced_scope == "A booking site for a two-branch dental clinic, revised scope.",
 )
 ok(
     "and replaces priced_budget the same way",
@@ -242,7 +257,7 @@ ok(
 tiered = intakes.create(
     client_email="ladder@client.com",
     client_phone="",
-    scope="A booking site, three ways.",
+    scope="A booking site for a two-branch dental clinic, priced three ways.",
     budget_text="",
     preset={},
     created_by="riku@neptune.ph",
@@ -253,7 +268,7 @@ client.post(
     "/api/proposals",
     headers=headers,
     data={
-        "brief": "A booking site, three ways.",
+        "brief": "A booking site for a two-branch dental clinic, priced three ways.",
         "intake_id": tiered.id,
         "tiers": "Basic, Standard",
     },
@@ -272,7 +287,7 @@ ok("with every tier's bundle recorded, not just one", len(intakes.get(tiered.id)
 second = intakes.create(
     client_email="two@client.com",
     client_phone="",
-    scope="A stock take.",
+    scope="A stock take across two warehouses, counted and reconciled.",
     budget_text="",
     preset={},
     created_by="riku@neptune.ph",
@@ -282,7 +297,7 @@ main.generate_estimate = stub_failure
 client.post(
     "/api/proposals",
     headers=headers,
-    data={"brief": "A stock take.", "intake_id": second.id},
+    data={"brief": "A stock take across two warehouses, counted and reconciled.", "intake_id": second.id},
 )
 ok(
     "a failed pass reaches quote_failed",
@@ -294,11 +309,142 @@ ok(
     == "The quotation could not be prepared. The error is in the API log.",
 )
 
+# 1b. The brief check - the model says the text is not a brief at all.
+#
+# Patched, never called for real: this file is offline and the check is a live
+# Gemini call. What is proved here is the WIRING - that a refusal stops the run
+# before anything is priced, that it reaches the studio as its own sentence
+# rather than the generic failure, and that the flag switches the whole thing
+# out. Whether the model's judgement is any good is a different question and
+# not one a check script can answer.
+import app.config as config_module  # noqa: E402
+import app.gemini_service as gemini_module  # noqa: E402
+
+#: The genuine article, captured before any stub replaces it - the fail-open
+#: case below needs the REAL function, because what it is testing is that
+#: function's own error handling.
+REAL_BRIEF_CHECK = main.check_brief_is_real
+
+
+async def stub_refuses(_text):
+    return BriefCheck(is_brief=False, reason="That does not read as a description of work.")
+
+
+async def stub_accepts(_text):
+    return BriefCheck()
+
+
+not_a_brief = intakes.create(
+    client_email="", client_phone="",
+    scope="A stock take across two warehouses, counted and reconciled.",
+    budget_text="", preset={}, created_by="riku@neptune.ph",
+)
+intakes.advance(not_a_brief.id, intakes.SUBMITTED)
+main.generate_estimate = stub_estimate
+main.check_brief_is_real = stub_refuses
+config_module.CHECK_BRIEF_IS_REAL = True
+priced_before = len(PRICED_CALLS)
+client.post(
+    "/api/proposals",
+    headers=headers,
+    data={
+        "brief": "A stock take across two warehouses, counted and reconciled.",
+        "intake_id": not_a_brief.id,
+    },
+)
+ok(
+    "a brief the model says is not a brief reaches quote_failed",
+    settle(not_a_brief.id, intakes.QUOTE_FAILED) == intakes.QUOTE_FAILED,
+)
+ok(
+    "with the model's own sentence, not the generic failure line - the studio "
+    "has to be able to tell 'retype this' from 'try again in a minute'",
+    intakes.get(not_a_brief.id).error == "That does not read as a description of work.",
+)
+ok(
+    "and nothing was priced: the refusal runs before the tier loop, so a "
+    "refused brief costs no model calls and no Spaces round trips",
+    len(PRICED_CALLS) == priced_before,
+)
+
+# The flag really is the whole opt-out - with it off the same refusing stub is
+# never consulted and the same brief prices normally.
+flag_off = intakes.create(
+    client_email="", client_phone="",
+    scope="A stock take across two warehouses, counted and reconciled.",
+    budget_text="", preset={}, created_by="riku@neptune.ph",
+)
+intakes.advance(flag_off.id, intakes.SUBMITTED)
+config_module.CHECK_BRIEF_IS_REAL = False
+client.post(
+    "/api/proposals",
+    headers=headers,
+    data={
+        "brief": "A stock take across two warehouses, counted and reconciled.",
+        "intake_id": flag_off.id,
+    },
+)
+ok(
+    "with CHECK_BRIEF_IS_REAL off, the same brief prices normally - the flag "
+    "is what keeps every offline check offline",
+    settle(flag_off.id, intakes.QUOTED) == intakes.QUOTED,
+)
+# And when the check itself falls over, the brief prices anyway. This is the
+# one place in this codebase where failing OPEN is correct, and it is worth an
+# assertion rather than a comment: a quality gate that goes down must not take
+# the studio's ability to quote with it. `check_brief_is_real` swallows its own
+# errors, so this stub raising is the closest a test can get to the real thing
+# - and if that swallowing is ever removed, this case is what says so.
+check_broke = intakes.create(
+    client_email="", client_phone="",
+    scope="A stock take across two warehouses, counted and reconciled.",
+    budget_text="", preset={}, created_by="riku@neptune.ph",
+)
+intakes.advance(check_broke.id, intakes.SUBMITTED)
+# The flag back ON first. The case above left it off, and without this line the
+# check never runs at all - the assertion below then passes because nothing was
+# checked, which is the shape of a test that proves nothing. Caught by printing
+# the state rather than trusting the green.
+config_module.CHECK_BRIEF_IS_REAL = True
+# The REAL function, with the thing it calls broken underneath it. Replacing
+# the function with one that raises would have proved nothing - it bypasses the
+# very error handling being tested, and it did: that version failed here, which
+# is how the mistake was caught. `_get_client` is what `check_brief_is_real`
+# reaches for first, so a client that cannot be built is the closest offline
+# stand-in for the API being unreachable.
+main.check_brief_is_real = REAL_BRIEF_CHECK
+_real_get_client = gemini_module._get_client  # noqa: SLF001
+
+
+def _broken_client():
+    raise RuntimeError("no client today")
+
+
+gemini_module._get_client = _broken_client  # noqa: SLF001
+client.post(
+    "/api/proposals",
+    headers=headers,
+    data={
+        "brief": "A stock take across two warehouses, counted and reconciled.",
+        "intake_id": check_broke.id,
+    },
+)
+ok(
+    "a brief check that raises does NOT stop the quotation - the gate fails "
+    "open on purpose, because a false refusal blocks all quoting while a false "
+    "accept is one quotation somebody deletes",
+    settle(check_broke.id, intakes.QUOTED) == intakes.QUOTED,
+)
+
+gemini_module._get_client = _real_get_client  # noqa: SLF001
+config_module.CHECK_BRIEF_IS_REAL = True
+main.check_brief_is_real = stub_accepts
+
 # 2. GeminiConfigError - the key is missing or rejected.
 config_broken = intakes.create(
     client_email="three@client.com",
     client_phone="",
-    scope="A missing key.",
+    scope="A missing key, and a booking site that still needs pricing.",
     budget_text="",
     preset={},
     created_by="riku@neptune.ph",
@@ -308,7 +454,7 @@ main.generate_estimate = stub_config_error
 client.post(
     "/api/proposals",
     headers=headers,
-    data={"brief": "A missing key.", "intake_id": config_broken.id},
+    data={"brief": "A missing key, and a booking site that still needs pricing.", "intake_id": config_broken.id},
 )
 ok(
     "a config error also reaches quote_failed",
@@ -324,7 +470,7 @@ ok(
 response_broken = intakes.create(
     client_email="four@client.com",
     client_phone="",
-    scope="An unusable answer.",
+    scope="An unusable answer, on a booking site brief that is otherwise fine.",
     budget_text="",
     preset={},
     created_by="riku@neptune.ph",
@@ -334,7 +480,7 @@ main.generate_estimate = stub_response_error
 client.post(
     "/api/proposals",
     headers=headers,
-    data={"brief": "An unusable answer.", "intake_id": response_broken.id},
+    data={"brief": "An unusable answer, on a booking site brief that is otherwise fine.", "intake_id": response_broken.id},
 )
 ok(
     "an unusable response also reaches quote_failed",
@@ -353,7 +499,7 @@ ok(
 target_broken = intakes.create(
     client_email="five@client.com",
     client_phone="",
-    scope="An unreachable target.",
+    scope="An unreachable target on a booking site for two clinics.",
     budget_text="",
     preset={},
     created_by="riku@neptune.ph",
@@ -364,7 +510,7 @@ client.post(
     "/api/proposals",
     headers=headers,
     data={
-        "brief": "An unreachable target.",
+        "brief": "An unreachable target on a booking site for two clinics.",
         "intake_id": target_broken.id,
         "target_total": "500000",
     },
@@ -409,7 +555,7 @@ def _boom_advance(*args, **kwargs):
 broken_stamp = intakes.create(
     client_email="six@client.com",
     client_phone="",
-    scope="A broken stamp.",
+    scope="A broken stamp, on a booking site brief that is otherwise fine.",
     budget_text="",
     preset={},
     created_by="riku@neptune.ph",
@@ -425,7 +571,7 @@ try:
     stamp_broken = client.post(
         "/api/proposals",
         headers=headers,
-        data={"brief": "A broken stamp.", "intake_id": broken_stamp.id},
+        data={"brief": "A broken stamp, on a booking site brief that is otherwise fine.", "intake_id": broken_stamp.id},
     )
     ok(
         "a non-IntakeError escaping the stamp still answers 202",
@@ -448,14 +594,14 @@ ok(
 # --- The field is optional, and a quotation without one must behave exactly
 #     as before. ----------------------------------------------------------
 main.generate_estimate = stub_estimate
-plain = client.post("/api/proposals", headers=headers, data={"brief": "No intake here."})
+plain = client.post("/api/proposals", headers=headers, data={"brief": "No intake here, just a booking site for two dental clinics."})
 ok("a quotation with no intake_id still answers 202", plain.status_code == 202)
 
 # An unknown intake id must not take the quotation down with it.
 odd = client.post(
     "/api/proposals",
     headers=headers,
-    data={"brief": "Unknown intake.", "intake_id": "0" * 12},
+    data={"brief": "Unknown intake, on a booking site brief that is otherwise fine.", "intake_id": "0" * 12},
 )
 ok("an unknown intake_id does not fail the request", odd.status_code == 202)
 
@@ -573,7 +719,15 @@ files_client = TestClient(app=main.app)
 files_client.__enter__()
 
 
-def price(workspace_id: str, intake_id: str, brief: str = "Price this.", files=None):
+def price(
+    workspace_id: str,
+    intake_id: str,
+    # Past `_normalise_brief`'s floor. These cases are about which FILES
+    # reach the model, not about the brief, so the default only has to be
+    # long enough to stop being the subject.
+    brief: str = "Price the client's request from what they attached.",
+    files=None,
+):
     """One Generate through the real handler, waited out, with the capture reset."""
     SEEN.clear()
     NOTES.clear()

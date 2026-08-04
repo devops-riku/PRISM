@@ -46,6 +46,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-client-api-")
+# Off, because every check in this project runs OFFLINE. The brief check is a
+# real Gemini call on the generation path; left on, these scripts would reach
+# the network, cost money, and fail on a machine with no key. `app/main.py`
+# reads the flag at call time, so this line is the whole of the opt-out.
+os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # Blanked first, same fix as every other API-level check script: `app.config`
 # reads these once at import time via `load_dotenv(..., override=False)`, and
 # a real `backend/.env` (this repo's names an actual Supabase project) would
@@ -855,13 +860,22 @@ with TestClient(app) as client:
             intakes.get(floor_fixture.id).state == intakes.ISSUED,
         )
 
-    # The studio's own door keeps its own rule, and this is the assertion that
-    # says so: the floor is the CLIENT's, and a studio typing two words into
-    # its own pad is quoting for itself and can read what comes back.
+    # The studio's own door now carries the SAME floor, and this assertion is
+    # the reverse of what it used to say. It once recorded that the floor was
+    # the client's alone, on the reasoning that a studio can read what comes
+    # back and try again. What that overlooked is the size of the thing being
+    # tried again: a full generation, several model calls, a minute of wall
+    # time and a bundle on disk, all bought by "a". Free to check, so checked.
+    for shared in ("", "a", "asdasdas", "............................"):
+        try:
+            main_module._normalise_brief(shared)  # noqa: SLF001
+            refused = False
+        except Exception:  # noqa: BLE001 - HTTPException is what a refusal is
+            refused = True
+        ok(f"the studio's own brief is refused for {shared[:12]!r} too", refused)
     ok(
-        "the floor is the client door's alone - `_normalise_brief` still accepts "
-        "a short studio brief that `_normalise_scope` would now refuse",
-        main_module._normalise_brief("a") == "a",  # noqa: SLF001
+        "and a real studio brief still passes both doors unchanged",
+        main_module._normalise_brief(GOOD_SCOPE) == GOOD_SCOPE,  # noqa: SLF001
     )
 
     # --- client_email/client_phone are bounded too, not just scope/budget ---

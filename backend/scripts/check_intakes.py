@@ -20,6 +20,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intakes-")
+# Off, because every check in this project runs OFFLINE. The brief check is a
+# real Gemini call on the generation path; left on, these scripts would reach
+# the network, cost money, and fail on a machine with no key. `app/main.py`
+# reads the flag at call time, so this line is the whole of the opt-out.
+os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 
 from app import intakes, workspaces  # noqa: E402
 

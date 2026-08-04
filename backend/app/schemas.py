@@ -718,3 +718,38 @@ class ProposalBundle(BaseModel):
         default=0.0,
         description="Money those removals took off the quotation, before contingency and tax.",
     )
+
+
+class BriefCheck(BaseModel):
+    """Is this text a description of work somebody wants done?
+
+    Its own model rather than a field on `Estimate`, and the difference is what
+    it costs to be wrong. A field on `Estimate` can only be filled by the
+    generation itself - so the model has already priced the thing before it can
+    say the thing was not priceable, and every tier has been paid for. This is
+    asked first, on its own, of a few hundred characters.
+
+    BOTH DEFAULTS ARE THE ACCEPTING ANSWER, and that is deliberate. This is a
+    quality gate, not a security boundary: a false refusal stops a studio
+    quoting at all, while a false accept is one quotation somebody deletes. A
+    partial or malformed response therefore has to mean "carry on", and putting
+    that in the type is stronger than remembering it at every call site.
+    """
+
+    is_brief: bool = Field(
+        default=True,
+        description=(
+            "True if this text describes work to be done - even roughly, even in "
+            "one line, even in a language other than English. False ONLY for text "
+            "that describes no work at all: keyboard mashing, random letters, "
+            "lorem ipsum, a single unrelated word, or test input."
+        ),
+    )
+    reason: str = Field(
+        default="",
+        description=(
+            "When is_brief is false, one short sentence for the person who typed "
+            "it, saying what is missing rather than what rule was broken. Empty "
+            "when is_brief is true."
+        ),
+    )

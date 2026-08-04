@@ -39,7 +39,7 @@ from app.prompts import (
     build_revision,
     strip_sentinels,
 )
-from app.schemas import Estimate, ProposalNarrative, ProposalRequest
+from app.schemas import BriefCheck, Estimate, ProposalNarrative, ProposalRequest
 
 logger = logging.getLogger("prism.gemini")
 
@@ -651,3 +651,90 @@ async def generate_proposal(
         len(narrative.next_steps),
     )
     return narrative
+
+
+# --- Is this a brief at all? -------------------------------------------------
+
+BRIEF_CHECK_INSTRUCTION = """You judge one thing: does this text describe work somebody wants done?
+
+Say yes to anything that names work, however roughly - one line, a fragment, a list of features, a job in any language, a job described badly. A studio typing "logo and business cards" is briefing you. So is "kailangan namin ng website para sa aming tindahan". So is a single sentence with a spelling mistake in it.
+
+Say no only when there is no work in the text at all: keyboard mashing, random letters or syllables, repeated characters, lorem ipsum, a word or two with no job attached, or something that is plainly a test.
+
+You are not judging whether the brief is GOOD, whether it is detailed enough to price, or whether the work is sensible. A one-line brief is a brief. Vagueness is the studio's problem to solve with their client, not yours to refuse.
+
+When you say no, give one short sentence addressed to the person who typed it, saying what is missing. Never quote the text back at them."""
+
+
+#: The same fencing `build_brief` uses, for the same reason: the text inside is
+#: somebody's typing, and a prompt that does not say where it ends can be closed
+#: early by the text itself. `strip_sentinels` below removes any the input
+#: already contained, so these two lines are the only ones the model sees.
+BRIEF_CHECK_FRAME = """<<<BRIEF
+{body}
+BRIEF>>>"""
+
+
+def _brief_check_snippet(text: str, limit: int = 1200) -> str:
+    """Enough to judge, and no more.
+
+    Meaning shows up in the first paragraph; a 20,000-character brief costs
+    twenty times the tokens to reach the same answer. Sentinels are stripped
+    for the reason `build_brief` strips them - this text is untrusted input
+    being placed inside a prompt, and the studio's own pad is not exempt from
+    that just because a studio typed it.
+    """
+    return strip_sentinels(text.strip())[:limit]
+
+
+async def check_brief_is_real(text: str) -> BriefCheck:
+    """Ask whether `text` describes work, before anything is priced from it.
+
+    One call, one small schema, a truncated brief - deliberately cheap, because
+    it runs before every generation. It is asked BEFORE the tiers rather than
+    answered as a field on `Estimate`, since a field on the estimate can only
+    be filled by a generation that has already happened and been paid for.
+
+    RAISES NOTHING. Every failure - no key, a transport error, a blocked
+    response, a malformed body - returns the accepting default. That inverts
+    this codebase's usual rule and it is meant to: this is a quality gate, not
+    a security boundary. A false refusal stops a studio from quoting at all,
+    while a false accept is one quotation somebody deletes. The caller cannot
+    tell "the model said yes" from "the check could not run", and does not need
+    to - both mean carry on. What the caller must never do is treat silence as
+    a refusal.
+    """
+    body = _brief_check_snippet(text)
+    if not body:
+        return BriefCheck()
+    try:
+        client = _get_client()
+        call = functools.partial(
+            client.models.generate_content,
+            model=config.GEMINI_MODEL,
+            contents=[BRIEF_CHECK_FRAME.format(body=body)],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=BriefCheck,
+                # Zero, not GEMINI_TEMPERATURE. This is a judgement that should
+                # not change between two runs of the same text - a studio told
+                # their brief is gibberish, who presses Generate again and gets
+                # a quotation, has learned that the check is noise.
+                temperature=0.0,
+                system_instruction=BRIEF_CHECK_INSTRUCTION,
+            ),
+        )
+        response = await anyio.to_thread.run_sync(call)
+    except Exception as exc:  # noqa: BLE001 - see the docstring: this fails open
+        logger.warning("brief check could not run, proceeding: %s", _describe(exc))
+        return BriefCheck()
+
+    parsed = getattr(response, "parsed", None)
+    if isinstance(parsed, BriefCheck):
+        return parsed
+    raw = getattr(response, "text", "") or ""
+    try:
+        return BriefCheck.model_validate(json.loads(raw))
+    except Exception:  # noqa: BLE001 - a body that will not parse is not a refusal
+        logger.warning("brief check returned an unreadable body, proceeding: %s", _snippet(raw))
+        return BriefCheck()

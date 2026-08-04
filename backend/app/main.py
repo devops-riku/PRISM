@@ -83,6 +83,7 @@ from app.costing import (
 from app.gemini_service import (
     GeminiConfigError,
     GeminiResponseError,
+    check_brief_is_real,
     generate_estimate,
     generate_proposal,
     revise_estimate,
@@ -118,6 +119,23 @@ if not logging.getLogger().handlers:  # uvicorn does not configure the root logg
     )
 
 logger = logging.getLogger("prism.api")
+
+
+class BriefNotRealError(RuntimeError):
+    """The model was asked whether the brief describes work and said it does not.
+
+    Its own type rather than a `GeminiResponseError`, because the two are told
+    apart by what the reader should DO. A `GeminiResponseError` means the model
+    could not be reached or would not answer, and the fix is to press Generate
+    again in a minute. This means the model answered perfectly well and the
+    answer was no, and pressing Generate again will produce the same refusal
+    for ever. A queue that shows one sentence for both trains a studio to retry
+    the one thing retrying cannot fix.
+
+    Never raised when the check itself fails - see `check_brief_is_real`, which
+    returns the accepting default for every error it meets rather than raising.
+    """
+
 
 KINDS = ("proposal", "requirements")
 _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
@@ -1006,6 +1024,23 @@ def _normalise_currency(raw: str) -> str:
 
 
 def _normalise_brief(raw: str) -> str:
+    """The studio's own brief, and it carries the same floor the client's scope
+    does - which it did not until now.
+
+    The floor arrived on the client's door first because that door opens once
+    and a bad write costs the link. That made it easy to argue the studio
+    needed nothing: a studio can read what comes back and try again. But the
+    thing it tries again on is a full generation - several model calls, a
+    minute of wall time, and a bundle written to disk - and `"a"` bought all of
+    it. Free to check, so it is checked.
+
+    What this does NOT catch is prose that is structurally fine and means
+    nothing: `erwerasdad dklajdlaksdjacsdasd` is thirty characters, thirteen
+    distinct letters and two words. Only meaning separates that from a real
+    brief, and meaning is `_brief_is_real`'s job, inside the job where a model
+    call belongs. This is the cheap half, and it runs first because it is free
+    and it is certain.
+    """
     brief = (raw or "").strip()
     if not brief:
         raise HTTPException(
@@ -1020,6 +1055,9 @@ def _normalise_brief(raw: str) -> str:
                 f"{config.MAX_BRIEF_CHARS:,} - summarise it or attach the detail as images."
             ),
         )
+    shortfall = _scope_shortfall(brief)
+    if shortfall:
+        raise HTTPException(status_code=400, detail=shortfall)
     return brief
 
 
@@ -1736,6 +1774,34 @@ async def create_proposal(
         stamp(intakes.PREPARING, job_id=job.id)
         jobs.start(job.id, "Reading the brief")
         try:
+            # Before anything is priced. The structural floor in
+            # `_normalise_brief` already refused the empty, the too-short and
+            # the visibly-mashed; what reaches here and is still not a brief is
+            # text that only MEANS nothing - "erwerasdad dklajdlaksdjacsdasd"
+            # is thirty characters, thirteen distinct letters and two words,
+            # and no rule short of reading it can tell it from a real one.
+            #
+            # Inside the job rather than on the endpoint, and that is a
+            # deliberate reading of this route's own contract two comments
+            # below: "everything that can be rejected is rejected
+            # synchronously." The rejectable part is the floor, and it IS
+            # synchronous. This is not rejectable without a network call, and
+            # `POST /api/proposals` makes none today - adding one would mean a
+            # Gemini outage stopped a studio from STARTING a quotation rather
+            # than failing a job they can retry, on a blocking call in an
+            # `async def` handler, which is the shape that parks the event loop
+            # for every other request this worker holds.
+            #
+            # One call, on the brief alone. The client's files are fetched
+            # after this, so a refused brief costs no Spaces round trips either.
+            if config.CHECK_BRIEF_IS_REAL:
+                verdict = await check_brief_is_real(request.brief)
+                if not verdict.is_brief:
+                    raise BriefNotRealError(
+                        verdict.reason
+                        or "That does not read as a description of work. Say what needs "
+                        "building, who it is for, and anything that shapes it."
+                    )
             if client_images or client_papers:
                 # Fetched here - inside the job, and inside a thread - rather
                 # than before the job was handed off, and the reason is what the
@@ -1865,6 +1931,12 @@ async def create_proposal(
                     "href": f"#/q/{first.id}",
                 },
             )
+        except BriefNotRealError as exc:
+            # Not `logger.error`: nothing is broken. A studio typed something
+            # that is not a brief and was told so, which is this check working.
+            logger.info("Brief refused before pricing: %s", exc)
+            jobs.fail(job.id, str(exc))
+            stamp(intakes.QUOTE_FAILED, error=str(exc))
         except GeminiConfigError as exc:
             logger.error("Generation blocked by configuration: %s", exc)
             jobs.fail(job.id, str(exc))
