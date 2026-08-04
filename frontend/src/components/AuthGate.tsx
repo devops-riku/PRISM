@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { currentUser, onSession, signInRequired, startSession, supabase } from '../lib/auth'
-import AuthScreen from './AuthScreen'
+import LandingScreen from './LandingScreen'
 
 /**
  * Nothing is shown until the question "who is this?" has an answer — on the
@@ -92,14 +92,13 @@ export default function AuthGate({ children }: AuthGateProps) {
   }
 
   if (state === 'gated' && !user) {
-    return (
-      // Pinned to the viewport rather than stretched by it: signing in is one
-      // screen's worth of decision, and a page that scrolls before you have
-      // done it reads as a form.
-      <div className="grid h-dvh place-items-center overflow-hidden bg-canvas px-5 py-5 font-body text-body">
-        <AuthScreen />
-      </div>
-    )
+    // `LandingScreen`, not a bare `AuthScreen` on an empty canvas. This is
+    // the first thing anybody ever sees of PRISM, and a lone sign-in card
+    // says "you are locked out" where the only useful thing to say is what
+    // the product does. The card is still there, on one side of a page that
+    // answers that first; it owns its own pinning and scrolling, so this
+    // branch hands over the whole viewport rather than centring anything.
+    return <LandingScreen />
   }
 
   return children
