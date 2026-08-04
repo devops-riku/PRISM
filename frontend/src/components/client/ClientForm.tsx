@@ -114,18 +114,18 @@ const MIN_SCOPE_LETTERS = 5
 export function scopeShortfall(scope: string): string {
   if (!scope) return 'Describe the work before sending.'
   if (scope.length < MIN_SCOPE_CHARS) {
-    return `Describe the work in a bit more detail - a sentence or two is enough, and about ${MIN_SCOPE_CHARS} characters is the minimum. This is the only thing the quotation is built from.`
+    return 'A bit more detail, please - a sentence or two about the work.'
   }
   const body = scope.replace(/\s+/g, '')
   if (new Set(body).size < MIN_SCOPE_DISTINCT) {
-    return 'That reads as placeholder text rather than a description. Say what you need, who it is for, and anything that matters about how it should work.'
+    return 'That reads as placeholder text. Say what you need and who it is for.'
   }
   // `\p{L}` rather than A-Z, so Tagalog, Cyrillic and CJK all count as the
   // letters they are and only digits and punctuation do not - the same line
   // `str.isalpha()` draws on the server.
   const letters = new Set([...body].filter((character) => /\p{L}/u.test(character)))
   if (letters.size < MIN_SCOPE_LETTERS) {
-    return 'Describe the work in words as well as numbers - what it is, and what it has to do.'
+    return 'Describe it in words, not only numbers.'
   }
   return ''
 }
@@ -136,7 +136,7 @@ export function scopeShortfall(scope: string): string {
 export function budgetShortfall(budget: string): string {
   if (!budget) return 'Give a rough budget before sending.'
   if (!/\p{Nd}/u.test(budget)) {
-    return 'Put a rough number on the budget - a range or an approximate figure is fine, like “around 300k” or “under ₱500,000”.'
+    return 'Put a rough number on it - “around 300k” or “under ₱500,000”.'
   }
   return ''
 }
@@ -282,7 +282,13 @@ export default function ClientForm({
   }, [kindLabelMissing, emailMissing, emailInvalid, scopeMissing, budgetMissing])
 
   const stepMissing = missingByStep[step]
-  const showSummary = attemptedSteps.has(step) && stepMissing.length > 0
+  // The last step's alone. On steps 1-3 the field carries its own message in
+  // red under it and the summary was a second copy of the same sentence - and,
+  // being outside the reserved area, the one thing left that could still change
+  // the card's height and put a scrollbar on it. On the last step it is not a
+  // copy of anything: it names what is missing on OTHER panels, which is the
+  // only place a client cannot already see it.
+  const showSummary = step === LAST_STEP && attemptedSteps.has(step) && stepMissing.length > 0
 
   // Stable, so the picker's own `useCallback`s are not rebuilt on every
   // keystroke in the fields on the steps before it.
@@ -293,14 +299,35 @@ export default function ClientForm({
   const summaryRef = useRef<HTMLDivElement | null>(null)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
 
-  // The summary box only enters the DOM once this step's press first finds
-  // something missing - at the moment `handleSubmit` runs, `summaryRef.current`
-  // is still `null`, because this render hasn't committed the box yet. This
-  // effect catches that case once the DOM has it, and also catches a client
-  // stepping back to a panel they already know is incomplete.
+  // Where focus lands when a press finds something missing: the field itself
+  // on the first three steps, the summary on the last, where what is missing
+  // is on a panel the client is not looking at.
+  //
+  // KEYED ON A COUNTER, NOT ON WHAT IS MISSING, and that is the whole design.
+  // The obvious version watches the missing-fields memo, which changes the
+  // moment any field becomes valid - so on the Brief step, finishing the scope
+  // would fire the effect, find Budget still empty, and take the caret out of
+  // the box the client was typing in. A counter only moves when a press is
+  // actually refused, which is the only moment focus should move at all.
+  const [refusalTick, setRefusalTick] = useState(0)
   useEffect(() => {
-    if (attemptedSteps.has(step) && missingByStep[step].length > 0) summaryRef.current?.focus()
-  }, [attemptedSteps, step, missingByStep])
+    if (!refusalTick) return
+    if (step === LAST_STEP) {
+      summaryRef.current?.focus()
+      return
+    }
+    // `kind_label` is `KindPicker`'s own input, which only exists while
+    // `other` is chosen - and `other` is the only way step 1 can fail.
+    const target =
+      step === 0
+        ? 'kind_label'
+        : step === 1
+          ? 'client-email'
+          : scopeMissing
+            ? 'client-scope'
+            : 'client-budget'
+    document.getElementById(target)?.focus()
+  }, [refusalTick, step, scopeMissing])
 
   // Move focus to the new panel's heading when the step actually changes.
   //
@@ -324,6 +351,7 @@ export default function ClientForm({
       if (missingByStep[at].length > 0) {
         setAttemptedSteps((was) => new Set(was).add(at))
         setStep(at)
+        setRefusalTick((was) => was + 1)
         return at
       }
     }
@@ -359,6 +387,7 @@ export default function ClientForm({
       // guard that stops a skipped answer from being sent. Mark it and send
       // the client back to the first panel that is actually incomplete.
       setAttemptedSteps((was) => new Set(was).add(LAST_STEP))
+      setRefusalTick((was) => was + 1)
       const firstBad = missingByStep.findIndex((entries, at) => at < LAST_STEP && entries.length > 0)
       if (firstBad >= 0) {
         setAttemptedSteps((was) => new Set(was).add(firstBad))
@@ -402,15 +431,6 @@ export default function ClientForm({
     `How ${studio} reaches you`,
     'The work, and what you have in mind',
     'Anything worth attaching',
-  ]
-  // One line each, at this card's width, on purpose - see the reserve on the
-  // element itself. Two lines on three steps and one on the fourth was 23px of
-  // the height that put a scrollbar on a 125%-scaled 1080 screen.
-  const BLURBS = [
-    'It decides how the quotation is written.',
-    'Where the quotation comes back to.',
-    'What you need, and roughly what you had in mind.',
-    'Optional - a brief, a drawing, a photo of a whiteboard.',
   ]
 
   return (
@@ -463,27 +483,20 @@ export default function ClientForm({
       >
         {HEADINGS[step]}
       </h1>
-      {/* One line, reserved, so a blurb that happens to wrap on a narrow window
-          cannot move the buttons under it. Every string above is written to fit
-          one line at this card's width; the reserve is the floor for the one
-          that does not. */}
-      <p className="mt-1.5 min-h-[23px] max-w-[52ch] font-body text-[14.5px] leading-[1.6] text-void">
-        {BLURBS[step]}
-      </p>
-
       <form onSubmit={handleSubmit} noValidate className="mt-4 flex flex-col gap-3.5">
         {/* The reserved panel area, and the reason it is a fixed floor rather
             than whatever the current step needs.
-            Measured at 1920x1080: the four panels are 191, 101, 260 and 77px,
-            and step 1 with "Something else" open is 299. Left to size itself
-            the card walked 404 -> 625px between steps, so Next moved out from
-            under the cursor on every press and the whole page re-centred each
-            time. Reserving the tallest costs blank space under the shortest
+            Measured at 1920x1080: the four panels are 191, 101, 260 and 77px;
+            step 1 with "Something else" open is 299; and that same panel with
+            its refusal showing is 328, which is the tallest thing any of them
+            renders. Left to size itself the card walked 404 -> 625px between
+            steps, so Next moved out from under the cursor on every press and
+            the whole page re-centred each time. Reserving the tallest costs blank space under the shortest
             panel - which is what a wizard looks like - and buys a card that
             never moves, including on the one path that used to overflow it.
             The floor is a minimum, not a cap: a browser wrapping this wider
             still grows rather than clipping. */}
-        <div className="min-h-[299px]">
+        <div className="min-h-[328px]">
         {/* Step 1. First, and on a panel of its own rather than among the
             fields: it is the only question here whose answer changes how the
             others are read. `KindPicker` is the studio's own component, used
@@ -503,7 +516,7 @@ export default function ClientForm({
           </div>
           {attemptedSteps.has(0) && kindLabelMissing ? (
             <p className="mt-2 font-body text-[13px] leading-[1.6] text-alert">
-              Name the discipline so {studio} can write in its language.
+              Name the discipline so the quotation uses its language.
             </p>
           ) : null}
         </div>
@@ -528,16 +541,21 @@ export default function ClientForm({
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="you@example.com"
                 aria-invalid={attemptedSteps.has(1) && (emailMissing || emailInvalid)}
+                // Names only what is actually in the DOM - the hint is
+                // unmounted while the error is showing, and a dangling
+                // `aria-describedby` id announces nothing at all.
                 aria-describedby={
                   attemptedSteps.has(1) && (emailMissing || emailInvalid)
-                    ? 'client-email-hint client-email-error'
+                    ? 'client-email-error'
                     : 'client-email-hint'
                 }
                 className={WELL}
               />
-              <p id="client-email-hint" className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
-                Where {studio} sends the quotation.
-              </p>
+              {attemptedSteps.has(1) && (emailMissing || emailInvalid) ? null : (
+                <p id="client-email-hint" className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
+                  Where {studio} sends the quotation.
+                </p>
+              )}
               {attemptedSteps.has(1) && emailMissing ? (
                 <p id="client-email-error" className="mt-1 font-body text-[13px] text-alert">
                   Enter your email address.
@@ -611,7 +629,7 @@ export default function ClientForm({
               // to nothing and leaves the 184px floor in place with no warning.
               className={`${WELL_TEXTAREA} pad-brief min-h-[116px]!`}
             />
-            {trimmedScope ? (
+            {trimmedScope && !(attemptedSteps.has(2) && scopeMissing) ? (
               <p
                 id="client-scope-hint"
                 className="mt-1.5 font-label text-[12px] uppercase tracking-[0.14em] tabular-nums text-void"
@@ -640,16 +658,15 @@ export default function ClientForm({
               placeholder="Around ₱300,000, or “under 500k”"
               aria-invalid={attemptedSteps.has(2) && budgetMissing}
               aria-describedby={
-                attemptedSteps.has(2) && budgetMissing
-                  ? 'client-budget-hint client-budget-error'
-                  : 'client-budget-hint'
+                attemptedSteps.has(2) && budgetMissing ? 'client-budget-error' : 'client-budget-hint'
               }
               className={WELL}
             />
-            <p id="client-budget-hint" className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
-              This helps {studio} shape the quotation to fit what you have in mind. It doesn&rsquo;t
-              set your price, and you&rsquo;re not held to it.
-            </p>
+            {attemptedSteps.has(2) && budgetMissing ? null : (
+              <p id="client-budget-hint" className="mt-1.5 font-body text-[13px] leading-[1.5] text-void">
+                A rough figure. It doesn&rsquo;t set your price.
+              </p>
+            )}
             {attemptedSteps.has(2) && budgetMissing ? (
               <p id="client-budget-error" className="mt-1 font-body text-[13px] leading-[1.5] text-alert">
                 {budgetIssue}
@@ -672,32 +689,32 @@ export default function ClientForm({
           </FieldLabel>
           <ClientDropzone id="client-files" onChange={handleFiles} disabled={pending} />
         </div>
-        </div>
 
         {showSummary ? (
-          // `role="status"` (polite), not `role="alert"` (implicitly
-          // assertive) - this box stays mounted for as long as anything is
-          // still missing and its text is recomputed on every render, so an
-          // assertive region here re-announces the whole remaining list on
-          // every keystroke that changes it, forcibly interrupting a screen
-          // reader's own character echo of what is currently being typed.
-          // `role="alert"` was right for the per-attempt announcement this
-          // is meant to be, wrong for a region that keeps mutating live
-          // while the user is still typing - the two are the same box, but
-          // not the same lifetime.
-          <div
-            ref={summaryRef}
-            tabIndex={-1}
-            role="status"
-            className="focus-landing rounded-lg border border-alert/40 bg-paper px-4 py-3"
-          >
-            <p className="font-body text-[14px] leading-[1.5] text-ink">
-              {step === LAST_STEP
-                ? `Before this can be sent: ${stepMissing.join(', ')}.`
-                : `Before the next step: ${stepMissing.join(', ')}.`}
-            </p>
-          </div>
-        ) : null}
+            // `role="status"` (polite), not `role="alert"` (implicitly
+            // assertive) - this box stays mounted for as long as anything is
+            // still missing and its text is recomputed on every render, so an
+            // assertive region here re-announces the whole remaining list on
+            // every keystroke that changes it, forcibly interrupting a screen
+            // reader's own character echo of what is currently being typed.
+            // `role="alert"` was right for the per-attempt announcement this
+            // is meant to be, wrong for a region that keeps mutating live
+            // while the user is still typing - the two are the same box, but
+            // not the same lifetime.
+            <div
+              ref={summaryRef}
+              tabIndex={-1}
+              role="status"
+              className="focus-landing rounded-lg border border-alert/40 bg-paper px-4 py-3"
+            >
+              <p className="font-body text-[14px] leading-[1.5] text-ink">
+                {step === LAST_STEP
+                  ? `Before this can be sent: ${stepMissing.join(', ')}.`
+                  : `Before the next step: ${stepMissing.join(', ')}.`}
+              </p>
+            </div>
+          ) : null}
+        </div>
 
         {error ? (
           <ErrorNotice headline={error.headline} next={error.next} onDismiss={() => setError(null)} />

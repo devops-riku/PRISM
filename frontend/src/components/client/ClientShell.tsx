@@ -151,7 +151,17 @@ export default function ClientShell({ token }: ClientShellProps) {
   }
 
   return (
-    <div className="flex h-dvh items-center justify-center bg-canvas px-4 py-10 font-body text-body">
+    // `py-6` for the form, `py-10` for everything else, and the difference is
+    // 32px of the only budget that matters here. `ClientForm` is a fixed
+    // 566px card by construction, so the frame's own padding is what decides
+    // the shortest window it fits in: 646px with `py-10`, 614px with `py-6`.
+    // Every other face is a heading and a sentence with room to spare, and
+    // they keep the more generous frame.
+    <div
+      className={`flex h-dvh items-center justify-center bg-canvas px-4 font-body text-body ${
+        status === 'ready' && view?.state === 'issued' ? 'py-6' : 'py-10'
+      }`}
+    >
       {/* `max-h-dvh` + its own scroll, the same idiom `AuthScreen.tsx` uses
           inside `AuthGate`'s identical `h-dvh` wrapper: the outer frame stays
           fixed to the viewport and this card scrolls itself once a face -

@@ -1065,26 +1065,15 @@ def _scope_shortfall(scope: str) -> str:
     on is a dead end on a door that only opens once.
     """
     if len(scope) < config.MIN_CLIENT_SCOPE_CHARS:
-        return (
-            f"Describe the work in a bit more detail - a sentence or two is "
-            f"enough, and about {config.MIN_CLIENT_SCOPE_CHARS} characters is "
-            f"the minimum. This is the only thing the quotation is built from."
-        )
+        return "A bit more detail, please - a sentence or two about the work."
     body = "".join(scope.split())
     if len(set(body)) < config.MIN_CLIENT_SCOPE_DISTINCT:
-        return (
-            "That reads as placeholder text rather than a description. Say what "
-            "you need, who it is for, and anything that matters about how it "
-            "should work."
-        )
+        return "That reads as placeholder text. Say what you need and who it is for."
     if config.MIN_CLIENT_SCOPE_LETTERS and (
         len({character for character in body if character.isalpha()})
         < config.MIN_CLIENT_SCOPE_LETTERS
     ):
-        return (
-            "Describe the work in words as well as numbers - what it is, and "
-            "what it has to do."
-        )
+        return "Describe it in words, not only numbers."
     return ""
 
 
@@ -1143,11 +1132,7 @@ def _normalise_budget_text(raw: str) -> str:
         if digits < config.MIN_CLIENT_BUDGET_DIGITS:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "Put a rough number on the budget - a range or an "
-                    "approximate figure is fine, like “around 300k” or “under "
-                    "₱500,000”."
-                ),
+                detail="Put a rough number on it - “around 300k” or “under ₱500,000”.",
             )
     return text
 
