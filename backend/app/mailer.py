@@ -37,31 +37,45 @@ def configured() -> bool:
 
 
 def _body(studio: str, workspace: str, inviter: str, role: str, link: str) -> str:
-    """The message, in the app's own voice: what, from whom, and one link."""
+    """The message, in the app's own voice: what, from whom, and one link.
+
+    THE COLOURS BELOW ARE THE DOCUMENT'S, NOT THE APP'S, and that is the whole
+    rule for this file. An email is read in someone else's client, on a white
+    background, next to other mail - the same conditions a PRISM quotation is
+    read in and nothing like the studio's dark screen. So it takes the printed
+    document's brand and accent (`app/design.py`'s `PALETTE`), which is the
+    other thing this recipient gets from this studio.
+
+    A sixth hand-maintained copy of a palette, and it is worth saying why it
+    cannot simply import one: an email client strips `<style>` and does not
+    resolve custom properties, so every value has to be an inline literal.
+    This file was pine (`#35655A`) and warm brown (`#1D1B17`) for two re-skins
+    because nothing pointed at it. If `PALETTE` moves, move these by hand.
+    """
     who = f"{inviter} invited you" if inviter else "You have been invited"
     return f"""\
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-            color:#1D1B17;background:#F6F3EE;padding:32px">
-  <div style="max-width:520px;margin:0 auto;background:#FFFDFA;border:1px solid #E4DED4;
+            color:#343148;background:#F4F4F5;padding:32px">
+  <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border:1px solid #DCDCE0;
               border-radius:18px;padding:28px">
     <p style="margin:0 0 18px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
-              color:#8A8378">{studio or 'PRISM'}</p>
+              color:#6E6E78">{studio or 'PRISM'}</p>
     <h1 style="margin:0 0 10px;font-size:22px;font-weight:600;letter-spacing:-.02em">
       {who} to {workspace}
     </h1>
-    <p style="margin:0 0 22px;font-size:15px;line-height:1.6;color:#4A443B">
+    <p style="margin:0 0 22px;font-size:15px;line-height:1.6;color:#35353C">
       You will join as {'an admin' if role == 'admin' else 'a member'}
       {'- you can change anything in this workspace.' if role == 'admin'
        else '- you can prepare quotations and proposals, but not change the studio settings or delete anything.'}
     </p>
     <a href="{link}"
-       style="display:inline-block;background:#35655A;color:#FFFDFA;text-decoration:none;
+       style="display:inline-block;background:#6D57E8;color:#FFFFFF;text-decoration:none;
               padding:12px 20px;border-radius:11px;font-size:14px">Join the workspace</a>
-    <p style="margin:22px 0 0;font-size:13px;line-height:1.6;color:#6B6459">
+    <p style="margin:22px 0 0;font-size:13px;line-height:1.6;color:#56565F">
       Or paste this into your browser:<br>
-      <span style="color:#35655A;word-break:break-all">{link}</span>
+      <span style="color:#6D57E8;word-break:break-all">{link}</span>
     </p>
-    <p style="margin:18px 0 0;font-size:12px;color:#8A8378">
+    <p style="margin:18px 0 0;font-size:12px;color:#6E6E78">
       The link works for 14 days. If you were not expecting it, ignore it - nothing happens
       until you sign in and accept.
     </p>
