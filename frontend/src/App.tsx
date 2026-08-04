@@ -37,6 +37,8 @@ import ErrorNotice from './components/ErrorNotice'
 import { formatDate } from './lib/format'
 import { MONO_LABEL } from './components/tokens'
 import { prefersReducedMotion } from './components/motion'
+import { readTheme, toggleTheme } from './lib/theme'
+import type { Theme } from './lib/theme'
 import type {
   Intake,
   IntakePreset,
@@ -450,6 +452,10 @@ export default function App() {
   // What this person may do here. The server refuses the rest either way;
   // this is so the app does not offer it.
   const { isAdmin } = useRole()
+  // Which palette the studio is in. Dark unless localStorage says otherwise -
+  // see lib/theme's own comment for why the default is the absence of a
+  // choice rather than a stored 'dark'.
+  const [theme, setTheme] = useState<Theme>(() => readTheme())
   const resultsRef = useRef<HTMLDivElement | null>(null)
   const shouldScroll = useRef(false)
   // The quotation the address bar is currently pointing at.
@@ -826,6 +832,8 @@ export default function App() {
       screenName={SCREEN_NAME[route] || ''}
       studioName={defaults?.studio_name || ''}
       onClose={route === 'home' ? '' : '#/'}
+      theme={theme}
+      onToggleTheme={() => setTheme(toggleTheme())}
     />
   )
 

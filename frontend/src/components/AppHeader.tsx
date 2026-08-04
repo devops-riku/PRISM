@@ -2,6 +2,7 @@ import { Menu, MenuButton, MenuItem, MenuItems } from '@headlessui/react'
 import { useEffect, useState } from 'react'
 import { currentUser, onSession, signOut } from '../lib/auth'
 import { goBack } from '../lib/navigation'
+import type { Theme } from '../lib/theme'
 import CommandBar from './CommandBar'
 import NotificationBell from './NotificationBell'
 import WorkspaceMenu from './WorkspaceMenu'
@@ -50,12 +51,18 @@ type AppHeaderProps = {
   studioName?: string
   /** A hash href for the close button. Empty renders no button at all. */
   onClose?: string
+  /** Which palette the studio is in right now. */
+  theme: Theme
+  /** Flips it. `App.tsx` owns the state; this only ever calls the setter. */
+  onToggleTheme: () => void
 }
 
 export default function AppHeader({
   screenName = '',
   studioName = '',
   onClose = '',
+  theme,
+  onToggleTheme,
 }: AppHeaderProps) {
   const studio = studioName.trim() || 'PRISM'
 
@@ -96,6 +103,36 @@ export default function AppHeader({
         {/* The bell shows everywhere, including the front page: it is the one
             piece of chrome that is about you rather than about the screen. */}
         <NotificationBell />
+        {/* The icon shows what pressing it gives you, not what you are in: a
+            moon in dark mode would describe its own state and offer nothing
+            to act on. */}
+        <button
+          type="button"
+          onClick={onToggleTheme}
+          aria-label={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
+          title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
+          className="rounded-lg p-2 text-void transition-colors hover:text-ink"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="h-[18px] w-[18px]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {theme === 'light' ? (
+              <path d="M20 13a8 8 0 1 1-9-9 6.5 6.5 0 0 0 9 9Z" />
+            ) : (
+              <>
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
+              </>
+            )}
+          </svg>
+        </button>
         <Menu>
           <MenuButton
             aria-label={`${studio} — menu`}

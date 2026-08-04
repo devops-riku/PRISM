@@ -354,6 +354,15 @@
        * as long as it takes, with the seconds counted honestly.
        */
       ;(function () {
+        // Before anything paints. Reading this in React instead would mean a
+        // dark frame on every load for a studio who chose light - the same flash
+        // this whole block exists to prevent.
+        try {
+          if (window.localStorage.getItem('prism.theme') === 'light') {
+            document.documentElement.setAttribute('data-theme', 'light')
+          }
+        } catch (e) {}
+
         var boot = document.getElementById('boot')
         if (!boot) return
 
