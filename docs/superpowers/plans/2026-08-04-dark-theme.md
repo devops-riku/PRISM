@@ -336,7 +336,13 @@ In `frontend/src/index.css`, inside `@layer components`, immediately before `.we
     --color-accent-soft: #d7c49e;
     --color-alert: #a8443a;
     --color-alert-soft: #fcf4f2;
-    --well-border: #ded3be;
+    /* NOT `--color-rule`, for the same reason the dark palette's is not: one
+       token cannot be both a hairline and a findable input edge. `#ded3be` was
+       specified here first and measures 1.46 against paper - the plan wrote
+       the warning and then made the mistake. Measured 3.70 / 3.33 against
+       light paper and light canvas. The light theme's inputs had been bordered
+       at 1.46 since long before this plan; the gate is what found it. */
+    --well-border: #8c836e;
 
     color-scheme: light;
     background-color: var(--color-paper);
@@ -456,16 +462,16 @@ it is a dropdown.
 Replace that one occurrence of `stroke='%231D1B17'` with `stroke='%23A6A3BC'`
 - `--color-void` in encoded form, the same weight this arrow had against paper.
 
-`frontend/src/index.css:1076` - a checkmark stroked `%23FFFDFA`, the old paper
-white. It sits on `background-color: var(--color-ballpoint)` (line 1075): a
-checked box, on the same violet the primary button uses.
+`frontend/src/index.css:1076` - a checkmark stroked `%23FFFDFA`. **Leave the
+value.** Add a comment saying why it does not track the accent.
 
-Replace it with `%230E0E16` - the canvas, i.e. dark - **not** a near-white.
-This is the primary button's ruling applied to the same background: white on
-`#8B7CF6` measures 3.33 and dark measures 5.77. A checkmark is a graphical
-object so 3.33 would technically clear the 3:1 bar, but a tick and a button
-label sitting on the identical violet should not disagree about what is
-readable on it.
+An earlier draft of this plan told you to replace it with the dark canvas, on
+the reasoning that it sits on the same violet as the primary button. That was
+wrong, and Task 2's implementer caught it: `.prose` has exactly one call site,
+and that element carries `sheet-light`, so this tick's ground is always the
+LIGHT `--color-ballpoint` (`#343148`), never the dark theme's violet.
+Near-white measures 12.32 against it; the dark canvas would have measured 1.54.
+The instruction would have shipped an invisible checkmark.
 
 Add above each one:
 
