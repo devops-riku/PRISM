@@ -89,7 +89,13 @@ export default function ProposalView({ documentId }: ProposalViewProps) {
       .slice(0, 48) || 'proposal'
 
   return (
-    <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto">
+    // No `.no-scrollbar` here, and the difference is what is being scrolled.
+    // That utility was written for the pad, where a bar appearing on one step
+    // and not another reads as the card resizing. This is a document somebody
+    // reads top to bottom - the bar is how they know there is more of it and
+    // roughly how much, and hiding it left a proposal that ended mid-table
+    // with nothing on screen saying otherwise.
+    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto">
       <section className={`${CARD} shrink-0 px-5 py-4 sm:px-6`}>
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
           <div className="min-w-[18rem]">
