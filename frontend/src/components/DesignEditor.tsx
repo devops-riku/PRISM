@@ -73,7 +73,12 @@ const TABLES: SegmentedOption<DesignTables>[] = [
   { value: 'plain', label: 'Plain', hint: 'Nothing but the header rule' },
 ]
 
-const PALETTE = { brand: '#1D1B17', accent: '#35655A' }
+/** `app/design.py`'s own `PALETTE`, mirrored - this file cannot import from
+ *  Python, so the two are held in step by hand and each names the other.
+ *  These are the DOCUMENT's colours, not the app's: the accent is a deeper
+ *  violet than `--color-ballpoint` because here it is a filled banner with
+ *  paper text on it rather than type on a dark ground. */
+const PALETTE = { brand: '#343148', accent: '#6D57E8' }
 
 //: 400 KB decoded, matching MAX_LOGO_BYTES. The logo is embedded in every
 //: export, so an eleven-megabyte PNG would be carried into every PDF the studio

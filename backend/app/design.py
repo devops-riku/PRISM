@@ -103,9 +103,19 @@ TABLES = ("ruled", "zebra", "plain")
 #: Page margins, in millimetres.
 MARGINS = {"compact": 14.0, "standard": 18.0, "roomy": 24.0}
 
-#: The kit's own two, as the defaults. A studio that changes nothing gets the
-#: document PRISM has always produced.
-PALETTE = {"brand": "#1D1B17", "accent": "#35655A"}
+#: The document's own two colours, and they are NOT the app's.
+#:
+#: A quotation is printed and emailed; the app is looked at on a screen. So the
+#: brand is the indigo the app uses for its own ink, which is legible on paper
+#: at 12.51:1 - and the accent is a DEEPER violet than the app's `#8b7cf6`,
+#: because it does a different job here. In the app that violet is type on a
+#: dark ground. Here it is a filled banner with paper-coloured text ON it, and
+#: white on `#8b7cf6` measures 3.33 - under AA for body text. `#6d57e8` is the
+#: same violet family at 5.03, which clears it with headroom.
+#:
+#: Mirrored by hand in `frontend/src/components/DesignEditor.tsx`, which cannot
+#: import from Python. Change one and change the other.
+PALETTE = {"brand": "#343148", "accent": "#6D57E8"}
 
 
 class ProposalDesign(BaseModel):
