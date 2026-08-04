@@ -10,8 +10,11 @@
       content="PRISM turns one client brief into two documents: a priced proposal for the client and a numbered requirements spec for the developer. One submission, no chat loop."
     />
 
-    <!-- A quotation pad is paper. There is no dark mode. -->
-    <meta name="color-scheme" content="light" />
+    <!-- The app is dark by default. src/index.css carries the authoritative
+         color-scheme on html; this meta is the pre-stylesheet hint that
+         agrees with it, so the browser isn't guessing light before the
+         stylesheet can say otherwise. -->
+    <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0e0e16" />
 
     <!-- Ballpoint-blue stamp mark: a rubber stamp struck slightly off-square. -->
