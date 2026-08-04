@@ -311,11 +311,7 @@ export default function HomeScreen() {
         <div className="mx-auto mt-6 grid max-w-[17rem] grid-cols-1 gap-4">
           <a
             href="#/jobs"
-            className={`rounded-xl px-5 py-4 text-center no-underline transition-colors duration-150 ${
-              running
-                ? 'bg-ballpoint hover:bg-accent-deep'
-                : 'bg-duplicate hover:bg-accent-soft'
-            }`}
+            className="rounded-xl border border-ballpoint/30 bg-accent-soft px-5 py-4 text-center no-underline transition-colors duration-150"
           >
             <span
               className={`block font-label text-[30px] leading-none tabular-nums ${

@@ -376,6 +376,25 @@
 }
 
 @layer components {
+  /* The wash behind the hero. One radial, anchored to the top centre and gone
+     by two thirds of the way down, in the accent at a tenth of its strength.
+
+     On the SHELL rather than on `body`, because the shells are what carry
+     `overflow: hidden` and a fixed height - a gradient on the body would be
+     painted behind a page that never scrolls.
+
+     `background-attachment` is deliberately not set: the shells do not scroll,
+     so there is nothing to fix against, and it costs a compositing layer on
+     every one of them. */
+  .page-glow {
+    background-image: radial-gradient(
+      ellipse 90% 55% at 50% 0%,
+      color-mix(in oklab, var(--color-ballpoint) 12%, transparent),
+      transparent 70%
+    );
+    background-repeat: no-repeat;
+  }
+
   /* ── The route announcer's landing point ─────────────────────────────
      The client faces (`ClientForm`/`ClientWaiting`/`ClientQuotation`/
      `ClientClosed`) move focus to their own `<h1>` on mount and on every
@@ -670,6 +689,17 @@
     --color-accent-soft: #d7c49e;
     --color-alert: #a8443a;
     --color-alert-soft: #fcf4f2;
+
+    /* NOT `--color-rule`, for the same reason the dark one is not: a hairline
+       and a findable input edge are different jobs and one value cannot be
+       quiet enough for both. `#ded3be` - the same hex as `--color-rule` - was
+       specified here first and measures 1.46 against paper. Measured 3.70 and
+       3.33 against light paper and light canvas.
+
+       Worth separating: the light theme's inputs were bordered at 1.46 long
+       before the dark theme existed. This is not a regression that was fixed,
+       it is a gap the contrast gate found the first time anything measured
+       it. */
     --well-border: #8c836e;
 
     color-scheme: light;

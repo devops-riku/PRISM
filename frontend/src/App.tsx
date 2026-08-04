@@ -837,7 +837,7 @@ export default function App() {
   // worth showing: naming one is the only useful thing on the screen.
   if (workspaceCount === 0 || route === 'workspaces') {
     return (
-      <div className="h-dvh overflow-hidden bg-canvas font-body text-body">
+      <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
         <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
           {workspaceCount === 0 ? null : nav}
           <WorkspacesScreen onChanged={(found: Workspace[]) => setWorkspaceCount(found.length)} />
@@ -860,7 +860,7 @@ export default function App() {
     route === 'proposal'
   ) {
     return (
-      <div className="h-dvh overflow-hidden bg-canvas font-body text-body">
+      <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
         <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
           {nav}
           {route === 'quotations' ? <QuotationList /> : null}
@@ -932,7 +932,7 @@ export default function App() {
   // documents below the fold on every visit.
   if (route === 'quotation') {
     return (
-      <div className="min-h-screen bg-canvas font-body text-body">
+      <div className="min-h-screen bg-canvas font-body text-body page-glow">
         <main className="mx-auto w-full max-w-sheet px-4 py-10 sm:px-6 sm:py-16">
           {nav}
 
@@ -986,7 +986,7 @@ export default function App() {
 
   if (route === 'home') {
     return (
-      <div className="h-dvh overflow-hidden bg-canvas font-body text-body">
+      <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
         <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
           {nav}
           <HomeScreen />
@@ -1002,7 +1002,7 @@ export default function App() {
   // only thing that can overflow is the step panel inside — silently, without a
   // bar, because the card is already the same height it was a moment ago.
   return (
-    <div className="h-dvh overflow-hidden bg-canvas font-body text-body">
+    <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
       <main className="mx-auto flex h-full w-full max-w-sheet flex-col px-4 py-6 sm:px-6 sm:py-8">
         {nav}
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-rule bg-paper shadow-sheet">
