@@ -28,7 +28,7 @@ import re
 import threading
 import time
 from collections import deque
-from typing import Callable, List, NamedTuple, Union
+from typing import Callable, List, NamedTuple, Optional, Union
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -897,10 +897,27 @@ _CLIENT_FILE_UNREADABLE = (
 )
 
 
+def _stage_name(name: str, limit: int = 30) -> str:
+    """A client's filename, cut to fit a progress line.
+
+    Cut in the MIDDLE rather than the end, because the end is where the
+    extension is and "reading site-photo-2026-07-30-13…" tells a studio less
+    than "reading site-photo-20…-102.jpg". The stage line is one line on a
+    strip, and a name that wraps it moves everything under it.
+    """
+    clean = " ".join(str(name or "").split()) or "a file"
+    if len(clean) <= limit:
+        return clean
+    keep = limit - 1
+    head = keep // 2
+    return clean[:head] + "…" + clean[-(keep - head):]
+
+
 def _load_client_files(
     intake_id: str,
     image_records: List[dict],
     document_records: List[dict],
+    on_progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> tuple[List[tuple[bytes, str]], List[attachments_module.Attachment], List[str]]:
     """The bytes behind one intake's manifest. Blocking, and called in a thread.
 
@@ -949,8 +966,20 @@ def _load_client_files(
     lanes = [(record, True) for record in image_records]
     lanes += [(record, False) for record in document_records]
 
-    for record, as_image in lanes:
+    for position, (record, as_image) in enumerate(lanes, start=1):
         name = _client_file_name(record)
+        # Before the read, not after: the point of the line is to say what is
+        # being waited ON. With Spaces configured this file is two network
+        # round trips away and `attachments.read` may then unpack a zip, which
+        # is the second or two the studio is looking at a static strip for.
+        #
+        # Called from inside the worker thread. `jobs.stage` writes under
+        # `jobs._lock`, a module-level RLock, so that is safe - and it is why
+        # this is a callback rather than this function importing `jobs` and
+        # deciding what to say, which would put wording for a progress strip
+        # inside the function that reads bytes.
+        if on_progress is not None:
+            on_progress(position, len(lanes), name)
         papers_before = len(papers)
         try:
             found = intakefiles.read(intake_id, str(record.get("id") or ""))
@@ -1828,9 +1857,19 @@ async def create_proposal(
                 # `asyncio.to_thread` in either case, because this is `async
                 # def` and a blocking socket call on the loop parks every
                 # request this worker holds - see `_load_client_files`.
-                jobs.stage(job.id, "Reading the client's files")
+                total_files = len(client_images) + len(client_papers)
+                jobs.stage(
+                    job.id,
+                    f"Reading {total_files} file{'' if total_files == 1 else 's'} from the client",
+                )
                 found_images, found_papers, problems = await asyncio.to_thread(
-                    _load_client_files, intake_id, client_images, client_papers
+                    _load_client_files,
+                    intake_id,
+                    client_images,
+                    client_papers,
+                    lambda at, total, name: jobs.stage(
+                        job.id, f"Reading {_stage_name(name)} ({at} of {total})"
+                    ),
                 )
                 # The client's files first in both lanes, which is a decision
                 # rather than an accident. `attachments.describe_for_prompt`
@@ -1864,6 +1903,12 @@ async def create_proposal(
 
                 for position, index in enumerate(reversed(range(len(tiers)))):
                     tier = tiers[index]
+                    # Said before the call rather than after it. `jobs.step`
+                    # below marks the tier DONE, which is the right thing for a
+                    # progress bar and the wrong thing for the line of text
+                    # above it - between two steps that line was describing
+                    # work that had already finished.
+                    jobs.stage(job.id, f"Pricing {tier} ({position + 1} of {len(tiers)})")
                     estimate = await prepare(tier, index, above_total, above_name)
                     estimates[index] = estimate
                     # The anchor for the next tier down is what this one came
@@ -1877,6 +1922,11 @@ async def create_proposal(
                     # work done rather than time passed.
                     jobs.step(job.id, position, f"{tier} priced")
             else:
+                # The single-quotation path, and the longest wait in the job:
+                # one model call, tens of seconds, previously behind whatever
+                # stage happened to be showing when it started - which for a
+                # request with attachments was the last filename read.
+                jobs.stage(job.id, "Pricing the work")
                 estimates = [await prepare("", 0)]
                 jobs.step(job.id, 0, "Costing")
 
