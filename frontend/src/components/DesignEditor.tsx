@@ -242,7 +242,7 @@ function Sheet({ look, studioName, children }: SheetProps) {
 
   return (
     <div
-      className="mx-auto w-full max-w-[300px] overflow-hidden rounded-md border border-rule bg-white shadow-raised"
+      className="sheet-light mx-auto w-full max-w-[300px] overflow-hidden rounded-md border border-rule bg-white shadow-raised"
       style={{ aspectRatio: '210 / 297' }}
       aria-hidden="true"
     >

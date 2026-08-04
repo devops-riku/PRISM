@@ -29,7 +29,7 @@ function tokens(scope) {
     // toggle in a selector list (`.sheet-light,\nhtml[data-theme=light] {`,
     // the shape the plan's later light-mode toggle task calls for) - the
     // brace that actually opens the rule is then found by scanning forward
-    // from wherever the selector line matched, which is correct either way. */
+    // from wherever the selector line matched, which is correct either way.
     const selector = css.match(/^[ \t]*\.sheet-light[ \t]*[,{]/m)
     const start = selector ? css.indexOf('{', selector.index) : -1
     body = start === -1 ? '' : css.slice(start, css.indexOf('}', start))
@@ -38,6 +38,13 @@ function tokens(scope) {
   for (const [, name, hex] of body.matchAll(/--color-([a-z-]+):\s*(#[0-9a-fA-F]{6})/g)) {
     found[name] = hex
   }
+  // `--well-border` is not a `--color-*` token, so it needs its own lookup -
+  // but it still has to come from THIS scope's own body. Resolving it once,
+  // file-globally, always finds the dark rule's value (whichever comes first
+  // in the file) and measures the light input-border pair against a colour
+  // that was never actually on screen.
+  const wellBorder = body.match(/--well-border:\s*(#[0-9a-fA-F]{6})/)
+  if (wellBorder) found['well-border'] = wellBorder[1]
   return found
 }
 
@@ -69,6 +76,23 @@ const PAIRS = [
   ['body on a well', 'body', 'duplicate', 4.5],
 ]
 
+// An input's edge has to be findable. It is the one non-text pair that
+// matters: a divider nobody sees is a style, a field nobody can find is a
+// fault. `well-border` is not a `--color-*` token, so it is named separately
+// from PAIRS, but it resolves through the same per-scope `tokens()` and is
+// measured against that SAME scope's own `paper`/`canvas` - not always
+// dark's, which is the bug this pair used to carry.
+const WELL_BORDER_PAIRS = [
+  ['input border on a card', 'well-border', 'paper', 3.0],
+  ['input border on the page', 'well-border', 'canvas', 3.0],
+]
+
+// Every token any pair names, derived rather than hand-listed a second time -
+// a hand-written list is the same "two places that drift" mistake this file
+// already tells the story of once (`--well-border`, above).
+const REQUIRED = [...new Set([...PAIRS, ...WELL_BORDER_PAIRS].flatMap(([, fg, bg]) => [fg, bg]))]
+const cssName = (name) => (name === 'well-border' ? `--${name}` : `--color-${name}`)
+
 let failed = 0
 for (const scope of ['dark', 'light']) {
   const t = tokens(scope)
@@ -77,28 +101,23 @@ for (const scope of ['dark', 'light']) {
     failed += 1
     continue
   }
+
+  // A missing token used to reach `ratio()` and throw an uncaught TypeError -
+  // still a non-zero exit, so nothing silently passed, but a stack trace is
+  // not a report. Name what is missing and move on to the next scope instead.
+  const missing = REQUIRED.filter((name) => !t[name])
+  if (missing.length > 0) {
+    console.log(`\n${scope}: missing ${missing.map(cssName).join(', ')}`)
+    failed += 1
+    continue
+  }
+
   console.log(`\n--- ${scope} ---`)
-  for (const [label, fg, bg, floor] of PAIRS) {
+  for (const [label, fg, bg, floor] of [...PAIRS, ...WELL_BORDER_PAIRS]) {
     const value = ratio(t[fg], t[bg])
     const ok = value >= floor
     if (!ok) failed += 1
     console.log(`  ${label.padEnd(30)} ${String(value).padStart(6)}  ${ok ? 'ok' : `FAIL (needs ${floor})`}`)
-  }
-}
-
-// An input's edge has to be findable. It is the one non-text pair that matters:
-// a divider nobody sees is a style, a field nobody can find is a fault.
-const dark = tokens('dark')
-const wellBorder = (css.match(/--well-border:\s*(#[0-9a-fA-F]{6})/) || [])[1]
-if (!wellBorder) {
-  console.log('\nno --well-border found')
-  failed += 1
-} else {
-  for (const [label, bg] of [['on a card', 'paper'], ['on the page', 'canvas']]) {
-    const value = ratio(wellBorder, dark[bg])
-    const ok = value >= 3.0
-    if (!ok) failed += 1
-    console.log(`\n  input border ${label.padEnd(17)} ${String(value).padStart(6)}  ${ok ? 'ok' : 'FAIL (needs 3)'}`)
   }
 }
 

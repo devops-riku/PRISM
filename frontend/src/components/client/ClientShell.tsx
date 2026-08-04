@@ -142,7 +142,7 @@ export default function ClientShell({ token }: ClientShellProps) {
 
   if (isDocument && view) {
     return (
-      <div className="min-h-dvh bg-canvas px-4 py-10 font-body text-body sm:px-6 sm:py-14">
+      <div className="sheet-light min-h-dvh bg-canvas px-4 py-10 font-body text-body sm:px-6 sm:py-14">
         <div className="mx-auto w-full max-w-[46rem]">
           <ReadyFace view={view} token={token} onUpdate={handleUpdate} onGone={handleGone} />
         </div>
@@ -158,7 +158,7 @@ export default function ClientShell({ token }: ClientShellProps) {
     // Every other face is a heading and a sentence with room to spare, and
     // they keep the more generous frame.
     <div
-      className={`flex h-dvh items-center justify-center bg-canvas px-4 font-body text-body ${
+      className={`sheet-light flex h-dvh items-center justify-center bg-canvas px-4 font-body text-body ${
         status === 'ready' && view?.state === 'issued' ? 'py-6' : 'py-10'
       }`}
     >

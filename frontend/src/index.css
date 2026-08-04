@@ -621,6 +621,62 @@
     font-feature-settings: "tnum";
   }
 
+  /* ── A printed page, inside a dark app ────────────────────────────────
+     Restores the paper palette for one subtree. Everything below it renders
+     exactly as it did before the app went dark, because the utilities never
+     changed - only the values the variables hold.
+
+     Four places use it: the document body (`MarkdownView`, which both the
+     quotation and the proposal render through), `ClientShell`'s two roots,
+     and `DesignEditor`'s preview sheet. Three of those are the same argument -
+     this is what the client receives, so it should look like what the client
+     receives - and the fourth is a picture of a printed page, which a dark
+     preview would not preview.
+
+     IT PAINTS ITS OWN PAPER as well as setting the variables, so a sheet
+     dropped into a dark card renders as paper on a mount rather than as dark
+     text on a dark ground. A utility on the same element still wins, which is
+     what lets `ClientShell` keep its own `bg-canvas`.
+
+     LIGHT IS OPT-IN, and that is a rule someone has to know: a new
+     document-ish screen defaults to dark and has to ask for this. That is the
+     right way round - a new screen matching the app it lives in is a smaller
+     mistake than a new studio screen arriving white - but it is a rule rather
+     than something the code will tell you.
+
+     TWO SELECTORS, ONE BLOCK, and that is deliberate. `html[data-theme=light]`
+     is the whole app in light mode (Task 6); `.sheet-light` is one printed
+     surface inside the dark app. They want the identical fifteen values, and
+     writing them twice is how the two drift - this branch has already shipped
+     that mistake twice with a raster allowlist. One block, two doors into it.
+
+     In light mode `.sheet-light` becomes a no-op that sets what is already
+     set, which is correct rather than wasteful: a document is paper in both
+     modes, so the class asserts the same thing whether or not the app agrees.
+     */
+  html[data-theme='light'],
+  .sheet-light {
+    --color-canvas: #f4f1ea;
+    --color-paper: #fffdf8;
+    --color-duplicate: #ede5d5;
+    --color-rule: #ded3be;
+    --color-hairline: #eae2d2;
+    --color-ink: #343148;
+    --color-body: #413e55;
+    --color-void: #5a5670;
+    --color-faint: #6e6a82;
+    --color-ballpoint: #343148;
+    --color-accent-deep: #252338;
+    --color-accent-soft: #d7c49e;
+    --color-alert: #a8443a;
+    --color-alert-soft: #fcf4f2;
+    --well-border: #ded3be;
+
+    color-scheme: light;
+    background-color: var(--color-paper);
+    color: var(--color-body);
+  }
+
   /* ── The input well ───────────────────────────────────────────────────
      The kit's field: surface fill, 1px border, 12px radius. On focus the
      border turns accent and a 4px tinted ring appears outside it. The ring is
@@ -677,7 +733,11 @@
   /* A native select keeps its own arrow only on some platforms; draw one. */
   select.well {
     padding-inline-end: 2rem;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%231D1B17' stroke-width='1.6'/%3E%3C/svg%3E");
+    /* The colour here is URL-encoded (`%23` is `#`), which is why the
+       project's hardcoded-colour sweeps never saw it. Kept in step with
+       `--color-void` by hand; there is no way to put a custom property inside
+       a data-URI. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23A6A3BC' stroke-width='1.6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 0.8rem center;
     background-size: 10px 6px;

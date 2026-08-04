@@ -433,5 +433,10 @@ export default function MarkdownView({ markdown, tone = 'original' }: MarkdownVi
     )
   }
 
-  return <div className="prose">{blocks}</div>
+  // `sheet-light` because this IS the document - the bytes a client receives.
+  // One edit covers both, since the quotation (`ResultSheets`) and the
+  // proposal (`ProposalView`) both render their body through here. The dark
+  // chrome around it stays dark, which is the frame a PDF viewer puts on a
+  // page and the reason this is a sheet rather than a screen.
+  return <div className="prose sheet-light">{blocks}</div>
 }
