@@ -17,6 +17,37 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#12100e" />
 
+    <!--
+      THE THEME, DECIDED IN <head>, and the position is the whole point.
+
+      This used to live in the boot script at the bottom of <body>, under a
+      comment reading "before anything paints". It was not: the browser parses
+      top-down, so #boot and its stylesheet were already in the document and
+      could paint a dark splash before that line ran. A studio in light mode
+      got a dark frame first - the exact flash the boot block exists to
+      prevent, reintroduced by the fix for it sitting too late.
+
+      In <head> there is no <body> yet, so nothing can have painted. The
+      attribute is on <html> before the first frame either way.
+
+      `theme-color` is updated here too rather than being a second static meta:
+      it tints the browser's own chrome on mobile, and a dark strip above a
+      light app is the same seam one line lower down.
+    -->
+    <script>
+      ;(function () {
+        try {
+          if (window.localStorage.getItem('prism.theme') === 'light') {
+            document.documentElement.setAttribute('data-theme', 'light')
+            var m = document.querySelector('meta[name="theme-color"]')
+            if (m) m.setAttribute('content', '#faf7f2')
+            var s = document.querySelector('meta[name="color-scheme"]')
+            if (s) s.setAttribute('content', 'light')
+          }
+        } catch (e) {}
+      })()
+    </script>
+
     <!-- Ballpoint-blue stamp mark: a rubber stamp struck slightly off-square. -->
     <!-- URL-encoded (%23 is #), which is why colour sweeps miss it. The card
          surface and the accent from src/index.css, kept in step by hand. -->
@@ -267,6 +298,59 @@
 
         #boot .spark { animation: none; opacity: 0.25; }
       }
+
+      /* ── The light half ────────────────────────────────────────────────
+         The splash used to stay dark in light mode. That was a known seam
+         and it was written down as accepted: it is visible for well under a
+         second, and making it follow the theme meant reading storage twice.
+         The studio looked at it and did not accept it, which is the right
+         way round - a dark full-screen flash before a light app is the most
+         visible thing in the whole load.
+
+         It costs one selector now rather than a second storage read, because
+         the theme is already an attribute on <html> by the time this parses
+         (see the <head> script). Same values as `src/index.css`'s light
+         block, copied by hand for the same reason as everything else here:
+         this screen paints before that stylesheet exists.
+
+         The three refracted rays are NOT listed. They are the brand mark and
+         they are the same in both themes - it is the beam going in, the glass
+         and the chrome that have to flip. */
+      html[data-theme='light'] #boot {
+        background: radial-gradient(60% 60% at 50% 45%, #fffdf9 0%, #f1ebe1 100%);
+      }
+
+      html[data-theme='light'] #boot .word,
+      html[data-theme='light'] #boot .note {
+        color: #776e63;
+      }
+
+      html[data-theme='light'] #boot .thread i {
+        background: #e1d9cc;
+      }
+
+      html[data-theme='light'] #boot[data-step="1"] .thread i:nth-child(1),
+      html[data-theme='light'] #boot[data-step="2"] .thread i:nth-child(-n + 2),
+      html[data-theme='light'] #boot[data-step="3"] .thread i {
+        background: #55631f;
+      }
+
+      /* `stroke` and `fill` are presentation ATTRIBUTES on the SVG below, and
+         a stylesheet beats a presentation attribute - so these override the
+         markup without it needing to know a theme exists. */
+      html[data-theme='light'] #boot .beam,
+      html[data-theme='light'] #boot .edge {
+        stroke: #1c1815;
+      }
+
+      html[data-theme='light'] #boot .glass {
+        fill: #55631f;
+        fill-opacity: 0.16;
+      }
+
+      html[data-theme='light'] #boot .spark {
+        fill: #1c1815;
+      }
     </style>
 
     <div id="boot" role="status" aria-label="PRISM is starting">
@@ -367,15 +451,10 @@
        * as long as it takes, with the seconds counted honestly.
        */
       ;(function () {
-        // Before anything paints. Reading this in React instead would mean a
-        // dark frame on every load for a studio who chose light - the same flash
-        // this whole block exists to prevent.
-        try {
-          if (window.localStorage.getItem('prism.theme') === 'light') {
-            document.documentElement.setAttribute('data-theme', 'light')
-          }
-        } catch (e) {}
-
+        // The theme is NOT read here. It is decided by the script in <head>,
+        // which is the only place early enough - see the comment there. This
+        // one runs after #boot is already in the document, which is exactly
+        // why it was the wrong place for it.
         var boot = document.getElementById('boot')
         if (!boot) return
 
