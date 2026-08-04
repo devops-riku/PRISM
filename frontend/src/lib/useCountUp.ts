@@ -51,6 +51,7 @@ function settleAtOnce(): boolean {
 }
 
 export function useCountUp(value: number, duration: number = DURATION_MS): number {
+  const still = settleAtOnce()
   const [shown, setShown] = useState(() => (settleAtOnce() ? value : 0))
   // What the figure reads at this instant, held in a ref rather than read from
   // state inside the effect. Two things depend on that: the animation knows
@@ -60,13 +61,15 @@ export function useCountUp(value: number, duration: number = DURATION_MS): numbe
   const at = useRef(shown)
 
   useEffect(() => {
-    if (at.current === value) return undefined
-
-    if (settleAtOnce()) {
+    if (still) {
+      // Only to keep the state in step if the preference is turned back off
+      // mid-session. What is RENDERED under reduce never comes from here.
       at.current = value
       setShown(value)
       return undefined
     }
+
+    if (at.current === value) return undefined
 
     const from = at.current
     const span = value - from
@@ -85,7 +88,12 @@ export function useCountUp(value: number, duration: number = DURATION_MS): numbe
 
     frame = window.requestAnimationFrame(step)
     return () => window.cancelAnimationFrame(frame)
-  }, [value, duration])
+  }, [value, duration, still])
 
-  return shown
+  // Under reduce this is the value itself, decided DURING the render, not by
+  // an effect a paint later. That distinction was measured rather than
+  // assumed: reading it from state left one frame showing 0 between the count
+  // arriving and the effect writing it down, and one frame of a wrong number
+  // is exactly what somebody who asked for no movement asked not to see.
+  return still ? value : shown
 }
