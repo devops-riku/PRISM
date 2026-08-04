@@ -344,12 +344,41 @@ In `frontend/src/index.css`, inside `@layer components`, immediately before `.we
   }
 ```
 
-- [ ] **Step 2: Run the check - both scopes should now pass**
+- [ ] **Step 2: Harden the gate before you lean on it**
+
+Task 1's review left three findings in `frontend/scripts/check-contrast.mjs`,
+and two of them stop being theoretical the moment the block you just wrote
+exists. Close them now, before Step 3 makes the light scope real.
+
+**`--well-border` is resolved once, file-globally, and always measured against
+the dark palette.** The block you just added defines its own
+`--well-border: #ded3be`, so the light input-border pair - the 3:1 floor this
+plan calls load-bearing - would never be checked at all. Move the lookup inside
+`tokens()` so each scope resolves its own, and measure each against its own
+`paper` and `canvas`.
+
+**A missing token crashes instead of reporting.** The only completeness guard is
+`!t.canvas`. If a future edit nests a rule inside the light block, the naive
+first-`}` end-anchor truncates it mid-palette and `ratio()` throws an uncaught
+TypeError. The exit code is still non-zero, so the gate does not silently pass -
+but a stack trace is not a finding. Before computing any ratio, check that every
+token the pairs name, and `--well-border`, resolved; if any did not, print
+which ones are missing and exit non-zero.
+
+**A stray `*/` at line 32** terminates a `//` comment block, left over from an
+earlier draft. Delete it.
+
+Then prove the hardening works rather than assuming it: temporarily give the
+light block a failing `--well-border` (say `#e8e0d0`, far too pale against
+`#fffdf8`), confirm the script now reports a light input-border FAIL, and put it
+back.
+
+- [ ] **Step 3: Run the check - both scopes should now pass**
 
 Run: `cd frontend && node scripts/check-contrast.mjs`
 Expected: PASS. Both `--- dark ---` and `--- light ---` print every pair with `ok`, and the script exits 0.
 
-- [ ] **Step 3: The document body**
+- [ ] **Step 4: The document body**
 
 In `frontend/src/components/MarkdownView.tsx`, line 436, change:
 
@@ -368,7 +397,7 @@ to:
   return <div className="prose sheet-light">{blocks}</div>
 ```
 
-- [ ] **Step 4: The client's own faces**
+- [ ] **Step 5: The client's own faces**
 
 In `frontend/src/components/client/ClientShell.tsx`, add `sheet-light` to both roots.
 
@@ -396,7 +425,7 @@ to:
       className={`sheet-light flex h-dvh items-center justify-center bg-canvas px-4 font-body text-body ${
 ```
 
-- [ ] **Step 5: The design preview**
+- [ ] **Step 6: The design preview**
 
 In `frontend/src/components/DesignEditor.tsx`, line 245, change:
 
@@ -412,7 +441,7 @@ to:
 
 `bg-white` stays. It was already right: this is a picture of a printed page, and `sheet-light` is what makes the border and shadow around it agree with the paper inside.
 
-- [ ] **Step 6: The two colours hiding inside data-URIs**
+- [ ] **Step 7: The two colours hiding inside data-URIs**
 
 Two SVGs are embedded in `index.css` as data-URIs, and their colours are
 URL-encoded (`%23` is `#`). That is why the project's own "no hardcoded colour"
@@ -447,12 +476,12 @@ Add above each one:
        a data-URI. */
 ```
 
-- [ ] **Step 7: Typecheck and build**
+- [ ] **Step 8: Typecheck and build**
 
 Run: `cd frontend && npm run typecheck && npm run build`
 Expected: both exit 0.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add frontend/src/index.css frontend/src/components/MarkdownView.tsx frontend/src/components/client/ClientShell.tsx frontend/src/components/DesignEditor.tsx
