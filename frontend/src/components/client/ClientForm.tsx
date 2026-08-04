@@ -506,7 +506,17 @@ export default function ClientForm({
             panel - which is what a wizard looks like - and buys a card that
             never moves, including on the one path that used to overflow it.
             The floor is a minimum, not a cap: a browser wrapping this wider
-            still grows rather than clipping. */}
+            still grows rather than clipping.
+
+            RE-MEASURED after the spacing pass removed step 1's wrapper
+            `mt-3` (the label's own `mb-2` was adjacent-sibling-collapsing
+            with it at max(8,12)=12px, not summing, so the visible gap only
+            shrank by 4px, not the full 12): the three step-1 figures above
+            are now 187 / 295 / 324. The floor stays at 328px rather than
+            being retuned to 324 - the numbers just above are the reason it
+            was chosen, not a promise it is millimetre-exact, and 4px of
+            extra breathing room under the tallest panel is the safe
+            direction to be stale in. */}
         <div className="min-h-[328px]">
         {/* Step 1. First, and on a panel of its own rather than among the
             fields: it is the only question here whose answer changes how the
@@ -516,7 +526,10 @@ export default function ClientForm({
             two that have to be kept in step. */}
         <div className={step === 0 ? '' : 'hidden'}>
           <FieldLabel htmlFor="client-kind">Kind of work</FieldLabel>
-          <div className="mt-3">
+          {/* No mt- here: FieldLabel's own mb-2 (8px) is the label-to-field
+              gap, the same as every other field on this form. A wrapper
+              mt-3 used to stack on top of it for 20px total. */}
+          <div>
             <KindPicker
               value={kind}
               label={kindLabel}
