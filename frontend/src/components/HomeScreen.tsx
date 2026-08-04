@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { listJobs } from '../lib/api'
 import { useRole } from '../lib/role'
+import { useCountUp } from '../lib/useCountUp'
 import { DISPLAY } from './tokens'
 
 /**
@@ -190,7 +191,17 @@ export default function HomeScreen() {
     }
   }, [])
 
-  const figure = (value: number | null) => (value === null ? '—' : value)
+  // The one figure on the front page, and the only one in the app that counts
+  // up to itself. It is a dashboard fact — how much work is in flight — read
+  // once on arrival, so watching it land is honest. Nothing on a quotation or
+  // a proposal gets this treatment: see lib/useCountUp.ts for why.
+  //
+  // `?? 0` rather than a conditional hook, and the em dash is still decided at
+  // the render site below: an unknown count must not animate up to zero and
+  // then be replaced by a dash, and it must not be a zero at all.
+  const counted = useCountUp(running ?? 0)
+
+  const figure = (value: number | null) => (value === null ? '—' : counted)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center py-6">
