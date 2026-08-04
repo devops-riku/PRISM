@@ -851,9 +851,9 @@ export default function App() {
   // worth showing: naming one is the only useful thing on the screen.
   if (workspaceCount === 0 || route === 'workspaces') {
     return (
-      <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-        <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
-          {workspaceCount === 0 ? null : nav}
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+        {workspaceCount === 0 ? null : nav}
+        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
           <WorkspacesScreen onChanged={(found: Workspace[]) => setWorkspaceCount(found.length)} />
         </main>
       </div>
@@ -874,9 +874,9 @@ export default function App() {
     route === 'proposal'
   ) {
     return (
-      <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-        <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
-          {nav}
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+        {nav}
+        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
           {route === 'quotations' ? <QuotationList /> : null}
           {route === 'jobs' ? <JobList /> : null}
           {route === 'proposals' ? <ProposalStudio /> : null}
@@ -947,9 +947,8 @@ export default function App() {
   if (route === 'quotation') {
     return (
       <div className="min-h-screen bg-canvas font-body text-body page-glow">
+        {nav}
         <main className="mx-auto w-full max-w-sheet px-4 py-10 sm:px-6 sm:py-16">
-          {nav}
-
           <div className="mb-8 rounded-xl border border-rule bg-paper shadow-sheet">
             <QuotationHeader
               reference={bundle?.estimate?.quotation_ref || ''}
@@ -1000,9 +999,9 @@ export default function App() {
 
   if (route === 'home') {
     return (
-      <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-        <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
-          {nav}
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+        {nav}
+        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
           <HomeScreen />
         </main>
       </div>
@@ -1016,9 +1015,9 @@ export default function App() {
   // only thing that can overflow is the step panel inside — silently, without a
   // bar, because the card is already the same height it was a moment ago.
   return (
-    <div className="h-dvh overflow-hidden bg-canvas font-body text-body page-glow">
-      <main className="mx-auto flex h-full w-full max-w-app flex-col px-4 py-6 sm:px-6 sm:py-8">
-        {nav}
+    <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+      {nav}
+      <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-rule bg-paper shadow-sheet">
           <QuotationHeader
             title="New PAD Quotation"
