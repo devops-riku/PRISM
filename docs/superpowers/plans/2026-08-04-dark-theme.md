@@ -412,12 +412,47 @@ to:
 
 `bg-white` stays. It was already right: this is a picture of a printed page, and `sheet-light` is what makes the border and shadow around it agree with the paper inside.
 
-- [ ] **Step 6: Typecheck and build**
+- [ ] **Step 6: The two colours hiding inside data-URIs**
+
+Two SVGs are embedded in `index.css` as data-URIs, and their colours are
+URL-encoded (`%23` is `#`). That is why the project's own "no hardcoded colour"
+sweep missed them: a `#[0-9a-fA-F]{6}` search does not match `%231D1B17`. Both
+carry values from **two palettes ago**.
+
+`frontend/src/index.css:680` - the select's dropdown arrow, stroked
+`%231D1B17`, the warm-brown ink from before the indigo re-skin. On a
+`#181826` card it is invisible: the control still opens, and nothing tells you
+it is a dropdown.
+
+Replace that one occurrence of `stroke='%231D1B17'` with `stroke='%23A6A3BC'`
+- `--color-void` in encoded form, the same weight this arrow had against paper.
+
+`frontend/src/index.css:1076` - a checkmark stroked `%23FFFDFA`, the old paper
+white. It sits on `background-color: var(--color-ballpoint)` (line 1075): a
+checked box, on the same violet the primary button uses.
+
+Replace it with `%230E0E16` - the canvas, i.e. dark - **not** a near-white.
+This is the primary button's ruling applied to the same background: white on
+`#8B7CF6` measures 3.33 and dark measures 5.77. A checkmark is a graphical
+object so 3.33 would technically clear the 3:1 bar, but a tick and a button
+label sitting on the identical violet should not disagree about what is
+readable on it.
+
+Add above each one:
+
+```css
+    /* The colour here is URL-encoded (`%23` is `#`), which is why the
+       project's hardcoded-colour sweeps never saw it. Kept in step with
+       `--color-void` by hand; there is no way to put a custom property inside
+       a data-URI. */
+```
+
+- [ ] **Step 7: Typecheck and build**
 
 Run: `cd frontend && npm run typecheck && npm run build`
 Expected: both exit 0.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add frontend/src/index.css frontend/src/components/MarkdownView.tsx frontend/src/components/client/ClientShell.tsx frontend/src/components/DesignEditor.tsx
@@ -497,7 +532,26 @@ const { chromium } = require('C:/Users/Riku/.claude/skills/gstack/node_modules/p
 
 Expected: every sample is a dark colour - `rgb(14, 14, 22)` or the boot screen's own dark - and none is a light one such as `rgb(246, 243, 238)`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: The favicon is pine green**
+
+`frontend/index.html:21` is the tab icon, a data-URI whose colours are
+URL-encoded: `%23F6F3EE` for the rounded square and `%2335655A` for the dot.
+That second value is **pine** - the accent from before the indigo re-skin,
+which was itself before this one. The tab has been wrong for two palettes for
+the same reason the loading screen was: nothing points at it.
+
+Replace `%23F6F3EE` with `%23181826` (the card surface, so the icon reads as a
+tile rather than a white square in a dark tab strip) and `%2335655A` with
+`%238B7CF6` (the accent).
+
+Add the same note the preloader gets, in one line:
+
+```html
+    <!-- URL-encoded (%23 is #), which is why colour sweeps miss it. The card
+         surface and the accent from src/index.css, kept in step by hand. -->
+```
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add frontend/index.html
