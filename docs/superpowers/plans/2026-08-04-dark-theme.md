@@ -1159,6 +1159,123 @@ git commit -m "The printed document stops defaulting to pine"
 
 ---
 
+## Task 9: The app gets its own width
+
+**Files:**
+- Modify: `frontend/src/index.css` (a new `--container-app` token)
+- Modify: `frontend/src/App.tsx` (the shells that are app chrome)
+- Modify: `frontend/src/components/AppHeader.tsx` (the navbar's own inner width)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: `--container-app`, which Tailwind v4 exposes as `max-w-app`.
+
+Every shell in this app is capped at `--container-sheet`, 1080px. On a 1920
+screen that leaves roughly 420px of empty page either side, and the studio's own
+description is exact: the content reads as sitting in the centre rather than
+filling the screen. A five-card row at 1080 gives each card about 230px; the
+same row at 1400 gives about 264px and stops looking like a column.
+
+**`--container-sheet` must not change.** It is the width of a printed page, used
+by `.sheet` (`index.css`, around line 984) and by the document routes. 1080px is
+a reading measure, chosen for prose, and widening it would make a quotation
+harder to read to fix a home screen.
+
+So this is a second token, and the two names then say which is which: a sheet is
+paper, an app is not.
+
+- [ ] **Step 1: The token**
+
+In `index.css`'s `@theme`, beside the existing container tokens:
+
+```css
+  /* The app's own chrome - lists, the queue, the home screen, the pad. Wider
+     than a sheet on purpose: `--container-sheet` is a READING measure for
+     prose on a printed page, and a five-across grid of cards is not prose.
+     Capping the app at the paper width left about 420px of empty page either
+     side on a 1920 screen and made the whole product read as a column.
+
+     Documents keep `--container-sheet`. That is the distinction the two names
+     carry, and it is the reason this is a new token rather than a bigger
+     number in the old one. */
+  --container-app: 1400px;
+```
+
+- [ ] **Step 2: Point the app's shells at it**
+
+In `frontend/src/App.tsx`, find every `max-w-sheet`:
+
+```bash
+grep -n "max-w-sheet" src/App.tsx
+```
+
+There are five. Change to `max-w-app` **only the shells that are app chrome** -
+the grouped route shell, the home shell, and the pad. **Leave the quotation
+route's shell on `max-w-sheet`**: that route is a document page and its width is
+the page's width.
+
+If you cannot tell which is which from the code, read the comment above each
+`return` - they say what each shell is for. Report which you changed and which
+you left, by line.
+
+- [ ] **Step 3: The navbar follows the shell**
+
+`frontend/src/components/AppHeader.tsx` carries its own `max-w-sheet` so the
+navbar's contents line up with the page's. It must match whatever the shell
+under it uses, or the wordmark and the avatar will no longer sit above the
+content they belong to.
+
+The navbar renders on both the widened shells and the quotation route's
+`max-w-sheet` one. Pick the honest fix rather than the quick one: either the
+header takes a width prop from each shell, or it takes `max-w-app` and the
+quotation route accepts a wider bar than its sheet. **Say which you chose and
+why in your report** - a header misaligned on one route is exactly the kind of
+thing that reads as sloppiness rather than as a decision.
+
+- [ ] **Step 4: Documents keep a reading measure**
+
+Widening a shell must not widen a document inside it. Check the proposal route,
+which renders `ProposalView` inside a shell you may have just widened.
+
+Confirm the rendered document body still has a reading width. If it does not -
+if `.prose` now stretches to 1400px - give the document's own container
+`max-w-sheet` so the sheet stays a sheet inside a wider app.
+
+Report what you found, with the measured width of the document body before and
+after.
+
+- [ ] **Step 5: Verify**
+
+```bash
+cd frontend && node scripts/check-contrast.mjs && npm run typecheck && npm run build
+```
+
+All three exit 0. This task changes no colour, so the gate is confirming you
+broke nothing.
+
+Then measure, at 1920x1080 and at 1440x900:
+
+- the shell's rendered width on the home screen (expect ~1400 at 1920, and
+  viewport-minus-padding at 1440),
+- the navbar's inner width, which must equal the shell's on the same route,
+- the document body's width on the proposal route, which must still be a
+  reading measure.
+
+The dev server is on `http://localhost:5173` and the API on `:8000` - **do not
+restart or kill them, the user is using them.** A playwright-core install is at
+`C:/Users/Riku/.claude/skills/gstack/node_modules/playwright-core`. The studio
+screens need a signed-in session; if you cannot reach them, say so plainly and
+measure what you can from the built CSS instead, stating which is which.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/index.css frontend/src/App.tsx frontend/src/components/AppHeader.tsx
+git commit -m "The app stops being capped at the width of a page"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage.** Every section of `2026-08-04-dark-theme-design.md` maps to a task: the palette and the two measured findings are Task 1 (`--well-border` included, with the failed candidates recorded so nobody re-picks one); the boundary and all four light islands are Task 2; the preloader is Task 3; the verification list is Task 4, with the contrast half made permanent as `check-contrast.mjs` rather than done once by hand.
