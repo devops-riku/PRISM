@@ -14,7 +14,10 @@
 - **Cascade layers resolve before specificity.** `@layer base` < `@layer components` < `@layer utilities`. A utility beats a component class regardless of selector weight. `.sheet-light` lives in `@layer components`.
 - **TypeScript is strict** with `noUnusedLocals` and `noUnusedParameters`. An unused import fails the build.
 - **No component colour utilities change.** If a task finds itself editing `text-ink` or `bg-paper` inside a `.tsx` file, it has gone wrong. The only `.tsx` edits in this plan add the string `sheet-light` to an existing `className`.
-- **Backend is untouched.** No file under `backend/` changes. No renderer, no PDF, no `ProposalDesign`.
+- **Backend is untouched, with one scoped exception.** No file under `backend/`
+  changes except `app/design.py`'s two-entry `PALETTE` dict in Task 8, which is
+  the printed document's own colours rather than the app's. No renderer, no PDF
+  code, no schema.
 - **Every colour value in this plan is exact.** Copy them character for character; they were chosen by measurement and several plausible-looking neighbours fail.
 - **Contrast floor:** every text pair clears WCAG AA for body text, 4.5:1. Controls a user must locate - input borders - clear 3:1.
 
@@ -938,6 +941,220 @@ common failure here, and it is invisible until somebody refreshes.
 ```bash
 git add frontend/src/lib/theme.ts frontend/index.html frontend/src/App.tsx
 git commit -m "Light mode, remembered, and applied before the first paint"
+```
+
+---
+
+## Task 7: The document on screen follows the app
+
+**Files:**
+- Modify: `frontend/src/components/MarkdownView.tsx` (remove `sheet-light` from the root)
+
+**Interfaces:**
+- Consumes: `.sheet-light` from Task 2, which stays and is still used by the other two surfaces.
+- Produces: nothing.
+
+**This reverses a decision the spec argues for, deliberately and at the studio's
+request.** The spec had the on-screen quotation and proposal stay a white sheet
+inside dark chrome, on the reasoning that what you proofread should look like
+what your client receives. The studio has since asked for the document to
+follow the app instead, having seen it. That is their call to make about their
+own tool, and the reasoning it overturns is worth keeping visible rather than
+deleting, so the comment below says what was traded away.
+
+**`.sheet-light` does not go away.** Two surfaces still need it and for reasons
+this change does not touch:
+
+- `ClientShell` - the client's faces stay paper. A stranger opening a link once
+  is not the studio living in the tool all day, and that was a separate decision
+  which still stands.
+- `DesignEditor`'s preview sheet - it is a picture of a printed page. A dark
+  preview previews nothing.
+
+- [ ] **Step 1: Remove it from the document body**
+
+In `frontend/src/components/MarkdownView.tsx`, the root return. Change:
+
+```tsx
+  return <div className="prose sheet-light">{blocks}</div>
+```
+
+to:
+
+```tsx
+  // NO `sheet-light` here, and the history matters because it was here on
+  // purpose. The plan's original ruling was that a document on screen should
+  // be the paper the client receives - a white sheet framed by dark chrome,
+  // like a PDF viewer - so that proofreading and sending showed the same
+  // thing. The studio saw it and asked for the document to follow the app
+  // instead.
+  //
+  // What that trades away, stated so nobody rediscovers it as a bug: the
+  // on-screen document and the PDF it becomes now look deliberately
+  // different. The screen follows the app's theme; the paper follows
+  // `ProposalDesign`. They are two answers to two different questions rather
+  // than a drift.
+  //
+  // `.sheet-light` itself stays - `ClientShell` and `DesignEditor`'s preview
+  // still carry it, for reasons this change does not touch.
+  return <div className="prose">{blocks}</div>
+```
+
+- [ ] **Step 2: Check what `.prose` hard-sets**
+
+`.prose` sets `color: var(--color-ink)` on itself (`index.css`, around line 1027). Inside a dark app that now resolves to the dark ink, which is what this task wants - but confirm by reading that nothing else in `.prose` or its nested rules pins a light-only value: a hardcoded background, a `border-color` that assumed paper, a `color` on a table header.
+
+Report every such value you find. Fix only the ones that are now illegible, and say which you fixed and which you left.
+
+- [ ] **Step 3: Verify**
+
+```bash
+cd frontend && node scripts/check-contrast.mjs && npm run typecheck && npm run build
+```
+
+All three exit 0. The gate still measures both scopes - the light scope is still
+real because `.sheet-light` still exists.
+
+Then look at a document. If you cannot reach one (it needs a signed-in session),
+say so plainly rather than reporting the check as done, and render `.prose`
+markup against the built CSS in a standalone page instead - stating that is what
+you did.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add frontend/src/components/MarkdownView.tsx frontend/src/index.css
+git commit -m "The document on screen follows the app it is read in"
+```
+
+---
+
+## Task 8: The printed document takes the palette
+
+**Files:**
+- Modify: `backend/app/design.py` (the `PALETTE` dict)
+- Modify: `frontend/src/components/DesignEditor.tsx` (its mirror of the same two values)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks. This is the paper document, not the app.
+- Produces: new defaults for `ProposalDesign.brand_colour` and `.accent_colour`.
+
+**This task is the one exception to the plan's "no `backend/` changes"
+constraint**, and it is scoped to two string literals in one dict. Nothing else
+under `backend/` may change.
+
+The document defaults are **two palettes stale**, the fourth instance of that
+pattern on this branch after the boot preloader, the favicon, and the two
+data-URI colours:
+
+```python
+PALETTE = {"brand": "#1D1B17", "accent": "#35655A"}
+```
+
+`#1D1B17` is the original warm-brown ink. `#35655A` is **pine** - the accent from
+two re-skins ago. Every proposal PDF built with the defaults has been printing a
+pine accent bar since long before any of this.
+
+- [ ] **Step 1: The backend values**
+
+In `backend/app/design.py`, replace the `PALETTE` dict:
+
+```python
+#: The document's own two colours, and they are NOT the app's.
+#:
+#: A quotation is printed and emailed; the app is looked at on a screen. So the
+#: brand is the indigo the app uses for its own ink, which is legible on paper
+#: at 12.51:1 - and the accent is a DEEPER violet than the app's `#8b7cf6`,
+#: because it does a different job here. In the app that violet is type on a
+#: dark ground. Here it is a filled banner with paper-coloured text ON it, and
+#: white on `#8b7cf6` measures 3.33 - under AA for body text. `#6d57e8` is the
+#: same violet family at 5.03, which clears it with headroom.
+#:
+#: Mirrored by hand in `frontend/src/components/DesignEditor.tsx`, which cannot
+#: import from Python. Change one and change the other.
+PALETTE = {"brand": "#343148", "accent": "#6D57E8"}
+```
+
+- [ ] **Step 2: The frontend's mirror**
+
+In `frontend/src/components/DesignEditor.tsx`, around line 76:
+
+```tsx
+/** `app/design.py`'s own `PALETTE`, mirrored - this file cannot import from
+ *  Python, so the two are held in step by hand and each names the other.
+ *  These are the DOCUMENT's colours, not the app's: the accent is a deeper
+ *  violet than `--color-ballpoint` because here it is a filled banner with
+ *  paper text on it rather than type on a dark ground. */
+const PALETTE = { brand: '#343148', accent: '#6D57E8' }
+```
+
+- [ ] **Step 3: Prove the new accent is legible where it is actually used**
+
+The accent prints as the banner cover's fill, with paper-coloured text on top,
+and as the page's edge bar. Render a proposal PDF with the new defaults and
+confirm the cover is readable.
+
+There are five proposal documents on disk under `backend/generated/w/riku/_documents/`.
+Render one both ways and compare, from `backend/`:
+
+```python
+import sys
+sys.path.insert(0, r"C:\Users\Riku\OneDrive\OneDrive - Countpro PH\Desktop\PRISM-\backend")
+from app import workspaces, documents as docs_module, main as m
+from app.design import ProposalDesign
+from app.renderers.pdf import render_pdf
+workspaces.ensure_ready(); workspaces.use("riku")
+import pathlib
+newest = sorted(pathlib.Path("generated/w/riku/_documents").glob("*.json"),
+                key=lambda p: p.stat().st_mtime, reverse=True)[0]
+doc = docs_module.get(newest.stem)
+md, est = m._document_markdown(doc), m._document_estimate(doc)
+for label, look in (("stored", doc.design), ("new defaults", ProposalDesign())):
+    data = render_pdf(md, "T", est, kind="proposal", doc_label="Proposal",
+                      cover_break=True, design=look)
+    print(f"{label:14} {len(data):>9,} bytes  accent={look.accent_colour}")
+```
+
+Both must render without raising. Report the byte counts and the accent each
+used.
+
+- [ ] **Step 4: Say plainly what this does and does not change**
+
+`ProposalDesign` is **snapshotted onto each document when it is built**. So these
+new defaults reach:
+
+- every proposal and quotation built from now on, **if** the studio has not set
+  its own colours in Settings;
+- **not** the five documents already on disk, which keep the design they were
+  built with.
+
+The studio's live settings already carry their own `brand_colour` and
+`accent_colour`, so on this install the defaults may be overridden anyway. Check
+`backend/generated/w/riku/` settings and report which is the case - a default
+nobody uses is worth knowing about before it is called a fix.
+
+- [ ] **Step 5: Verify**
+
+From `backend/`, every check must still pass:
+
+```bash
+for f in scripts/check_*.py scripts/smoke.py; do ./.venv/Scripts/python.exe "$f" >/dev/null 2>&1; echo "$(basename $f) $?"; done
+```
+
+Expected: every one `0`, except `check_kind_render.py`, which must also be `0` -
+it pins a byte-for-byte hash of a rendered document and **a colour change may
+alter that hash**. If it fails, that is this task's regression to deal with, not
+a pre-existing one: read its failure, and if the hash moved because the accent
+moved, the fixture's baseline needs recomputing with an explanation - do not
+simply recompute it silently.
+
+Then from `frontend/`: `npm run typecheck && npm run build`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/design.py frontend/src/components/DesignEditor.tsx
+git commit -m "The printed document stops defaulting to pine"
 ```
 
 ---
