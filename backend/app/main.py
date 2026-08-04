@@ -1772,7 +1772,12 @@ async def create_proposal(
     async def run() -> None:
         nonlocal papers_text
         stamp(intakes.PREPARING, job_id=job.id)
-        jobs.start(job.id, "Reading the brief")
+        # "Scope", not "brief", because that is what the field is called on
+        # both screens this job can start from - the pad's own step is headed
+        # "What is in scope" and the client's is "Scope". A stage naming a word
+        # that appears nowhere in front of the person reading it makes them
+        # wonder which of the things they typed it means.
+        jobs.start(job.id, "Reading the Scope")
         try:
             # Before anything is priced. The structural floor in
             # `_normalise_brief` already refused the empty, the too-short and
