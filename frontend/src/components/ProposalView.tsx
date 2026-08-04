@@ -96,7 +96,17 @@ export default function ProposalView({ documentId }: ProposalViewProps) {
     // roughly how much, and hiding it left a proposal that ended mid-table
     // with nothing on screen saying otherwise.
     <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto">
-      <section className={`${CARD} shrink-0 px-5 py-4 sm:px-6`}>
+      {/* `max-w-sheet`, matching the `.sheet` below rather than the route
+          shell around both. The shell is `--container-app` (1400px) because
+          the studio's screens are app chrome; a document is not, and `.sheet`
+          caps itself at `--container-sheet` (1080px) and centres. So this
+          header, left uncapped, ran 320px wider than the document it
+          describes and the two disagreed down both edges.
+
+          Both now read the same token, which is the part that matters: if the
+          reading measure ever changes, the header follows it without anybody
+          remembering this file exists. */}
+      <section className={`${CARD} mx-auto w-full max-w-sheet shrink-0 px-5 py-4 sm:px-6`}>
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
           <div className="min-w-[18rem]">
             <h2 className={`${DISPLAY} text-[20px]`}>
