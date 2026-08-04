@@ -71,7 +71,12 @@ export default function AuthGate({ children }: AuthGateProps) {
   if (state === 'misconfigured') {
     return (
       <div className="flex h-dvh items-center justify-center bg-canvas px-6 font-body text-body">
-        <div className="max-w-[34rem] rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
+        {/* p-7 sm:p-8 — the single-card family's shared padding (AuthGate,
+            AuthScreen, ClientClosed, ClientQuotation, ClientShell's offline
+            face, ClientWaiting, InviteScreen). ClientForm is the one
+            exception, fitted to a fixed viewport budget — see its own
+            comment. */}
+        <div className="max-w-[34rem] rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
           <p className="font-label text-[12px] uppercase tracking-[0.14em] text-alert">
             Sign-in not finished
           </p>

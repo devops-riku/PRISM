@@ -77,7 +77,8 @@ export default function InviteScreen({ token }: InviteScreenProps) {
   if (mismatched) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-10">
-        <div className="w-full max-w-[28rem] rounded-[18px] border border-alert/40 bg-paper p-7 shadow-raised">
+        {/* p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx). */}
+        <div className="w-full max-w-[28rem] rounded-[18px] border border-alert/40 bg-paper p-7 shadow-raised sm:p-8">
           <p className="font-label text-[12px] uppercase tracking-[0.14em] text-alert">
             Not your invitation
           </p>
@@ -106,7 +107,8 @@ export default function InviteScreen({ token }: InviteScreenProps) {
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-10">
-      <div className="w-full max-w-[28rem] rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
+      {/* p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx). */}
+      <div className="w-full max-w-[28rem] rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
         <p className={MONO_LABEL}>Invitation</p>
         <h1 className={`${DISPLAY} mt-3 text-[24px] leading-[1.2] text-ink`}>
           {usable

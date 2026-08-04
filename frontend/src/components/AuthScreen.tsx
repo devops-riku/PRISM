@@ -91,7 +91,8 @@ type CardProps = {
 function Card({ title, blurb, children, footer }: CardProps) {
   return (
     <div className="no-scrollbar max-h-dvh w-full max-w-[24rem] overflow-y-auto">
-      <div className="rounded-[18px] border border-rule bg-paper p-6 shadow-raised">
+      {/* p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx). */}
+      <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
         <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-ballpoint font-label text-[12px] font-medium tracking-[0.04em] text-paper">
           P
         </span>

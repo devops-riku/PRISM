@@ -42,9 +42,10 @@ export default function ClientWaiting({ view }: { view: ClientWaitingView }) {
   }, [])
 
   return (
+    // p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx).
     <div
       role="status"
-      className="rounded-[18px] border border-rule bg-paper p-6 shadow-raised sm:p-8"
+      className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8"
     >
       <p className={MONO_LABEL}>{studio}</p>
       <h1

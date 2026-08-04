@@ -238,7 +238,8 @@ function LoadingFace() {
 
 function OfflineFace({ message }: { message: string }) {
   return (
-    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised">
+    // p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx).
+    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
       <p className={MONO_LABEL}>Could not load</p>
       <h1 className={`${DISPLAY} mt-3 text-[22px] leading-[1.2] text-ink`}>
         This page could not reach the studio
