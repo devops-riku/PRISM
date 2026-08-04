@@ -315,12 +315,15 @@ export default function HomeScreen() {
           >
             <span
               className={`block font-label text-[30px] leading-none tabular-nums ${
-                // NOT `text-ink` for the idle state. The accent IS the ink in
-                // BOTH themes now - `#16161a` light, `#f7f7f8` dark - so
-                // `ballpoint : ink` renders one colour twice and the figure
-                // stops saying whether anything is running. `text-void` is a
-                // real step away from the accent in either direction: 2.49 in
-                // light, 2.57 in dark.
+                // NOT `text-ink` for the idle state, and it stays that way
+                // even though the accent is a hue again. This was
+                // `ballpoint : ink`, which broke outright under the
+                // monochrome palette where those two tokens held one value -
+                // the figure stopped saying whether anything was running.
+                // Amber would make the pairing legible again, but a state
+                // told only by hue is the weaker signal: `void` differs from
+                // the accent in LIGHTNESS, so it survives the next re-skin
+                // and reads for anyone who cannot separate amber from cream.
                 running ? 'text-ballpoint' : 'text-void'
               }`}
             >

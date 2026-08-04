@@ -29,28 +29,30 @@
 
 @theme {
   /* ── Colour — the dark studio ─────────────────────────────────────────
-     Ash. Near-black neutral, cards one step above it, and no hue anywhere
-     except the alert. The names describe the JOB, which is the whole reason a
-     re-skin is a palette change rather than 54 files: `bg-paper` compiles to
+     Warm near-black, cards one step above it, and one olive doing every
+     action. The names describe the JOB, which is the whole reason a re-skin
+     is a palette change rather than 54 files: `bg-paper` compiles to
      `var(--color-paper)`, so a component never learns what colour it is.
 
-     THIS USED TO BE INDIGO AND VIOLET - canvas `#0e0e16`, paper `#181826`,
-     and a `#8b7cf6` accent doing every action. The studio asked for ash in
-     both themes, so the violet is gone rather than merely darkened, and the
-     two palettes are now the same design in two directions instead of two
-     designs.
+     WARM neutrals, not grey ones. Every surface and text value below carries
+     a little red and yellow - `#12100e` is a near-black with a brown cast,
+     not `#0d0d0f`. Held to a consistent warmth so the set reads as one
+     family rather than as greys that drifted.
 
-     THE ACCENT IS THE INK in both themes, and that is the one consequence
-     worth carrying in your head. `--color-ballpoint` equals `--color-ink`:
-     `#f7f7f8` here, `#16161a` in light. A primary button is a filled block
-     with the page colour as its type, not a coloured button. What follows
-     from it: NOTHING may use the accent alone to mean "different from a
-     heading", because those two tokens now resolve to one colour. Two places
-     did, and both had to change (`HomeScreen`'s running figure, and the
-     inline link in `ProposalView`). If you reach for `text-ballpoint` to
-     distinguish something from `text-ink`, it will look correct in review
-     and render as one colour on screen. Use `--color-void`, weight, fill or
-     an underline instead.
+     THE PALETTE HAS BEEN THREE THINGS ON THIS BRANCH, which is worth knowing
+     before you "correct" something to a value you remember: indigo and violet
+     (`#0e0e16` / `#8b7cf6`), then a cold monochrome ash, then this. If you
+     find a stray `#8b7cf6`, `#f7f7f8` or `#0d0d0f` anywhere, it is a leftover
+     from one of those, not a deliberate exception.
+
+     THE ACCENT IS A HUE AGAIN, and that undoes a constraint the ash palette
+     imposed. Under ash, `--color-ballpoint` and `--color-ink` were the same
+     value, so nothing could use the accent alone to mean "not a heading" -
+     two places had to be rewritten for it. Olive is 1.96 from the ink here
+     and 2.68 in light, and separated by hue in both, so the accent can do its
+     normal job again. The two rewrites stay as they are: an underline on an
+     inline link and a `void` idle state are better than colour-only signals
+     regardless of which palette is loaded.
 
      DARK IS THE DEFAULT, AND IT IS DECLARED HERE so that <html> carries it.
      Headless UI renders dropdowns and the command palette into a portal at
@@ -59,44 +61,41 @@
      from the root is the only arrangement where they are dark for free.
      `.sheet-light` below is how the three printed surfaces opt out.
 
-     Every text pair was measured, not judged: headings 16.71:1 on a card,
-     body 11.08, secondary 6.49, captions 4.70, the accent 16.71. */
-  --color-canvas: #0d0d0f; /* the page itself                       */
-  --color-paper: #17171a; /* cards, sheets, inputs                 */
-  --color-duplicate: #212125; /* secondary fill: wells, chips, stripes  */
-  --color-rule: #31313a; /* borders                               */
-  --color-hairline: #26262c; /* dividers inside a card                */
-  --color-ink: #f7f7f8; /* headings                              */
-  --color-body: #cbcbd2; /* body copy                             */
-  --color-void: #9b9ba4; /* secondary copy                        */
-  --color-faint: #82828c; /* eyebrows, captions, table headers     */
-  --color-ballpoint: #f7f7f8; /* the one action colour — IS the ink    */
-  --color-accent-deep: #ffffff; /* hover — LIGHTER, see below            */
-  --color-accent-soft: #242429; /* accent tint background                */
+     Every text pair was measured, not judged: headings 15.98:1 on a card,
+     body 11.33, secondary 6.77, captions 4.80, the olive 8.16. */
+  --color-canvas: #12100e; /* the page itself                       */
+  --color-paper: #1b1815; /* cards, sheets, inputs                 */
+  --color-duplicate: #262119; /* secondary fill: wells, chips, stripes  */
+  --color-rule: #38312a; /* borders                               */
+  --color-hairline: #2b2621; /* dividers inside a card                */
+  --color-ink: #f7f3ec; /* headings                              */
+  --color-body: #d6cec2; /* body copy                             */
+  --color-void: #a89f92; /* secondary copy                        */
+  --color-faint: #8d8478; /* eyebrows, captions, table headers     */
+  --color-ballpoint: #a8b862; /* the one action colour, olive          */
+  --color-accent-deep: #c0cf8d; /* hover — LIGHTER, see below            */
+  --color-accent-soft: #22240f; /* accent tint background                */
   --color-alert: #f2777a; /* the single warm red, real problems    */
   --color-alert-soft: #2a1a1f; /* its tint                              */
 
-  /* `accent-deep` INVERTS on a dark ground. In light it is darker than the
-     accent (pure black under a near-black ink); here it is lighter (pure
-     white over a near-white ink). Hover means "more", and on a dark page
-     more light is more - a hover that darkened would read as the control
-     going away. With the accent already at `#f7f7f8` there is exactly one
-     step left in that direction, which is why this is `#ffffff` and not a
-     tint of something. */
+  /* `accent-deep` INVERTS on a dark ground. In light it is a darker olive
+     than the accent; here it is a lighter one. Hover means "more", and on a
+     dark page more light is more - a hover that darkened would read as the
+     control going away. */
 
   /* The edge of a text input, and the reason it is not `--color-rule`.
      `rule` is asked to be two things: the hairline between table rows, and the
-     border of a field. One value cannot do both: as an edge `#31313a`
-     measures 1.30:1 - correct for a divider, invisible as a border, and a
-     field whose edge cannot be found is a fault rather than a preference.
+     border of a field. One value cannot do both: as an edge `#38312a`
+     measures about 1.3:1 - correct for a divider, invisible as a border, and
+     a field whose edge cannot be found is a fault rather than a preference.
 
      An input is a control you have to locate, so it needs 3:1 against every
      ground one actually sits on - the page, a card, AND the duplicate fill
-     that wells use. `#6c6c7a` is the darkest value clearing all three (3.76 /
-     3.46 / 3.10). `#5a5a66` through `#666674` were tried first: each passes
-     on the page and fails inside a well, which is the failure that looks
-     fine in a screenshot of the wrong screen. */
-  --well-border: #6c6c7a;
+     that wells use. `#7a6f60` is the darkest value clearing all three (3.86 /
+     3.59 / 3.25). `#6b6155` and `#726859` were tried first: each passes on
+     the page and fails inside a well, which is the failure that looks fine in
+     a screenshot of the wrong screen. */
+  --well-border: #7a6f60;
 
   /* ── Type — one family, four roles ────────────────────────────────────
      Figtree: a geometric sans with rounded terminals, replacing the kit's
@@ -751,37 +750,32 @@
      */
   html[data-theme='light'],
   .sheet-light {
-    /* ASH AND WHITE, and the warm sand this replaced is worth naming so nobody
-       reintroduces it as a "fix": canvas was `#f4f1ea`, paper `#fffdf8`, and
-       the accent was `#d7c49e` sand under `#343148` indigo ink. The studio
-       asked for neutral. Every value below is on the grey axis - equal-ish R,
-       G and B - except the alert pair, which stays warm on purpose (see
-       there).
+    /* WARM LIGHT — the dark block's values turned over, not a different
+       design. Paper is an off-white with a cream cast rather than `#ffffff`,
+       the neutrals carry the same red-and-yellow warmth, and the accent is
+       the same olive taken deep enough to sit on paper: `#55631f` at 6.48 on
+       a card, where the dark theme's `#a8b862` would measure 1.9 and be
+       unreadable.
 
-       THE ACCENT IS THE INK, deliberately: `--color-ballpoint` and
-       `--color-ink` are the same `#16161a`. That is what monochrome means
-       here - a primary button is black with white type on it, not a coloured
-       button. It also means the accent no longer separates an action from a
-       heading BY HUE, so anything that relied on the accent alone to say
-       "this is clickable" now has to say it with weight, underline or
-       position. The dark theme does the SAME thing in the other direction -
-       accent equals ink at `#f7f7f8` - so this is one rule to hold in mind,
-       not a light-mode quirk. See the `@theme` block's note on it.
+       Two palettes preceded this one and neither is a value to restore: the
+       original warm sand (`#f4f1ea` canvas, `#d7c49e` accent, `#343148`
+       indigo ink) and the cold monochrome ash (`#f6f6f7`, accent equal to a
+       `#16161a` ink). This is warmer than the ash and quieter than the sand.
 
-       `--color-accent-deep` is the hover and it is pure `#000000`, the one
-       direction left to go when the resting state is already near-black. */
-    --color-canvas: #f6f6f7;
-    --color-paper: #ffffff;
-    --color-duplicate: #efeff1;
-    --color-rule: #dcdce0;
-    --color-hairline: #e9e9ec;
-    --color-ink: #16161a;
-    --color-body: #35353c;
-    --color-void: #56565f;
-    --color-faint: #6e6e78;
-    --color-ballpoint: #16161a;
-    --color-accent-deep: #000000;
-    --color-accent-soft: #eaeaee;
+       The alert pair is the one place the warmth is NOT the point - a red
+       there has to read as a problem rather than as part of the family. */
+    --color-canvas: #faf7f2;
+    --color-paper: #fffdf9;
+    --color-duplicate: #f1ebe1;
+    --color-rule: #e1d9cc;
+    --color-hairline: #ece6dc;
+    --color-ink: #1c1815;
+    --color-body: #3e3830;
+    --color-void: #605850;
+    --color-faint: #776e63;
+    --color-ballpoint: #55631f;
+    --color-accent-deep: #414c13;
+    --color-accent-soft: #eef1de;
 
     /* The two warm values in an otherwise grey block, and that is the point:
        an alert says something is wrong, and in a monochrome palette there is
@@ -795,15 +789,15 @@
        quiet enough for both. An input edge is a control you have to locate,
        so WCAG asks 3:1 of it, and it has to clear that against every ground
        an input actually sits on - paper, canvas AND the duplicate fill that
-       wells use. `#86868e` is the lightest grey that does: 3.61 on paper,
-       3.34 on canvas, 3.15 on a well. Anything lighter passes on paper and
-       quietly fails inside a well.
+       wells use. `#8a8074` is the lightest warm grey that does: 3.81 on
+       paper, 3.63 on canvas, 3.27 on a well. Anything lighter passes on paper
+       and quietly fails inside a well.
 
        Worth separating, since it is easy to misread as a regression: light
        inputs were bordered at 1.46 long before the dark theme existed - the
        same hex as `--color-rule`. That was a gap the contrast gate found the
        first time anything measured it, not something this branch broke. */
-    --well-border: #86868e;
+    --well-border: #8a8074;
 
     /* The other half of the dark set, and every reason for those inverts
        here. A white inset hairline on a white card is nothing; a `0 1px 2px
@@ -824,16 +818,17 @@
            `--color-ballpoint` beneath a shadow that was already resolved
            above it.
 
-       Measured, before this block existed: inside `.sheet-light` in a default
-       (dark) install, `--color-ballpoint` computed to `#16161a` while
-       `--shadow-ring` still held `color-mix(in oklab, #f7f7f8 22%,
-       transparent)`. That is a near-white focus ring on white paper - on the
-       CLIENT's intake form, the one surface a stranger uses. It was violet
-       and visible before the ash theme.
+       Measured in a browser, before this block existed: inside `.sheet-light`
+       in a default (dark) install, `--color-ballpoint` computed to the LIGHT
+       accent while `--shadow-ring` still held a mix of the DARK one - a
+       near-white focus ring on white paper, on the CLIENT's intake form, the
+       one surface a stranger has to use. (The hexes of the day were `#16161a`
+       and `#f7f7f8`; the palette has moved twice since, and the failure is
+       about where a property is declared, not about which colours.)
 
        Declared here, the substitution happens against the light accent. */
-    --shadow-sheet: 0 1px 2px rgb(16 16 26 / 0.06);
-    --shadow-raised: 0 12px 28px -18px rgb(16 16 26 / 0.22);
+    --shadow-sheet: 0 1px 2px rgb(38 28 16 / 0.07);
+    --shadow-raised: 0 12px 28px -18px rgb(38 28 16 / 0.24);
     --shadow-action: 0 8px 20px -12px
       color-mix(in oklab, var(--color-ballpoint) 70%, transparent);
     --shadow-ring: 0 0 0 4px
@@ -918,7 +913,7 @@
        project's hardcoded-colour sweeps never saw it. Kept in step with the
        DARK `--color-void` by hand - `%239B9BA4`, 6.49 on a card; there is no
        way to put a custom property inside a data-URI. */
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239B9BA4' stroke-width='1.6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23A89F92' stroke-width='1.6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 0.8rem center;
     background-size: 10px 6px;
@@ -944,7 +939,7 @@
      Change one, change both. */
   html[data-theme='light'] select.well,
   .sheet-light select.well {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2356565F' stroke-width='1.6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23605850' stroke-width='1.6'/%3E%3C/svg%3E");
   }
 
   /* ── The brief field ──────────────────────────────────────────────────
@@ -1338,24 +1333,24 @@
       border-color: var(--color-ballpoint);
       background-color: var(--color-ballpoint);
       /* THIS TICK HAS TO INVERT WITH THE THEME, and it did not always. The
-         box fills with `--color-ballpoint`, and now that the accent IS the
-         ink, that fill is near-white in dark and near-black in light - so a
-         single baked colour cannot sit on both. It was `%23FFFDFA`, which was
-         correct when the fill was violet (3.28) and measures **1.05** against
-         the ash accent. An invisible tick on a filled box reads as unchecked:
-         the worst kind of wrong, because the control still looks fine.
+         box fills with `--color-ballpoint`, and the olive accent is LIGHT in
+         dark mode (`#a8b862`) and DARK in light mode (`#55631f`) - so a single
+         baked stroke cannot sit on both. It was `%23FFFDFA`, near-white, which
+         was right when the fill was a mid-tone violet (3.28); against the
+         deep olive it would be 2.7, and against the ash accent that briefly
+         replaced the violet it measured 1.05. An invisible tick on a filled
+         box reads as unchecked - the worst kind of wrong, because the control
+         still looks fine.
 
          So the stroke follows the theme, opposite to everything else in this
-         file: DARK here, light in the override below. `%230D0D0F` is the dark
-         canvas on the near-white fill (18.14); the override is white on the
-         near-black fill (18.04). Both are enormous because the fill is now an
-         extreme rather than a mid-tone violet - this pairing stopped being
-         the tightest value in the block and became one of the loosest.
+         file: DARK here, light in the override below. `%2312100E` is the dark
+         canvas on the light olive (8.77); the override is white on the deep
+         olive (6.48).
 
          URL-encoded (`%23` is `#`) like the arrow above, which is why colour
          sweeps miss it and why the contrast gate cannot measure it. If
          `--color-ballpoint` moves in either theme, re-measure BOTH by hand. */
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.3l2.4 2.4L9.6 4' fill='none' stroke='%230D0D0F' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.3l2.4 2.4L9.6 4' fill='none' stroke='%2312100E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: center;
       background-size: 11px 11px;
