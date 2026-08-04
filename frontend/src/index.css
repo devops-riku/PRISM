@@ -175,9 +175,15 @@
      The last two FOLLOW `--color-ballpoint` rather than naming a colour.
      They were `rgb(139 124 246 / …)` - the violet, written out twice - which
      is why the palette sweep did not catch them and why the focus ring stayed
-     violet after everything around it went ash. `color-mix` keeps them in step
-     with the accent in both themes for free: a white halo under a white
-     button in dark, a grey-black one under a black button in light. */
+     violet after everything around it went ash.
+
+     `color-mix` does NOT make them free, and the light block says why at
+     length: a custom property substitutes its `var()`s where it is DECLARED,
+     so these two follow the accent only for elements that inherit from the
+     root. A `.sheet-light` island deeper in the tree swaps the accent
+     underneath an already-resolved shadow. Both are therefore restated in
+     the light block, and if you add a third shadow that names the accent, it
+     must be restated there too. */
   --shadow-sheet: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 2px
     rgb(0 0 0 / 0.4);
   --shadow-raised: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 12px 28px -18px
@@ -805,12 +811,33 @@
        page, lands on paper as a bruise. Light UI wants a much softer, wider,
        cooler shadow and no highlight at all.
 
-       `--shadow-action` and `--shadow-ring` are NOT repeated: they follow
-       `--color-ballpoint` through `color-mix`, so they re-resolve to the ash
-       accent here without being restated. That is the whole point of writing
-       them that way - these two are the ones that cannot. */
+       ALL FOUR ARE RESTATED, and the two `color-mix` ones are the reason this
+       comment exists. It is tempting to leave them out on the grounds that
+       they follow `--color-ballpoint` already - that is wrong, and measurably
+       so. A custom property has its `var()`s substituted at computed-value
+       time ON THE ELEMENT WHERE IT IS DECLARED; descendants inherit the
+       already-substituted result. `@theme` declares them on `:root`, so:
+
+         · `html[data-theme='light']` IS `:root` -> re-resolves, fine either
+           way;
+         · `.sheet-light` on a DESCENDANT -> does not. It swaps
+           `--color-ballpoint` beneath a shadow that was already resolved
+           above it.
+
+       Measured, before this block existed: inside `.sheet-light` in a default
+       (dark) install, `--color-ballpoint` computed to `#16161a` while
+       `--shadow-ring` still held `color-mix(in oklab, #f7f7f8 22%,
+       transparent)`. That is a near-white focus ring on white paper - on the
+       CLIENT's intake form, the one surface a stranger uses. It was violet
+       and visible before the ash theme.
+
+       Declared here, the substitution happens against the light accent. */
     --shadow-sheet: 0 1px 2px rgb(16 16 26 / 0.06);
     --shadow-raised: 0 12px 28px -18px rgb(16 16 26 / 0.22);
+    --shadow-action: 0 8px 20px -12px
+      color-mix(in oklab, var(--color-ballpoint) 70%, transparent);
+    --shadow-ring: 0 0 0 4px
+      color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
 
     color-scheme: light;
   }
