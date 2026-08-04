@@ -404,10 +404,15 @@ def _investment_section(estimate: Estimate, currency: str) -> str:
     # document into a timesheet to be argued down line by line - "why is this
     # nine hours" - when what is being bought is the delivered thing. The
     # quantity and the unit stay, because the shape of the effort is part of
-    # what the client is agreeing to; only the price-per-unit goes. The rate is
-    # still on the studio's own screen (`LineItemTable` in the frontend) and
-    # still what every amount here was computed from - it is simply not in the
-    # document that leaves the building.
+    # what the client is agreeing to; only the price-per-unit goes.
+    #
+    # This used to add "the rate is still on the studio's own screen
+    # (`LineItemTable` in the frontend)". It is not: the studio asked for that
+    # column too, on the reasoning that the timesheet reading starts wherever
+    # the rate sits next to a quantity. `unit_rate` is still on every item and
+    # is still what every amount here was computed from - it is just no longer
+    # displayed beside the work it prices, in either place. The developer sheet
+    # keeps it.
     headers = [
         "Description",
         "Qty",

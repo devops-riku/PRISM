@@ -121,12 +121,19 @@ export default function LineItemTable({ lineItems, cost, currency }: LineItemTab
                   >
                     Qty
                   </th>
-                  <th
-                    scope="col"
-                    className="hidden py-2 pr-4 text-right font-label text-[12px] font-medium uppercase tracking-[0.14em] text-void sm:table-cell"
-                  >
-                    Rate
-                  </th>
+                  {/* No Rate column. It was here, and the studio asked for it
+                      gone: a rate beside a quantity turns the screen into a
+                      timesheet, and the habit of reading the work that way
+                      starts on the screen you check it on. `markdown.py` took
+                      the same column out of the document for the same reason
+                      and pointed AT this table as the place the rate still
+                      lived - that pointer is now stale, and its comment says
+                      so.
+
+                      The rate is not lost: `unit_rate` is still on every item,
+                      still what `subtotal` was computed from, and still in the
+                      developer sheet. It is simply not shown beside the work
+                      it prices. */}
                   <th
                     scope="col"
                     className="py-2 text-right font-label text-[12px] font-medium uppercase tracking-[0.14em] text-void"
@@ -137,10 +144,19 @@ export default function LineItemTable({ lineItems, cost, currency }: LineItemTab
               </thead>
               <tbody>
                 {items.map((item, index) => {
-                  // Neither role nor category. This table is what the client
-                  // reads: one unbroken list of work, named by what it is. A
-                  // category like "QA" or "PM" is a department, and a department
-                  // is a role by another name — both live in the developer sheet.
+                  // Neither role nor category: one unbroken list of work, named
+                  // by what it is. A category like "QA" or "PM" is a
+                  // department, and a department is a role by another name —
+                  // both live in the developer sheet.
+                  //
+                  // This said "what the client reads", and that was wrong.
+                  // `LineItemTable` is reached only from `ResultSheets`, which
+                  // is rendered only at `App.tsx`'s studio route, behind the
+                  // auth gate; nothing under `components/client/` imports
+                  // either. The client reads the RENDERED DOCUMENT
+                  // (`backend/app/renderers/markdown.py`), which builds its own
+                  // table. Worth keeping straight, because "the client sees
+                  // this" is the argument that decides what may be shown here.
                   const meta = ''
                   return (
                     <tr key={item.id || `li-${index}`} className="border-b border-rule align-top">
@@ -156,17 +172,21 @@ export default function LineItemTable({ lineItems, cost, currency }: LineItemTab
                             {meta}
                           </p>
                         ) : null}
-                        <p className="mt-1 font-label text-[12px] tabular-nums text-void sm:hidden">
-                          {formatMoney(item.unit_rate || 0, currency)} / {unitOf(item.unit)}
-                          {item.id ? ` · ${item.id}` : ''}
-                        </p>
+                        {/* The narrow-screen stand-in for the two `sm:`-only
+                            columns. It used to carry the rate as well - which
+                            would have left the rate visible on a phone after
+                            the column was removed on a desktop, the usual way
+                            a hidden figure survives its own deletion. Only the
+                            ref is left. */}
+                        {item.id ? (
+                          <p className="mt-1 font-label text-[12px] tabular-nums text-void sm:hidden">
+                            {item.id}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="whitespace-nowrap py-3 pr-4 text-right font-label text-[13px] tabular-nums text-ink">
                         {formatNumber(item.quantity || 0)}{' '}
                         <span className="text-void">{unitOf(item.unit)}</span>
-                      </td>
-                      <td className="hidden whitespace-nowrap py-3 pr-4 text-right font-label text-[13px] tabular-nums text-ink sm:table-cell">
-                        {formatMoney(item.unit_rate || 0, currency)}
                       </td>
                       <td className="whitespace-nowrap py-3 text-right font-label text-[13px] tabular-nums text-ink">
                         {formatMoney(item.subtotal || 0, currency)}
