@@ -67,7 +67,7 @@ export default function AppHeader({
   const email = user?.email || ''
 
   return (
-    <header className="mx-auto mb-4 flex w-full max-w-sheet shrink-0 items-center justify-between gap-4 border-b border-hairline bg-paper/60">
+    <header className="mx-auto mb-4 flex w-full max-w-sheet shrink-0 items-center justify-between gap-4 border-b border-hairline bg-paper/60 pb-6 sm:pb-8">
       <div className="flex items-center gap-3">
         <a
           href="#/"

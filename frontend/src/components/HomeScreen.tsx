@@ -315,7 +315,7 @@ export default function HomeScreen() {
           >
             <span
               className={`block font-label text-[30px] leading-none tabular-nums ${
-                running ? 'text-paper' : 'text-ink'
+                running ? 'text-ballpoint' : 'text-ink'
               }`}
             >
               {figure(running)}
