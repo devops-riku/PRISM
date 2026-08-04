@@ -1500,12 +1500,22 @@
   }
 
   /* ══════════════════════════════════════════════════════════════════════
-     MOTION — four moments, nothing else.
+     MOTION — six moments, and the count is the point.
      Reduce is the safe default: every rule below is inside the
      no-preference guard, and every resting state above is already correct.
+
+     It was four, deliberately. The studio asked for the app to feel alive, so
+     two were added - a staggered arrival for lists, and a lift on cards that
+     open something. Both reuse the existing keyframe and the existing curve.
+
+     The number is written in this heading so that adding a seventh is a
+     decision somebody has to make on purpose rather than a thing that happens
+     one component at a time. Motion in a tool is a budget, not a feature: it
+     is what tells you the difference between the app working and the app
+     being slow, and every additional moving thing spends a little of that
+     signal.
      ══════════════════════════════════════════════════════════════════════ */
   @media (prefers-reduced-motion: no-preference) {
-    /* The kit ships four keyframes and they are the whole motion budget. */
 
     /* ck-rise — results arriving, 60ms apart. */
     .sheet {
@@ -1552,6 +1562,56 @@
        somebody is working through, not an answer worth announcing. */
     .step-panel {
       animation: ck-rise 200ms var(--ease-press) both;
+    }
+
+    /* ── Two more moments, added on purpose ──────────────────────────────
+       The budget above was four and the restraint was the point, so this
+       says what was bought and what it cost.
+
+       Both reuse `ck-rise` and `--ease-press`. No new keyframe, no new curve:
+       the app should look like one hand made it, and a second easing curve is
+       how a set of animations starts feeling like a pile of animations. */
+
+    /* `.rise-in` — the same arrival as a result sheet, but for a LIST, with
+       each item a beat behind the one before it. `.sheet ~ .sheet` above does
+       this for exactly two elements by way of a sibling selector; a grid of
+       six cards needs an index, so the component passes one as `--i`.
+
+       The delay is CLAMPED at 240ms. Without the clamp a twenty-row list
+       makes its last row wait 900ms, which stops reading as choreography and
+       starts reading as the app being slow - the opposite of what motion is
+       here to say. Past the sixth item everything lands together, and nobody
+       has ever noticed. */
+    .rise-in {
+      animation: ck-rise 300ms var(--ease-press) both;
+      animation-delay: min(calc(var(--i, 0) * 45ms), 240ms);
+    }
+
+    /* `.lift` — a card that can be opened says so when the pointer is on it.
+       TRANSFORM ONLY, and that is not a style preference: these sit in fixed
+       -height one-screen shells, and a hover that changed margin or height
+       would reflow the grid under the pointer and, on a shell that fits
+       exactly, could push the last row out of view. A transform is painted,
+       not laid out, so nothing below it moves.
+
+       Held inside the no-preference guard along with its own transition: with
+       reduce set, a `:hover` transform with no transition is a 2px jump under
+       the cursor, which is worse than no effect at all. */
+    .lift {
+      transition:
+        transform 180ms var(--ease-press),
+        box-shadow 180ms var(--ease-press);
+    }
+
+    .lift:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-raised);
+    }
+
+    /* The press still wins over the hover: a card you are clicking should go
+       down, not stay up. Same curve, and it reads as one gesture. */
+    .lift:active {
+      transform: translateY(0) scale(0.997);
     }
   }
 }
