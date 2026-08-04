@@ -137,7 +137,83 @@
     color: var(--color-ink);
     color-scheme: light;
     -webkit-text-size-adjust: 100%;
+
+    /* The scrollbar, in the kit's own colours rather than the operating
+       system's.
+
+       On a quotation - a warm off-white sheet a studio prints and a client
+       reads - the platform default is a slab of Windows grey down the edge of
+       the page, and it is the only thing on screen that belongs to a different
+       design.
+
+       ONLY ONE OF THE TWO INHERITS. `scrollbar-color` does, so this line
+       reaches every scroller in the app; `scrollbar-width` does NOT, which the
+       first version of this rule got wrong - a nested card scroller came back
+       computing `auto` while its colour was already the kit's. It is set on
+       `*` below instead. Checked by reading the computed style of a nested
+       scroller rather than by looking at the page, because the difference is a
+       few pixels of width that nothing about a screenshot would have shown.
+
+       `thin`, not `none`: a scrollbar is how a reader knows there is more
+       document below and roughly how much. `.no-scrollbar` exists for the one
+       place where hiding it is right - the pad, where a bar appearing on one
+       step and not another reads as the card resizing - and this is not that
+       place. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule) transparent;
   }
+
+  /* `scrollbar-width` is not an inherited property - see the note above - so
+     the thin bar has to be asked for on every element rather than once at the
+     root. `.no-scrollbar` still wins where it is used: it lives in
+     @layer utilities, and utilities beat base regardless of selector weight. */
+  * {
+    scrollbar-width: thin;
+  }
+
+  /* Older WebKit, where `scrollbar-color` is not understood at all. These
+     pseudo-elements are not inherited either, hence `*` again. Modern Chrome
+     ignores this whole block on any element carrying a standard
+     `scrollbar-color`, which by now is all of them - it is here for Safari and
+     for anything else still on the old path. */
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    /* Transparent rather than a colour, so the bar sits on whatever it is
+       scrolling - the canvas behind the page, the paper inside a card - and
+       does not draw a grey channel across a sheet the studio is about to
+       print. */
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-rule);
+    border-radius: var(--radius-pill);
+    /* Drawn inside its own track: a transparent border clipped to the padding
+       box insets the thumb without changing the width the browser reserves,
+       so the bar is a floating capsule rather than a full-height slab and the
+       hit area stays the full 10px. */
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-void);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* The standards path has no hover state for the thumb, so the resting colour
+     is the one that has to work on its own. `--color-rule` is the value every
+     border in this kit already uses, which is the right weight for a
+     scrollbar: present when looked for, silent otherwise. The `:hover` rule
+     above is a bonus on the browsers that still take it, never the thing
+     legibility depends on. */
 
   body {
     background-color: var(--color-canvas);
