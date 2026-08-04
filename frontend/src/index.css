@@ -1163,12 +1163,30 @@
     & .task-box[data-done='true'] {
       border-color: var(--color-ballpoint);
       background-color: var(--color-ballpoint);
-      /* Near-white, and it does NOT track the accent. This tick only ever
-         renders inside `.prose`, whose single call site carries `sheet-light` -
-         so its ground is always the LIGHT `--color-ballpoint` (#343148), never
-         the dark theme's violet. 12.32 against that; the dark canvas would be
-         1.54. URL-encoded (`%23` is `#`) like the arrow above, which is why
-         colour sweeps miss it. */
+      /* Near-white, and it does NOT track the accent. Before the document
+         task, `.prose`'s only call site carried `sheet-light`, so a checked
+         box's fill was always the LIGHT `--color-ballpoint` (#343148) - 12.32
+         against this tick. That guarantee mattered because the fill is
+         itself a variable: dropped onto the dark canvas without it, `#343148`
+         measures 1.54 against `#0e0e16` and the box would nearly vanish.
+
+         The document task removed `sheet-light` from `.prose`'s call site (the
+         on-screen document now follows the app), which removes the
+         guarantee - but not the safety net, because `--color-ballpoint` is a
+         token: a checked box inside `ResultSheets` or `ProposalView` now
+         fills with the DARK `--color-ballpoint` (#8b7cf6) instead of staying
+         pinned to light on a dark ground. That value is already measured
+         elsewhere in this file at 5.27 on paper / 5.77 on canvas, so the box
+         itself stays comfortably findable. A checked box still reachable
+         inside `ClientShell` or a design preview keeps the light ground and
+         the 12.32.
+
+         Against the dark violet fill this tick measures 3.28 - clears the
+         3:1 floor a graphical control needs, so left as is. Among the values
+         in this block that have to be READ (as opposed to `--color-rule`'s
+         deliberately-quiet 1.29 on its dividers) this is now the tightest.
+         URL-encoded (`%23` is `#`) like the arrow above, which is why colour
+         sweeps miss it. */
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.3l2.4 2.4L9.6 4' fill='none' stroke='%23FFFDFA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: center;

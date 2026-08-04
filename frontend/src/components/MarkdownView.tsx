@@ -433,10 +433,20 @@ export default function MarkdownView({ markdown, tone = 'original' }: MarkdownVi
     )
   }
 
-  // `sheet-light` because this IS the document - the bytes a client receives.
-  // One edit covers both, since the quotation (`ResultSheets`) and the
-  // proposal (`ProposalView`) both render their body through here. The dark
-  // chrome around it stays dark, which is the frame a PDF viewer puts on a
-  // page and the reason this is a sheet rather than a screen.
-  return <div className="prose sheet-light">{blocks}</div>
+  // NO `sheet-light` here, and the history matters because it was here on
+  // purpose. The plan's original ruling was that a document on screen should
+  // be the paper the client receives - a white sheet framed by dark chrome,
+  // like a PDF viewer - so that proofreading and sending showed the same
+  // thing. The studio saw it and asked for the document to follow the app
+  // instead.
+  //
+  // What that trades away, stated so nobody rediscovers it as a bug: the
+  // on-screen document and the PDF it becomes now look deliberately
+  // different. The screen follows the app's theme; the paper follows
+  // `ProposalDesign`. They are two answers to two different questions rather
+  // than a drift.
+  //
+  // `.sheet-light` itself stays - `ClientShell` and `DesignEditor`'s preview
+  // still carry it, for reasons this change does not touch.
+  return <div className="prose">{blocks}</div>
 }
