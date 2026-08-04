@@ -812,6 +812,69 @@ admin_relinked = client.post(f"/api/intakes/{relink_target['id']}/relink", heade
 ok("an admin can relink the same one: 200", admin_relinked.status_code == 200)
 ok("...and gets a working link back, not a bare state change", bool(admin_relinked.json().get("link")))
 
+# --- GET .../link: the same secret, read rather than replaced ---------------
+#
+# The route exists because `relink` is not a way to COPY a link - it is a way
+# to replace one, and once the client is holding the old link, replacing it to
+# get a copy breaks theirs. Admin-only all the same: reading the credential
+# that opens an unauthenticated route is no less sensitive than reissuing it,
+# and arguably needs the gate more, since a reissue at least leaves evidence
+# when the old link stops working.
+ok(
+    "a member cannot read a client's link: 403",
+    client.get(f"/api/intakes/{relink_target['id']}/link", headers=member_headers).status_code
+    == 403,
+)
+admin_link = client.get(f"/api/intakes/{relink_target['id']}/link", headers=admin_headers)
+ok("an admin can read the same one: 200", admin_link.status_code == 200)
+ok("...and it is a real link, not an empty string", bool(admin_link.json().get("link")))
+ok(
+    "the link it reads is the CURRENT one - the same string the last relink "
+    "handed back, not a new token minted by the act of looking",
+    admin_link.json()["link"] == admin_relinked.json()["link"],
+)
+ok(
+    "and reading it twice changes nothing - this is the non-destructive door",
+    client.get(f"/api/intakes/{relink_target['id']}/link", headers=admin_headers).json()["link"]
+    == admin_link.json()["link"],
+)
+ok(
+    "the link actually works, which is the only test of it that matters",
+    client.get(f"/api/client/{_token_from_link(admin_link.json()['link'])}").status_code == 200,
+)
+ok(
+    "an id that names nothing is 404, not an empty link",
+    client.get("/api/intakes/{}/link".format("0" * 12), headers=admin_headers).status_code == 404,
+)
+
+#: A closed intake has no link to hand back - `close()` blanks the token on the
+#: record - and the route must say so rather than answer `{"link": ""}`, which
+#: is a string a studio can paste into an email.
+link_closed = client.post("/api/intakes", headers=admin_headers, json={"preset": {}}).json()
+client.post(f"/api/intakes/{link_closed['id']}/close", headers=admin_headers)
+closed_link = client.get(f"/api/intakes/{link_closed['id']}/link", headers=admin_headers)
+ok("a closed request has no link to read: 404", closed_link.status_code == 404)
+ok(
+    "...and says why, so nobody goes looking for a link that was ended on purpose",
+    "closing" in closed_link.json()["detail"].lower(),
+)
+
+#: The property this route was most likely to break. The queue itself still
+#: carries no links: putting the token in the list is a different posture from
+#: a single deliberate call per request, and it is the one this route was
+#: designed NOT to take.
+queue_after = client.get("/api/intakes", headers=admin_headers).json()
+ok(
+    "the queue still carries no token and no link, even for an admin who can "
+    "read one on request - a screenshot of this list still discloses nothing",
+    all("token" not in row and "link" not in row for row in queue_after),
+)
+one_after = client.get(f"/api/intakes/{relink_target['id']}", headers=admin_headers).json()
+ok(
+    "nor does reading one intake by id",
+    "token" not in one_after and "link" not in one_after,
+)
+
 workspaces.use(secured.id)
 secured_bundle = _real_bundle()
 secured_quoted = _quoted([secured_bundle])

@@ -1213,6 +1213,40 @@ export async function fetchIntake(id: string, options: CallOptions = {}): Promis
 }
 
 /**
+ * The client's CURRENT link, without minting a new one. Admin-only.
+ *
+ * The third call that returns a link, where this file's own `readIssued`
+ * docstring says there are two and that a link "is shown once and no route
+ * will ever return it again." That was true and is not any more, and the
+ * reason it changed is worth knowing: `relinkIntake` does not recover a link,
+ * it replaces one. Using it to get a copy of a link the client already holds
+ * breaks the client's copy. This route reads the token that already exists and
+ * changes nothing.
+ *
+ * The queue itself still carries no links - `Intake.token` is excluded from
+ * every list and read, exactly as before. This is a separate call an admin
+ * makes deliberately, for one request at a time.
+ */
+export async function fetchIntakeLink(id: string, options: CallOptions = {}): Promise<string> {
+  const intakeId = String(id ?? '').trim()
+  if (!intakeId) throw new ApiError('No request id to look up.', { kind: 'validation' })
+
+  const data = await request<{ link?: unknown }>(
+    `/intakes/${encodeURIComponent(intakeId)}/link`,
+    options,
+  )
+  if (!data || typeof data.link !== 'string' || !data.link) {
+    // Same bar `readIssued` sets, for the same reason: handing
+    // `writeText(undefined)` to the clipboard leaves a studio staring at a
+    // "Copied" message with nothing on the clipboard.
+    throw new ApiError('That link did not come back. Try again, or reissue it.', {
+      kind: 'parse',
+    })
+  }
+  return data.link
+}
+
+/**
  * Generate a client request from the studio's own PAD configuration, and get
  * back the link that request lives behind. Admin-only - issuing one is nearer
  * to inviting somebody than to drafting a quotation, per `main.create_intake`.

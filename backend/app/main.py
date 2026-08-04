@@ -3129,12 +3129,16 @@ class IntakeIssued(intakes.Intake):
     built from the same field the wire has always hidden, not a second name
     for the secret itself.
 
-    The other shape on offer was a dedicated `GET /api/intakes/{id}/link`,
-    admin-gated, callable any time rather than only at mint/reissue. Not
-    built: `intakes.relink`'s own docstring already names itself as the
-    studio's way to recover a link it lost or wants to resend, so a second,
-    non-mutating door onto the same secret would just be a second admin gate
-    to keep in sync with this one, for a need `relink` already answers.
+    A dedicated `GET /api/intakes/{id}/link` was considered here and refused,
+    on the grounds that `intakes.relink` already answers "the studio lost the
+    link". IT WAS BUILT LATER ANYWAY, and the reasoning above was wrong in a
+    way worth leaving visible rather than quietly editing out: relink does not
+    RECOVER a link, it REPLACES one. That is the same thing only while nobody
+    holds the old link. Once it has been sent - and sending it is the entire
+    point of minting it - reissuing to get a copy silently breaks the link the
+    client already has, possibly after they have opened it. "Recover" and
+    "resend to a second contact" are different needs and only one of them is
+    destructive. See `read_intake_link` below.
     """
 
     link: str = ""
@@ -3457,6 +3461,60 @@ async def send_intake(request: Request, intake_id: str, body: IntakeSendRequest)
         # conflict (not `quoted`, most likely a second send) rather than a
         # write failure, and 409 says that plainly instead of implying a 500.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class IntakeLink(BaseModel):
+    """Just the link. Not `IntakeIssued`, which carries a whole intake record
+    the caller is already holding - and carrying the record again would make
+    this route look like a way to read an intake, which it is not. It is a way
+    to read one secret, and the shape says so."""
+
+    link: str = ""
+
+
+@app.get("/api/intakes/{intake_id}/link", response_model=IntakeLink, tags=["intakes"])
+async def read_intake_link(request: Request, intake_id: str) -> IntakeLink:
+    """The client's CURRENT link, without minting a new one.
+
+    Admin-only, the same side of the line as `relink_intake` - this hands back
+    the bearer credential that opens an unauthenticated route, and the fact
+    that reading is less destructive than reissuing does not make it less
+    sensitive. If anything the gate matters more here: `relink` at least leaves
+    evidence, because the old link stops working and somebody notices.
+
+    WHY THIS EXISTS WHEN `relink` LOOKED LIKE ENOUGH. Reissuing is how a studio
+    was meant to recover a link, and it works exactly once - the first time,
+    before the client has it. After that, pressing Reissue to get a copy of the
+    link kills the copy the client is holding. A studio wanting to forward the
+    same link to a second person at the client had no way to do it that did not
+    break the first person's.
+
+    THE QUEUE STILL CARRIES NO LINKS. That property is `Intake.token`'s
+    `exclude=True` and it is untouched: `list_intakes` and `read_intake` return
+    exactly what they always did, so a screenshot of the queue, an export, or a
+    member reading the list still discloses nothing. This is a separate,
+    deliberate, single-purpose call that an admin has to make on purpose, for
+    one intake at a time. That is a different posture from putting the token in
+    the list, and it is the one that keeps the original reasoning intact.
+
+    404 rather than 403 for a closed or expired intake, and rather than
+    answering an empty string: `close()` blanks the token on the record, so
+    there is genuinely nothing to hand back, and a route that answers `{"link":
+    ""}` invites a caller to paste an empty string into an email.
+    """
+    _require_admin(request, "Only an admin of this workspace can read a client's link.")
+    entry = intakes.get(intake_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="That request does not exist.")
+    if not entry.token:
+        raise HTTPException(
+            status_code=404,
+            detail="That request has no live link. Closing one ends its link for good.",
+        )
+    # Never logged, at any level. The one rule this whole feature has about
+    # tokens, and a `logger.info("handed back %s", link)` here would undo the
+    # `exclude=True` that every other route relies on.
+    return IntakeLink(link=_client_link(entry.token))
 
 
 @app.post("/api/intakes/{intake_id}/relink", response_model=IntakeIssued, tags=["intakes"])

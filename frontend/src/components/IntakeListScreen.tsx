@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
-import { closeIntake, intakeFileUrl, listIntakes, openFile, relinkIntake, sendIntake } from '../lib/api'
+import {
+  ApiError,
+  closeIntake,
+  fetchIntakeLink,
+  intakeFileUrl,
+  listIntakes,
+  openFile,
+  relinkIntake,
+  sendIntake,
+} from '../lib/api'
 import { formatBytes, formatDate } from '../lib/format'
 import RowMenu from './RowMenu'
 import { useRole } from '../lib/role'
@@ -540,6 +549,9 @@ type IntakeRowProps = {
   /** The link a reissue on this row put on screen. Empty until one does. */
   link: string
   onRequest: (id: string, action: RowAction) => void
+  onCopyLink: (id: string) => void
+  /** What to say under this row after a copy - '' while there is nothing to say. */
+  copyNote: string
   onCancel: () => void
   onClose: (id: string) => void
   onSend: (id: string, bundleId: string) => void
@@ -557,6 +569,8 @@ function IntakeRow({
   landedSeq,
   link,
   onRequest,
+  onCopyLink,
+  copyNote,
   onCancel,
   onClose,
   onSend,
@@ -787,6 +801,16 @@ function IntakeRow({
               <RowMenu
                 label={`Actions for ${row.client_email || 'this request'}`}
                 items={[
+                  // Above Reissue, and that order is the point. The two sit
+                  // next to each other and one of them silently breaks the
+                  // link the client is holding; the harmless one being first
+                  // is what stops a studio reaching for the destructive one
+                  // when all they wanted was the address again.
+                  //
+                  // No confirm, unlike the other two: it changes nothing, and
+                  // a dialog asking permission to read something implies it
+                  // does.
+                  { label: 'Copy link', onSelect: () => onCopyLink(row.id) },
                   { label: 'Reissue link', onSelect: () => onRequest(row.id, 'reissue') },
                   { label: 'Close', danger: true, onSelect: () => onRequest(row.id, 'close') },
                 ]}
@@ -795,6 +819,17 @@ function IntakeRow({
           </>
         )}
       </span>
+
+      {/* `role="status"`, so a studio who pressed Copy from the keyboard is
+          told it worked without focus having to move to find out. It replaces
+          itself rather than stacking, and it is deliberately not a toast: the
+          answer belongs beside the row it is about, because a queue can have
+          twenty rows and "Copied" floating in a corner does not say which. */}
+      {copyNote ? (
+        <p role="status" className="mt-1 font-body text-[13px] leading-[1.5] text-void">
+          {copyNote}
+        </p>
+      ) : null}
 
       {confirming === 'send' ? (
         <ConfirmPanel label="Send to client">
@@ -966,6 +1001,8 @@ export default function IntakeListScreen() {
    * of this file guards its indexing: `get` answers `undefined` for a row
    * that has no link, which is the truth.
    */
+  //: Per row, so copying one request's link does not blank another's note.
+  const [copyNotes, setCopyNotes] = useState<Map<string, string>>(() => new Map())
   const [links, setLinks] = useState<Map<string, string>>(new Map())
 
   useEffect(() => {
@@ -1079,6 +1116,42 @@ export default function IntakeListScreen() {
   const handleSend = (id: string, bundleId: string) =>
     act(id, 'send', () => sendIntake(id, bundleId), 'That quotation was not sent to the client.')
 
+  /**
+   * Copy the link this request already has. No confirm and no `act()`: it
+   * writes nothing, so it does not belong under the one-in-flight guard the
+   * three mutating actions share - a studio should be able to copy one link
+   * while a different row is closing.
+   *
+   * The clipboard check is the same one `ReissuedLink` makes and for the same
+   * reason: `navigator.clipboard` is absent, not merely unusable, over plain
+   * HTTP on anything but localhost, so `board?.writeText(...).then(...)` would
+   * short-circuit silently and leave a studio pressing Copy and seeing nothing.
+   *
+   * The note is the whole of the feedback, so it has to be honest about which
+   * half failed. Fetching the link and writing it to the clipboard are
+   * different failures with different remedies, and one message for both would
+   * send a studio to reissue a link that was never the problem.
+   */
+  const handleCopyLink = (id: string) => {
+    setCopyNotes((current) => new Map(current).set(id, 'Copying'))
+    const say = (note: string) => setCopyNotes((current) => new Map(current).set(id, note))
+    fetchIntakeLink(id)
+      .then((link) => {
+        const board = navigator.clipboard
+        if (!board) {
+          say('This browser will not let a page copy for you. Reissue the link to see it in full.')
+          return
+        }
+        return board
+          .writeText(link)
+          .then(() => say('Copied. The link is on your clipboard.'))
+          .catch(() => say('That link could not be copied to the clipboard.'))
+      })
+      .catch((failure: unknown) => {
+        say(failure instanceof ApiError ? failure.message : 'That link could not be read.')
+      })
+  }
+
   const handleReissue = (id: string) =>
     act(
       id,
@@ -1170,6 +1243,8 @@ export default function IntakeListScreen() {
                   landedSeq={landed && landed.id === row.id ? landed.seq : 0}
                   link={links.get(row.id) || ''}
                   onRequest={(id, action) => setConfirming({ id, action })}
+                  onCopyLink={handleCopyLink}
+                  copyNote={copyNotes.get(row.id) || ''}
                   onCancel={() => setConfirming(null)}
                   onClose={handleClose}
                   onSend={handleSend}
