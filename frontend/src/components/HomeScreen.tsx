@@ -315,12 +315,12 @@ export default function HomeScreen() {
           >
             <span
               className={`block font-label text-[30px] leading-none tabular-nums ${
-                // NOT `text-ink` for the idle state. In light mode the accent
-                // IS the ink - both `#16161a` - so `ballpoint : ink` renders
-                // one colour twice and the figure stops saying whether
-                // anything is running. `text-void` is a step down in both
-                // palettes: violet against grey in dark, near-black against
-                // mid-grey in light.
+                // NOT `text-ink` for the idle state. The accent IS the ink in
+                // BOTH themes now - `#16161a` light, `#f7f7f8` dark - so
+                // `ballpoint : ink` renders one colour twice and the figure
+                // stops saying whether anything is running. `text-void` is a
+                // real step away from the accent in either direction: 2.49 in
+                // light, 2.57 in dark.
                 running ? 'text-ballpoint' : 'text-void'
               }`}
             >

@@ -164,7 +164,14 @@ export default function KindPicker({ value, label, onChange, onLabel, disabled }
                 >
                   {kind.label}
                 </span>
-                <span className="block truncate font-body text-[12.5px] leading-[1.4] text-faint">
+                {/* `text-void`, not `text-faint`. This blurb sits on two
+                    different grounds - `bg-paper` unchosen, `bg-accent-soft`
+                    chosen - and `faint` measured 3.03 on the chosen one in the
+                    old sand palette, 4.2 in ash. Both are under the 4.5 that
+                    12.5px body text needs; the size is what makes it a
+                    failure, since 3:1 only buys you 18px or 14px bold.
+                    `void` clears it on both grounds in both themes. */}
+                <span className="block truncate font-body text-[12.5px] leading-[1.4] text-void">
                   {kind.hint}
                 </span>
               </span>
