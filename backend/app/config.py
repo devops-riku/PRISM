@@ -106,9 +106,16 @@ SUPABASE_JWT_SECRET: str = _env_str("SUPABASE_JWT_SECRET", "")
 RESEND_API_KEY: str = _env_str("RESEND_API_KEY", "")
 RESEND_FROM: str = _env_str("RESEND_FROM", "")
 
-#: Where an invitation link points. The app's own origin - the link is opened by
-#: a person in a browser, not by this server.
-APP_ORIGIN: str = _env_str("APP_ORIGIN", "http://localhost:5174")
+#: Where an invitation link and a client's own link point. The app's own origin
+#: - both are opened by a person in a browser, not by this server, so nothing
+#: here can be derived from the request that mints them.
+#:
+#: 5173, because `vite.config.ts` sets `strictPort: true` on that port for both
+#: `dev` and `preview`: the dev server either binds 5173 or refuses to start, so
+#: there is no configuration in which the app answers on 5174 and a default
+#: pointing there mints links to a closed port. A wrong value fails silently and
+#: late - the link is generated, copied, and sent before anyone finds out.
+APP_ORIGIN: str = _env_str("APP_ORIGIN", "http://localhost:5173")
 
 
 # --- Storage -----------------------------------------------------------------
