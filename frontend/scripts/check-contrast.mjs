@@ -17,15 +17,21 @@ function tokens(scope) {
   if (scope === 'dark') {
     body = css.slice(css.indexOf('@theme'), css.indexOf('}', css.indexOf('--color-alert-soft')))
   } else {
-    // Anchored to the RULE's own opening brace, not a bare substring match:
+    // Anchored to the RULE's own selector line, not a bare substring match:
     // the dark palette's doc comment above --color-canvas explains
-    // `.sheet-light` in prose (backtick-quoted, `.sheet-light` below is...),
-    // and a plain `indexOf('.sheet-light')` finds that mention first - it
-    // sits earlier in the file than any actual `.sheet-light { ... }` block
-    // ever will, and every single-class rule in this file is written
-    // `.className {` on one line (`.well {`, `.chip {`, `.pill {`, ...), so
-    // the literal string below matches only a real declaration, never prose.
-    const start = css.indexOf('.sheet-light {')
+    // `.sheet-light` in prose (backtick-quoted - `` `.sheet-light` below is
+    // how... ``), and a plain `indexOf('.sheet-light')` finds that mention
+    // first - it sits earlier in the file than any actual `.sheet-light`
+    // rule ever will. Required at the START of a line (only whitespace
+    // before it) so the backtick-prefixed comment text can never match, and
+    // followed by `,` or `{` (not a backtick) so it works whether the rule
+    // is its own selector (`.sheet-light {`) or paired with the theme
+    // toggle in a selector list (`.sheet-light,\nhtml[data-theme=light] {`,
+    // the shape the plan's later light-mode toggle task calls for) - the
+    // brace that actually opens the rule is then found by scanning forward
+    // from wherever the selector line matched, which is correct either way. */
+    const selector = css.match(/^[ \t]*\.sheet-light[ \t]*[,{]/m)
+    const start = selector ? css.indexOf('{', selector.index) : -1
     body = start === -1 ? '' : css.slice(start, css.indexOf('}', start))
   }
   const found = {}
