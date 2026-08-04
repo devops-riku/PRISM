@@ -50,7 +50,13 @@ export default function LandingScreen() {
           below it is reached by the only scroll in the layout — see the
           wrapper's own comment. */}
       <section className="flex min-h-0 flex-col justify-center px-7 py-10 sm:px-12 lg:px-16">
-        <div className="mx-auto w-full max-w-[34rem]">
+        {/* 44rem, not 34rem, and the number is set by the headline rather than
+            by taste. The `<br />` below asks for exactly two lines; at 34rem
+            the longer of them ("and technical specification.") wrapped again
+            and the hero rendered as FOUR lines at every desktop width. A
+            forced break only reads as a designed break if each side of it
+            actually fits. */}
+        <div className="mx-auto w-full max-w-[44rem]">
           <div className="flex items-center gap-3 rise-in" style={{ '--i': 0 } as CSSProperties}>
             <PrismMark />
             <span className={`${MONO_LABEL} text-ink`}>PRISM</span>
@@ -60,20 +66,24 @@ export default function LandingScreen() {
               breakpoints: this is the only type in the app that wants to be
               fluid, because it is the only line whose whole job is scale. */}
           <h1
-            className={`${DISPLAY} rise-in mt-8 text-[clamp(2.1rem,4.6vw,3.4rem)] leading-[1.06] tracking-[-0.03em] text-ink`}
+            className={`${DISPLAY} rise-in mt-8 text-[clamp(1.85rem,3.4vw,3rem)] leading-[1.08] tracking-[-0.03em] text-ink`}
             style={{ '--i': 1 } as CSSProperties}
           >
-            One brief in.
+            From scope to quotation
             <br />
-            Two documents out.
+            and technical specification.
           </h1>
 
           <p
-            className="rise-in mt-6 max-w-[46ch] font-body text-[16px] leading-[1.65] text-void"
+            // No `ch` cap, and `text-pretty` for where it does wrap. At 46ch
+            // this broke one word before the end and left "documents." alone
+            // on a line. The sentence is 73 characters, which fits the 44rem
+            // column outright at desktop widths; below that `text-pretty`
+            // stops the browser leaving a single-word last line.
+            className="rise-in mt-6 font-body text-[16px] leading-[1.65] text-pretty text-void"
             style={{ '--i': 2 } as CSSProperties}
           >
-            A priced proposal for your client, and a numbered requirements spec for whoever
-            builds it. One submission — no chat loop.
+            Turn one project submission into two consistent, ready-to-send documents.
           </p>
 
           <dl className="mt-10 border-t border-hairline">
