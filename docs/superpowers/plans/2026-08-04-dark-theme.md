@@ -1244,7 +1244,32 @@ if `.prose` now stretches to 1400px - give the document's own container
 Report what you found, with the measured width of the document body before and
 after.
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 5: A comment that does not match its own code**
+
+Task 5's review left one informational minor, in the file you are already
+editing and about the shell you are about to change. `.page-glow`'s doc comment
+(`index.css`, around line 379) says three things, and two of them are not true
+of the code beneath it:
+
+- "the accent at a tenth of its strength" - the value is `12%`.
+- "gone by two thirds of the way down" - the stop is at `70%`.
+- "the shells are what carry `overflow: hidden` and a fixed height" - the
+  quotation route's shell (`App.tsx:935`) is `min-h-screen` and scrolls. That
+  is the one shell whose width you are deliberately leaving alone in Step 2,
+  so you will be looking straight at the counter-example.
+
+The text came from the brief and was copied verbatim, correctly - it is mine,
+not the implementer's. Correct it now.
+
+Say the actual numbers, and rewrite the third claim to what is true: the glow
+sits on the shells rather than on `body` because a gradient on `body` is
+painted behind the whole document, and most of these shells are fixed to the
+viewport - with the quotation route as the exception that scrolls.
+
+A comment that disagrees with the code beside it is how the next person learns
+to stop reading the comments.
+
+- [ ] **Step 6: Verify**
 
 ```bash
 cd frontend && node scripts/check-contrast.mjs && npm run typecheck && npm run build
@@ -1267,7 +1292,7 @@ restart or kill them, the user is using them.** A playwright-core install is at
 screens need a signed-in session; if you cannot reach them, say so plainly and
 measure what you can from the built CSS instead, stating which is which.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add frontend/src/index.css frontend/src/App.tsx frontend/src/components/AppHeader.tsx
