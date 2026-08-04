@@ -1,0 +1,100 @@
+/**
+ * Every colour pair in the theme, measured against WCAG AA.
+ *
+ * Dependency-free on purpose: it parses the same `index.css` the app ships and
+ * needs no browser and no install, so it runs in CI, on a fresh clone, and in
+ * the two seconds after someone edits a hex by hand.
+ *
+ * Run: node scripts/check-contrast.mjs   (from frontend/)
+ */
+import { readFileSync } from 'node:fs'
+
+const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
+
+/** The `@theme` block's values - the dark palette, which is the default. */
+function tokens(scope) {
+  let body
+  if (scope === 'dark') {
+    body = css.slice(css.indexOf('@theme'), css.indexOf('}', css.indexOf('--color-alert-soft')))
+  } else {
+    // Anchored to the RULE's own opening brace, not a bare substring match:
+    // the dark palette's doc comment above --color-canvas explains
+    // `.sheet-light` in prose (backtick-quoted, `.sheet-light` below is...),
+    // and a plain `indexOf('.sheet-light')` finds that mention first - it
+    // sits earlier in the file than any actual `.sheet-light { ... }` block
+    // ever will, and every single-class rule in this file is written
+    // `.className {` on one line (`.well {`, `.chip {`, `.pill {`, ...), so
+    // the literal string below matches only a real declaration, never prose.
+    const start = css.indexOf('.sheet-light {')
+    body = start === -1 ? '' : css.slice(start, css.indexOf('}', start))
+  }
+  const found = {}
+  for (const [, name, hex] of body.matchAll(/--color-([a-z-]+):\s*(#[0-9a-fA-F]{6})/g)) {
+    found[name] = hex
+  }
+  return found
+}
+
+const luminance = (hex) => {
+  const raw = hex.replace('#', '')
+  const channels = [0, 2, 4].map((i) => parseInt(raw.slice(i, i + 2), 16) / 255)
+  const linear = channels.map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+}
+
+const ratio = (a, b) => {
+  const [x, y] = [luminance(a), luminance(b)]
+  const [hi, lo] = x > y ? [x, y] : [y, x]
+  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100
+}
+
+/** `[label, foreground token, background token, floor]`. */
+const PAIRS = [
+  ['headings on a card', 'ink', 'paper', 4.5],
+  ['body on a card', 'body', 'paper', 4.5],
+  ['secondary on a card', 'void', 'paper', 4.5],
+  ['captions on a card', 'faint', 'paper', 4.5],
+  ['captions on the page', 'faint', 'canvas', 4.5],
+  ['body on the page', 'body', 'canvas', 4.5],
+  ['the accent on a card', 'ballpoint', 'paper', 4.5],
+  ['the accent on the page', 'ballpoint', 'canvas', 4.5],
+  ['the accent on its own tint', 'ballpoint', 'accent-soft', 4.5],
+  ['alert on a card', 'alert', 'paper', 4.5],
+  ['body on a well', 'body', 'duplicate', 4.5],
+]
+
+let failed = 0
+for (const scope of ['dark', 'light']) {
+  const t = tokens(scope)
+  if (!t.canvas) {
+    console.log(`\n${scope}: no palette found - is the block still there?`)
+    failed += 1
+    continue
+  }
+  console.log(`\n--- ${scope} ---`)
+  for (const [label, fg, bg, floor] of PAIRS) {
+    const value = ratio(t[fg], t[bg])
+    const ok = value >= floor
+    if (!ok) failed += 1
+    console.log(`  ${label.padEnd(30)} ${String(value).padStart(6)}  ${ok ? 'ok' : `FAIL (needs ${floor})`}`)
+  }
+}
+
+// An input's edge has to be findable. It is the one non-text pair that matters:
+// a divider nobody sees is a style, a field nobody can find is a fault.
+const dark = tokens('dark')
+const wellBorder = (css.match(/--well-border:\s*(#[0-9a-fA-F]{6})/) || [])[1]
+if (!wellBorder) {
+  console.log('\nno --well-border found')
+  failed += 1
+} else {
+  for (const [label, bg] of [['on a card', 'paper'], ['on the page', 'canvas']]) {
+    const value = ratio(wellBorder, dark[bg])
+    const ok = value >= 3.0
+    if (!ok) failed += 1
+    console.log(`\n  input border ${label.padEnd(17)} ${String(value).padStart(6)}  ${ok ? 'ok' : 'FAIL (needs 3)'}`)
+  }
+}
+
+console.log(failed === 0 ? '\nevery pair clears its floor' : `\n${failed} failing`)
+process.exit(failed === 0 ? 0 : 1)
