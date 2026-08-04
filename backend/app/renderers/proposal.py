@@ -209,13 +209,17 @@ def render_proposal(document: ProposalDocument, estimate: Estimate) -> str:
     # way: one page saying what this is before anybody reads a word of it. The
     # rule is where the page turns - `render_print_html` and `render_pdf` both
     # break on the first one when they are building a proposal.
+    #
+    # "Prepared by <studio>" used to sit here too, which made the sentence
+    # above false: it is already the second row of the metadata table overleaf,
+    # under the same words. A cover that repeats the page after it spends the
+    # one page a client reads before deciding whether to keep reading. The
+    # letterhead carries the studio's mark on every page anyway, so the cover
+    # says whose it is without a line of type saying so.
     lines: List[str] = [f"# {title}", ""]
 
     if client:
         lines.append(f"### For {client}")
-        lines.append("")
-    if studio:
-        lines.append(f"Prepared by **{studio}**")
         lines.append("")
 
     lines.append("---")
