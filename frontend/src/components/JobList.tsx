@@ -186,9 +186,13 @@ export default function JobList() {
           const elapsed = elapsedLabel(secondsSince(job.created_at, now))
 
           return (
+            // py-3, matching the Finished rows below and every other
+            // row-touch list in the app (IntakeListScreen, ProposalList,
+            // WorkspacesScreen) — this section used to sit at py-4, a step
+            // taller than its own sibling two sections down.
             <article
               key={job.id}
-              className="row-touch border-b border-hairline px-5 py-4 last:border-b-0 sm:px-6"
+              className="row-touch border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
             >
               <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
                 <h3 className="font-body text-[15px] font-medium text-ink">{job.title}</h3>
