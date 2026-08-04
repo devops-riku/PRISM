@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { deleteProposal, listProposals } from '../lib/api'
 import { formatDate, formatMoney } from '../lib/format'
 import RowMenu from './RowMenu'
@@ -199,8 +200,17 @@ export default function QuotationList({ onOpen }: QuotationListProps) {
                 </tr>
               </thead>
               <tbody>
-                {shown.map((row) => (
-                  <tr key={row.id} className="row-touch border-b border-rule last:border-b-0">
+                {/* The clamp inside `.rise-in` is what makes this safe on a
+                    table that can run to hundreds of rows: past the sixth,
+                    every row lands on the same beat. A book of quotations
+                    dealt out one row at a time would read as the page being
+                    slow, which is the opposite of what the arrival is for. */}
+                {shown.map((row, index) => (
+                  <tr
+                    key={row.id}
+                    style={{ '--i': index } as CSSProperties}
+                    className="row-touch rise-in border-b border-rule last:border-b-0"
+                  >
                     <td className="whitespace-nowrap px-4 py-2 first:pl-5 last:pr-5 sm:first:pl-6 sm:last:pr-6 align-top">
                       {/* The printed reference, not the storage id: this is the
                           number on the document and the one a client quotes back

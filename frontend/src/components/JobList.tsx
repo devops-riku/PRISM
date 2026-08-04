@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { listJobs } from '../lib/api'
 import { elapsedLabel, formatDate, secondsSince } from '../lib/format'
 import { onJobUpdate } from '../lib/notifications'
@@ -178,7 +179,7 @@ export default function JobList() {
           </p>
         ) : null}
 
-        {running.map((job) => {
+        {running.map((job, index) => {
           const done = job.steps.filter((step) => step.done).length
           // Nothing has finished, so there is no percentage to report — only
           // how long it has been going.
@@ -192,7 +193,8 @@ export default function JobList() {
             // taller than its own sibling two sections down.
             <article
               key={job.id}
-              className="row-touch border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
+              style={{ '--i': index } as CSSProperties}
+              className="row-touch rise-in border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
             >
               <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
                 <h3 className="font-body text-[15px] font-medium text-ink">{job.title}</h3>
@@ -251,10 +253,17 @@ export default function JobList() {
           </p>
         ) : null}
 
-        {settled.map((job) => (
+        {/* Keyed by job id in a parent of its own, so the poll and the socket
+            re-render these rows without remounting them and the arrival runs
+            once. The one row that DOES remount is a job crossing from Being
+            prepared into Finished - a different parent, so React unmounts it
+            there and mounts it here. That is the right moment to animate: it
+            genuinely just arrived. */}
+        {settled.map((job, index) => (
           <article
             key={job.id}
-            className="row-touch border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
+            style={{ '--i': index } as CSSProperties}
+            className="row-touch rise-in border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
               <div className="min-w-[16rem] flex-1">

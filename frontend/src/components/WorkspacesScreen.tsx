@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { CSSProperties } from 'react'
 import {
   createWorkspace,
   currentWorkspace,
@@ -172,12 +173,13 @@ export default function WorkspacesScreen({ onChanged }: WorkspacesScreenProps) {
         ) : null}
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pb-2">
-          {rows.map((row) => {
+          {rows.map((row, index) => {
             const here = row.id === chosen || (!chosen && row === rows[0])
             return (
               <article
                 key={row.id}
-                className="row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
+                style={{ '--i': index } as CSSProperties}
+                className="row-touch rise-in flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
               >
                 <div className="min-w-[14rem] flex-1">
                   {renamingId === row.id ? (

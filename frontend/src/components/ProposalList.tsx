@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { deleteDocument, documentUrl, listDocuments, openFile } from '../lib/api'
 import { formatDate, formatMoney } from '../lib/format'
 import RowMenu from './RowMenu'
@@ -123,10 +124,11 @@ export default function ProposalList() {
 
         {found.length > 0 ? (
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pb-2">
-            {found.map((row) => (
+            {found.map((row, index) => (
               <article
                 key={row.id}
-                className="row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
+                style={{ '--i': index } as CSSProperties}
+                className="row-touch rise-in flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
               >
                 <div className="min-w-[16rem] flex-1">
                   <a

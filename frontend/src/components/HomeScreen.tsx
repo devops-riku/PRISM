@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import type { CSSProperties, KeyboardEvent } from 'react'
 import { listJobs } from '../lib/api'
 import { useRole } from '../lib/role'
 import { useCountUp } from '../lib/useCountUp'
@@ -260,31 +260,34 @@ export default function HomeScreen() {
             subtree. The panel role and its dynamic label live on this
             wrapping div instead, leaving <nav> underneath with its native
             landmark role and its own static label intact. */}
-        {/* Keyed on the side, so React remounts it and `.step-panel`'s rise
-            runs once per switch - the same class and the same reasoning the
-            pad's own steps use, rather than a second animation that means the
-            same thing. The cards under it are what actually changed; the thumb
-            above says which way, and this says something arrived. */}
-        <div
-          key={side}
-          id="home-panel"
-          role="tabpanel"
-          aria-labelledby={`home-tab-${side}`}
-          className="step-panel"
-        >
+        {/* Keyed on the side, so React remounts it and the cards below deal
+            themselves out again on every switch.
+
+            `.step-panel` used to be on this div as well, and is not any more.
+            Two arrivals saying the same thing compound rather than add: the
+            panel's own opacity MULTIPLIES with each card's, and the first
+            frame of a switch measured at 0.30 x 0.20 - effectively 0.06 - with
+            the two translates stacking to 20px of travel. The cards moving is
+            the more specific statement of the two, so it is the one that
+            stayed. `.step-panel` is untouched where it belongs, on the pad. */}
+        <div key={side} id="home-panel" role="tabpanel" aria-labelledby={`home-tab-${side}`}>
           <nav
             aria-label="Where to go"
             className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
           >
             {destinations.filter((place) => isAdmin || place.href !== '#/settings').map(
-              (place) => (
+              (place, index) => (
               <a
                 key={place.href}
                 href={place.href}
+                // Index after the filter, not before it: a member does not see
+                // Settings, and a hole in the sequence would leave the fifth
+                // card waiting on a beat belonging to a card that is not there.
+                style={{ '--i': index } as CSSProperties}
                 // Square, so the five read as one set: the longest label used to
                 // set the height for all of them, and a card that is taller
                 // because its words are longer looks like it matters more.
-                className="group flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet transition-[border-color,transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-ballpoint hover:shadow-raised active:translate-y-0 active:shadow-sheet motion-reduce:transform-none motion-reduce:transition-none"
+                className="group rise-in flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet transition-[border-color,transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-ballpoint hover:shadow-raised active:translate-y-0 active:shadow-sheet motion-reduce:transform-none motion-reduce:transition-none"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent-soft text-ballpoint">
                   <svg

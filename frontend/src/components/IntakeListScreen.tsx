@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
   ApiError,
   closeIntake,
@@ -492,6 +492,12 @@ function AttachmentsBlock({ intakeId, attachments, closed }: AttachmentsProps) {
 type IntakeRowProps = {
   row: Intake
   isAdmin: boolean
+  /** Where this row sits inside its own section, for the staggered arrival.
+   *  Per section rather than across the whole list, so each heading's rows
+   *  deal out from that heading rather than from the top of a list the reader
+   *  has already scrolled past. `.rise-in` clamps the delay, so a section of
+   *  forty rows still finishes with the sixth. */
+  index: number
   /** Closed rows read as done-with. Carried per row since the flat list has
    *  no per-section wrapper to hold it. */
   muted: boolean
@@ -523,6 +529,7 @@ type IntakeRowProps = {
 function IntakeRow({
   row,
   isAdmin,
+  index,
   muted,
   confirming,
   busy,
@@ -648,7 +655,8 @@ function IntakeRow({
     <article
       ref={rowRef}
       tabIndex={-1}
-      className={`row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6 ${
+      style={{ '--i': index } as CSSProperties}
+      className={`row-touch rise-in flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6 ${
         muted ? 'opacity-60' : ''
       }`}
     >
@@ -1192,11 +1200,12 @@ export default function IntakeListScreen() {
               >
                 {section.heading} · {section.rows.length}
               </h3>,
-              ...section.rows.map((row) => (
+              ...section.rows.map((row, index) => (
                 <IntakeRow
                   key={row.id}
                   row={row}
                   isAdmin={isAdmin}
+                  index={index}
                   muted={Boolean(section.muted)}
                   confirming={forRow(confirming, row.id)}
                   busy={forRow(busy, row.id)}
