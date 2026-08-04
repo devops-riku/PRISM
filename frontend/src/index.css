@@ -1644,11 +1644,20 @@
 
        Held inside the no-preference guard along with its own transition: with
        reduce set, a `:hover` transform with no transition is a 2px jump under
-       the cursor, which is worse than no effect at all. */
+       the cursor, which is worse than no effect at all.
+
+       `border-color` joins the list, and it is not a third thing this class
+       does - it is the same 180ms, on the same curve, for the border a card
+       already changes on hover. Tailwind's `transition-*` utilities cannot be
+       used alongside this rule to cover it: utilities sit in a LATER cascade
+       layer than components, so `transition-[border-color,…]` on the element
+       would replace this whole declaration and leave the transform snapping.
+       One class owns the timing of the hover, or none of it does. */
     .lift {
       transition:
         transform 180ms var(--ease-press),
-        box-shadow 180ms var(--ease-press);
+        box-shadow 180ms var(--ease-press),
+        border-color 180ms var(--ease-press);
     }
 
     .lift:hover {

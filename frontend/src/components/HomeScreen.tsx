@@ -287,7 +287,21 @@ export default function HomeScreen() {
                 // Square, so the five read as one set: the longest label used to
                 // set the height for all of them, and a card that is taller
                 // because its words are longer looks like it matters more.
-                className="group rise-in flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet transition-[border-color,transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-ballpoint hover:shadow-raised active:translate-y-0 active:shadow-sheet motion-reduce:transform-none motion-reduce:transition-none"
+                //
+                // `.lift` rather than the hand-rolled hover this carried: the
+                // raise, the press and their timing now come from the one
+                // class every openable card in the app uses. The transition
+                // utility had to go with it - utilities are a later cascade
+                // layer than components, so it would have replaced `.lift`'s
+                // transition outright and left the raise snapping. The
+                // `motion-reduce:` pair went too: `.lift` is already inside
+                // the no-preference guard, so there is nothing to undo.
+                //
+                // `hover:shadow-raised` STAYS, and is not a duplicate of
+                // `.lift:hover`'s own shadow. `shadow-sheet` below is a
+                // utility and would outrank the component rule at rest; a
+                // hover utility is the only thing that can beat it back.
+                className="group rise-in lift flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet hover:border-ballpoint hover:shadow-raised"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent-soft text-ballpoint">
                   <svg
@@ -323,9 +337,14 @@ export default function HomeScreen() {
             same thing as the PAD Quotations card directly above it, and a
             number repeated is a number nobody reads. */}
         <div className="mx-auto mt-6 grid max-w-[17rem] grid-cols-1 gap-4">
+          {/* A door, not a read-out: this is the way in to the jobs page, so
+              it lifts like the cards above it. `transition-colors duration-150`
+              came off with the same reasoning as theirs - it was covering a
+              hover colour this card does not have, and a utility-layer
+              transition would have replaced `.lift`'s own. */}
           <a
             href="#/jobs"
-            className="rounded-xl border border-ballpoint/30 bg-accent-soft px-5 py-4 text-center no-underline transition-colors duration-150"
+            className="lift rounded-xl border border-ballpoint/30 bg-accent-soft px-5 py-4 text-center no-underline"
           >
             <span
               className={`block font-label text-[30px] leading-none tabular-nums ${
