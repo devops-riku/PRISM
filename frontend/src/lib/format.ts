@@ -212,25 +212,49 @@ const dateTimeFormatter = new Intl.DateTimeFormat(LOCALE, {
 })
 
 /**
+ * The 12-hour sibling of `dateTimeFormatter`, opt-in via `{ hour12: true }`.
+ *
+ * A second formatter rather than a flag on the one above: every existing
+ * `withTime` caller (`JobList`, `NotificationBell`, `ClientQuotation`,
+ * `ProposalList`, `ProposalView`) was built against, and today still expects,
+ * the 24-hour reading - changing `dateTimeFormatter` itself would silently
+ * reformat all five the moment one screen asked for AM/PM. `hour: 'numeric'`
+ * rather than `'2-digit'` on purpose: a leading zero belongs to the 24-hour
+ * clock this is deliberately not, so 9 PM prints as '9:41 PM', not '09:41 PM'.
+ */
+const dateTimeFormatter12h = new Intl.DateTimeFormat(LOCALE, {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true,
+})
+
+/**
  * Format a timestamp for the quotation header, in the reader's own timezone.
  *
- *   formatDate('2026-07-31T04:15:00Z')                  -> 'Jul 31, 2026'
- *   formatDate('2026-07-31T04:15:00Z', { withTime: 1 }) -> 'Jul 31, 2026, 12:15'
+ *   formatDate('2026-07-31T04:15:00Z')                              -> 'Jul 31, 2026'
+ *   formatDate('2026-07-31T04:15:00Z', { withTime: true })           -> 'Jul 31, 2026, 12:15'
+ *   formatDate('2026-07-31T04:15:00Z', { withTime: true, hour12: true }) -> 'Jul 31, 2026, 12:15 PM'
  *
  * Returns '' for anything unparseable, so a missing timestamp renders as
  * nothing rather than as "Invalid Date".
+ *
+ * `hour12` only matters alongside `withTime` and defaults to `false`, so
+ * every caller already on the books keeps its 24-hour reading unless it
+ * asks for the other one by name.
  *
  * @param value ISO-8601 string, epoch ms, or a Date
  */
 export function formatDate(
   value: string | number | Date,
-  options: { withTime?: boolean } = {},
+  options: { withTime?: boolean; hour12?: boolean } = {},
 ): string {
   const date = toDate(value)
   if (!date) return ''
-  return options.withTime
-    ? dateTimeFormatter.format(date)
-    : dateFormatter.format(date)
+  if (!options.withTime) return dateFormatter.format(date)
+  return options.hour12 ? dateTimeFormatter12h.format(date) : dateTimeFormatter.format(date)
 }
 
 /**

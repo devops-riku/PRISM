@@ -696,7 +696,16 @@ function IntakeRow({
           <span className={row.state === 'quote_failed' ? 'chip chip--alert' : 'chip'}>
             {STATE_LABEL[row.state] || row.state}
           </span>
-          <span className={MONO_LABEL}>{formatDate(row.created_at)}</span>
+          {/* `created_at` is stamped once, in `intakes.create`, when the link
+              is minted at `issued` - not when the client actually filled the
+              form in. `Intake` has no `submitted_at`; `advance()`'s
+              `ADVANCE_FIELDS` never touches a timestamp on the
+              `issued -> submitted` move. So this is the closest the wire
+              comes to "when this arrived", with the time of day now on it -
+              not a true submission instant, which the API does not carry. */}
+          <span className={MONO_LABEL}>
+            {formatDate(row.created_at, { withTime: true, hour12: true })}
+          </span>
           {when ? <span className={MONO_LABEL}>{when}</span> : null}
         </p>
       </div>
