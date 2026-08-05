@@ -664,7 +664,7 @@ export default function App() {
     }
   }, [])
 
-  // "Price this" on the request queue links to `#/pad/<id>` with the client's
+  // "Create PAD" on the request queue links to `#/pad/<id>` with the client's
   // own words already on file. Fetching it here, rather than inside the pad
   // route below, means it only ever runs once per id — not once per render of
   // a screen that re-renders on every keystroke.

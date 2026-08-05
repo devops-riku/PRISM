@@ -62,7 +62,7 @@ CLOSED = "closed"
 #: this a state machine rather than a string field somebody assigns to.
 #:
 #: `QUOTED: {PREPARING, ...}` - a second Generate is reachable in the shipped
-#: UI: Price this -> the pad -> Generate -> `#/q/<bundle>` -> browser Back ->
+#: UI: Create PAD -> the pad -> Generate -> `#/q/<bundle>` -> browser Back ->
 #: the pad again, still prefilled with the same `intake_id` -> Generate again.
 #: Refusing that move (as this table used to) does not stop the second
 #: quotation from being made - the pad has no idea the intake is already

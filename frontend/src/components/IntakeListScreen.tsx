@@ -378,7 +378,7 @@ function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
       </p>
 
       {/* "Leaving this screen takes it with you" is not padding. The queue is
-          covered in links that replace it - Price this, View quotation, the
+          covered in links that replace it - Create PAD, View quotation, the
           empty-state link - and this panel lives in `IntakeListScreen`'s own
           state, so any of them drops it. Those links are deliberately not
           given `target="_blank"` the way the send confirm's are: the confirm
@@ -731,7 +731,7 @@ function IntakeRow({
           <>
             {canPrice ? (
               <a href={`#/pad/${row.id}`} className={ACTION_PRIMARY}>
-                Price this
+                Create PAD
               </a>
             ) : null}
             {canSend ? (

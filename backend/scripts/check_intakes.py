@@ -115,7 +115,7 @@ ok("the bundle is recorded", quoted.bundle_ids == ["abc123def456"])
 ok("what was actually priced is kept apart from what was asked", quoted.priced_scope != quoted.scope)
 
 # A second Generate on an already-quoted intake is reachable in the shipped
-# UI (Price this -> pad -> Generate -> browser Back -> Generate again), so
+# UI (Create PAD -> pad -> Generate -> browser Back -> Generate again), so
 # `quoted -> preparing` has to be a legal move rather than a dead end that
 # leaves the record pointing at a bundle nobody is looking at anymore.
 intakes.advance(entry.id, intakes.PREPARING, job_id="j1-again")

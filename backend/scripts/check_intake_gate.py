@@ -218,7 +218,7 @@ ok("the client's own words are untouched", done.scope == "A booking site for a t
 
 # --- A second Generate on an already-quoted intake replaces, not appends ----
 #
-# Reachable in the shipped UI: Price this -> pad -> Generate -> `#/q/<id>` ->
+# Reachable in the shipped UI: Create PAD -> pad -> Generate -> `#/q/<id>` ->
 # browser Back -> the pad again, still prefilled with the same `intake_id` ->
 # Generate. `QUOTED: {PREPARING, ...}` exists so this run through the real
 # handler - not just `intakes.advance` in isolation - leaves the intake
