@@ -111,7 +111,18 @@
      Currently applied to ONE control (the theme toggle) while the studio
      looks at it. Read `.neu`'s own comment before spreading it - the style
      has a known accessibility problem and the note there says what it is. */
-  --neu-light: rgb(255 255 255 / 0.055);
+  /* NO HIGHLIGHT. `--neu-light` is `transparent` in both themes, and the
+     name is kept rather than the ten `box-shadow` declarations being rewritten
+     - every one of them still reads it, so this single value is what turns
+     the white halo on and off.
+
+     The studio asked for the glows out. What that costs, stated so it is a
+     decision rather than a discovery: neumorphism describes a form with TWO
+     lights, and with one of them gone these are ordinary soft drop shadows.
+     The pressed inversion still works, because the dark half inverts too.
+
+     Put a colour back here and the soft-UI look returns everywhere at once. */
+  --neu-light: transparent;
   --neu-dark: rgb(0 0 0 / 0.55);
 
   /* ── The mark ─────────────────────────────────────────────────────────
@@ -855,11 +866,11 @@
     --shadow-ring: 0 0 0 4px
       color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
 
-    /* The light theme is where this style came from, so the highlight can be
-       real: pure white against a cream ground. The shadow is warm rather than
-       black - a neutral drop on a warm surface greys it, and the whole trick
-       depends on the two lights looking like the same material. */
-    --neu-light: #ffffff;
+    /* The white highlight this theme used to carry was the most visible glow
+       in the app - a hard `#ffffff` halo up the top-left of every card on a
+       cream ground. Off, like the dark one. The shadow stays warm rather than
+       black: a neutral drop on a warm surface greys it. */
+    --neu-light: transparent;
     --neu-dark: rgb(146 128 102 / 0.34);
 
     /* The mark's light half. Pale sage tile, dark green triangle - the
