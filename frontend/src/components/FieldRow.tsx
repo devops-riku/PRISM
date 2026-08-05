@@ -28,10 +28,22 @@ type FieldLabelProps = {
    * toggle the box.
    */
   info?: ReactNode
+  /**
+   * What to call this field in the icon's accessible name, when `children`
+   * is not a plain string.
+   *
+   * Several labels interpolate — `Target cost ({currency}, {taxNote})` is an
+   * array, not a string — and the `typeof children === 'string'` check below
+   * would quietly fall back to "About this field" for every one of them.
+   * That is precisely the announcement `InfoHint`'s own docstring rules out,
+   * and it fails silently: the screen looks right and only a screen reader
+   * hears the difference.
+   */
+  infoLabel?: string
 }
 
 /** Small caption above a control. */
-export function FieldLabel({ htmlFor, children, info }: FieldLabelProps) {
+export function FieldLabel({ htmlFor, children, info, infoLabel }: FieldLabelProps) {
   const label = (
     <label
       htmlFor={htmlFor}
@@ -48,7 +60,9 @@ export function FieldLabel({ htmlFor, children, info }: FieldLabelProps) {
   return (
     <div className="mb-2 flex items-center gap-1.5">
       {label}
-      <InfoHint label={typeof children === 'string' ? children : 'this field'}>{info}</InfoHint>
+      <InfoHint label={infoLabel || (typeof children === 'string' ? children : 'this field')}>
+        {info}
+      </InfoHint>
     </div>
   )
 }
