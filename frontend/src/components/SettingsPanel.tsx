@@ -7,6 +7,7 @@ import CurrencySelect from './CurrencySelect'
 import DangerZone from './DangerZone'
 import DesignEditor from './DesignEditor'
 import Dropdown from './Dropdown'
+import InfoHint from './InfoHint'
 import PolicyEditor from './PolicyEditor'
 import TemplateEditor from './TemplateEditor'
 import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
@@ -495,9 +496,19 @@ export default function SettingsPanel() {
                   >
                     <div className="grid max-w-[46rem] grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
                       <div className="sm:col-span-2">
-                        <label htmlFor="studio_name" className={MONO_LABEL}>
-                          Studio name
-                        </label>
+                        {/* No `mb-*` on this wrapper, here or at any of the
+                            other hints on this page: every control below one
+                            carries its own `mt-2`, so the flex row only has to
+                            hold the label and the icon on one line. */}
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor="studio_name" className={MONO_LABEL}>
+                            Studio name
+                          </label>
+                          <InfoHint label="the studio name">
+                            It names the profile in the header, gives it its initials, and signs the
+                            documents.
+                          </InfoHint>
+                        </div>
                         <input
                           id="studio_name"
                           type="text"
@@ -506,10 +517,6 @@ export default function SettingsPanel() {
                           placeholder="PRISM"
                           className={`${WELL} mt-2 max-w-[420px]`}
                         />
-                        <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
-                          It names the profile in the header, gives it its initials, and signs the
-                          documents.
-                        </p>
                       </div>
 
                       <div>
@@ -597,9 +604,14 @@ export default function SettingsPanel() {
                     <p className={`${MONO_LABEL} mb-3`}>PAD quotation no.</p>
                     <div className="grid max-w-[46rem] grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
                       <div>
-                        <label htmlFor="reference_prefix" className={MONO_LABEL}>
-                          Prefix
-                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor="reference_prefix" className={MONO_LABEL}>
+                            Prefix
+                          </label>
+                          <InfoHint label="the quotation prefix">
+                            Up to four letters. Empty uses Q.
+                          </InfoHint>
+                        </div>
                         <input
                           id="reference_prefix"
                           type="text"
@@ -617,9 +629,6 @@ export default function SettingsPanel() {
                           placeholder="Q"
                           className={`${WELL} mt-2 font-label tracking-[0.08em]`}
                         />
-                        <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
-                          Up to four letters. Empty uses Q.
-                        </p>
                       </div>
 
                       <div>
@@ -673,9 +682,14 @@ export default function SettingsPanel() {
 
                     <div className="grid max-w-[46rem] grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
                       <div>
-                        <label htmlFor="proposal_prefix" className={MONO_LABEL}>
-                          Prefix
-                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor="proposal_prefix" className={MONO_LABEL}>
+                            Prefix
+                          </label>
+                          <InfoHint label="the proposal prefix">
+                            Up to four letters. Empty uses P.
+                          </InfoHint>
+                        </div>
                         <input
                           id="proposal_prefix"
                           type="text"
@@ -693,9 +707,6 @@ export default function SettingsPanel() {
                           placeholder="P"
                           className={`${WELL} mt-2 font-label tracking-[0.08em]`}
                         />
-                        <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
-                          Up to four letters. Empty uses P.
-                        </p>
                       </div>
 
                       <div>
@@ -749,19 +760,26 @@ export default function SettingsPanel() {
                     blurb="What the studio charges. Unlike the defaults, these bind: they are sent to the model and enforced on the way back."
                     wide
                   >
-                    <p className={MONO_LABEL}>
-                      {defaults.rate_card?.length
-                        ? `${defaults.rate_card.length} roles · ${defaults.currency}`
-                        : 'Not configured — the model quotes from the requirements at market rates'}
-                    </p>
-
-                    <p className="mt-2 max-w-[70ch] font-body text-[13px] leading-[1.6] text-void">
-                      Working time is set per role, because a monthly retainer and a day rate do not
-                      share a working month. It is what makes “per day” mean something: a line quoted
-                      in another length of time is converted onto that role’s rate — 16 hours against
-                      an 8-hour day rate is 2 days, same money. Per item and per lump sum are not
-                      lengths of time, so they are never converted.
-                    </p>
+                    {/* The ⓘ hangs off the count line, which is the only thing
+                        on this section that is always on screen. The obvious
+                        anchor - the table's own “Working time” column header -
+                        does not exist until there is a row in the table, and a
+                        studio adding its first role is precisely who has to
+                        read this. */}
+                    <div className="flex items-center gap-1.5">
+                      <p className={MONO_LABEL}>
+                        {defaults.rate_card?.length
+                          ? `${defaults.rate_card.length} roles · ${defaults.currency}`
+                          : 'Not configured — the model quotes from the requirements at market rates'}
+                      </p>
+                      <InfoHint label="working time">
+                        Working time is set per role, because a monthly retainer and a day rate do
+                        not share a working month. It is what makes “per day” mean something: a line
+                        quoted in another length of time is converted onto that role’s rate — 16
+                        hours against an 8-hour day rate is 2 days, same money. Per item and per
+                        lump sum are not lengths of time, so they are never converted.
+                      </InfoHint>
+                    </div>
 
                     {defaults.rate_card?.length ? (
                       <div className="mt-4 overflow-x-auto">
@@ -896,9 +914,15 @@ export default function SettingsPanel() {
                         />
                       </div>
                       <div>
-                        <label htmlFor="signatory_title" className={MONO_LABEL}>
-                          Their title
-                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor="signatory_title" className={MONO_LABEL}>
+                            Their title
+                          </label>
+                          <InfoHint label="the signatory’s title">
+                            Printed on the studio's side of the signature block. The client's side is
+                            left blank for a pen.
+                          </InfoHint>
+                        </div>
                         <input
                           id="signatory_title"
                           type="text"
@@ -909,10 +933,6 @@ export default function SettingsPanel() {
                           placeholder="Managing Director"
                           className={`${WELL} mt-2`}
                         />
-                        <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
-                          Printed on the studio's side of the signature block. The client's side is
-                          left blank for a pen.
-                        </p>
                       </div>
                     </div>
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { HexColorPicker } from 'react-colorful'
 import Dropdown from './Dropdown'
+import InfoHint from './InfoHint'
 import { ACTION, MONO_LABEL, WELL } from './tokens'
 import type {
   DesignCover,
@@ -503,7 +504,15 @@ export default function DesignEditor({ design, studioName, onChange }: DesignEdi
         </p>
 
         <div>
-          <span className={MONO_LABEL}>Logo</span>
+          {/* No `mb-*` on the wrapper: the row below carries its own `mt-2`,
+              so the gap under this label is unchanged. */}
+          <div className="flex items-center gap-1.5">
+            <span className={MONO_LABEL}>Logo</span>
+            <InfoHint label="the logo">
+              Printed at the top of every page in place of the studio name. PNG, JPEG, GIF or WebP,
+              up to 400 KB.
+            </InfoHint>
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <div className="flex h-[52px] w-[120px] items-center justify-center rounded-md border border-rule bg-duplicate px-2">
               {look.logo ? (
@@ -537,10 +546,6 @@ export default function DesignEditor({ design, studioName, onChange }: DesignEdi
               </button>
             ) : null}
           </div>
-          <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
-            Printed at the top of every page in place of the studio name. PNG, JPEG, GIF or WebP, up
-            to 400 KB.
-          </p>
           {problem ? (
             <p role="alert" className="mt-2 font-body text-[13px] text-alert">
               {problem}
