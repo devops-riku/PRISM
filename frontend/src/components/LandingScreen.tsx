@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import AuthScreen from './AuthScreen'
+import PrismMark from './PrismMark'
 import { DISPLAY, MONO_LABEL } from './tokens'
 
 /**
@@ -58,7 +59,7 @@ export default function LandingScreen() {
             actually fits. */}
         <div className="mx-auto w-full max-w-[44rem]">
           <div className="flex items-center gap-3 rise-in" style={{ '--i': 0 } as CSSProperties}>
-            <PrismMark />
+            <PrismMark size={30} />
             <span className={`${MONO_LABEL} text-ink`}>PRISM</span>
           </div>
 
@@ -118,33 +119,5 @@ export default function LandingScreen() {
         </div>
       </section>
     </div>
-  )
-}
-
-/** The product's own mark, at wordmark size: a beam entering a prism and
- *  leaving it split. The three refracted rays keep their colours in both
- *  themes for the reason `index.html` gives at greater length — a prism that
- *  splits white light into grey is not a prism. Everything else takes a
- *  token, so the mark follows the palette without the rays being touched. */
-function PrismMark() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 44 30"
-      className="h-[26px] w-[38px] flex-none"
-      fill="none"
-      strokeLinecap="round"
-    >
-      <path d="M2 15h13" stroke="currentColor" strokeWidth="1.6" className="text-ink" />
-      <path
-        d="M22 5 L15 24 Q14 26 16 26 L28 26 Q30 26 29 24 L22.6 5 Q22 3.6 21.4 5 Z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        className="text-ballpoint"
-      />
-      <path d="M29 12l12-4" stroke="#c96a63" strokeWidth="1.6" />
-      <path d="M30 15h12" stroke="#a8b862" strokeWidth="1.6" />
-      <path d="M29 18l12 4" stroke="#d69433" strokeWidth="1.6" />
-    </svg>
   )
 }

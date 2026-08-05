@@ -114,6 +114,20 @@
   --neu-light: rgb(255 255 255 / 0.055);
   --neu-dark: rgb(0 0 0 / 0.55);
 
+  /* ── The mark ─────────────────────────────────────────────────────────
+     The logo is BRAND, not chrome, and it is the one thing in this file that
+     does not take the app's palette. Its tile is green where the app is warm
+     olive, and that is the supplied artwork rather than a drift - the three
+     spectrum dashes are the same, and the reason is the same as the boot
+     mark's: a prism that splits white light into one colour is not a prism.
+
+     Only the tile and the triangle flip between themes; the dashes never do.
+     Held here rather than in the component so the favicon, the boot splash
+     and the React mark can all be checked against one place - though the
+     first two are still hand-copied, because neither can read a stylesheet. */
+  --logo-tile: #16281e;
+  --logo-mark: #f4f7f4;
+
   /* ── Type — one family, four roles ────────────────────────────────────
      Figtree: a geometric sans with rounded terminals, replacing the kit's
      Instrument Sans at the studio's request. Modern without being neutral, and
@@ -847,6 +861,11 @@
        depends on the two lights looking like the same material. */
     --neu-light: #ffffff;
     --neu-dark: rgb(146 128 102 / 0.34);
+
+    /* The mark's light half. Pale sage tile, dark green triangle - the
+       inverse of the dark pair, and the same two colours either way round. */
+    --logo-tile: #e2eae4;
+    --logo-mark: #14392c;
 
     color-scheme: light;
   }

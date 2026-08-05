@@ -1,3 +1,4 @@
+import PrismMark from './PrismMark'
 import { useRef, useState } from 'react'
 import type { ComponentPropsWithoutRef, ReactNode } from 'react'
 import type { Provider, Session } from '@supabase/supabase-js'
@@ -93,9 +94,10 @@ function Card({ title, blurb, children, footer }: CardProps) {
     <div className="no-scrollbar max-h-dvh w-full max-w-[24rem] overflow-y-auto">
       {/* p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx). */}
       <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
-        <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-ballpoint font-label text-[12px] font-medium tracking-[0.04em] text-paper">
-          P
-        </span>
+        {/* The mark, not a letter in a box. The `P` tile predated there being
+            a logo; now that there is one, the sign-in card is the first place
+            anybody sees the product and should show it. */}
+        <PrismMark size={34} />
         <h1 className={`${DISPLAY} mt-4 text-[21px] leading-[1.2] tracking-[-0.025em] text-ink`}>
           {title}
         </h1>

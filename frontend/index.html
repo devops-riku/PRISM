@@ -57,13 +57,18 @@
       })()
     </script>
 
-    <!-- Ballpoint-blue stamp mark: a rubber stamp struck slightly off-square. -->
-    <!-- URL-encoded (%23 is #), which is why colour sweeps miss it. The card
-         surface and the accent from src/index.css, kept in step by hand. -->
+    <!-- The app mark: a prism as an outlined triangle on a rounded tile, with
+         the spectrum it produces as three dashes beneath.
+
+         URL-encoded (%23 is #), which is why colour sweeps miss it. A tab icon
+         cannot follow a theme, so this is the DARK tile in both - the light
+         one would vanish against a light tab strip. The three dashes are brand
+         and never change; `src/components/PrismMark.tsx` is the definition
+         this copies. -->
     <link
       rel="icon"
       type="image/svg+xml"
-      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2032%2032%27%3E%3Crect%20width=%2732%27%20height=%2732%27%20rx=%278%27%20fill=%27%231B1815%27/%3E%3Ccircle%20cx=%2716%27%20cy=%2716%27%20r=%275%27%20fill=%27%23A8B862%27/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2064%2064%27%3E%3Crect%20width=%2764%27%20height=%2764%27%20rx=%2718%27%20fill=%27%2316281E%27/%3E%3Cpath%20d=%27M32%2015.5L47.5%2043H16.5Z%27%20fill=%27none%27%20stroke=%27%23F4F7F4%27%20stroke-width=%273.1%27%20stroke-linejoin=%27round%27/%3E%3Cg%20stroke-width=%272.8%27%20stroke-linecap=%27round%27%3E%3Cline%20x1=%2718.5%27%20y1=%2751.5%27%20x2=%2725.5%27%20y2=%2751.5%27%20stroke=%27%231B98A8%27/%3E%3Cline%20x1=%2728.1%27%20y1=%2751.5%27%20x2=%2735.1%27%20y2=%2751.5%27%20stroke=%27%23E3AE3C%27/%3E%3Cline%20x1=%2737.7%27%20y1=%2751.5%27%20x2=%2744.7%27%20y2=%2751.5%27%20stroke=%27%23D9645E%27/%3E%3C/g%3E%3C/svg%3E"
     />
 
     <!--
@@ -96,10 +101,10 @@
 
       It lives in the HTML rather than in React because it has to be on screen
       before the bundle has parsed - a loader that appears once the app is ready
-      is a loader that was never needed. The mark is what the name means: a beam
-      entering a prism and leaving it split. It draws itself once, then the
-      three refracted beams keep breathing, so a slow start looks like something
-      working rather than something stuck.
+      is a loader that was never needed. The mark is what the name means: the
+      prism draws itself, then the spectrum arrives beneath it one band at a
+      time, so a slow start looks like something working rather than something
+      stuck.
 
       Removed by src/main.tsx the moment React has mounted.
     -->
@@ -153,33 +158,8 @@
         overflow: visible;
       }
 
-      #boot .beam {
-        animation: prism-beam var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
-      }
-
-      #boot .glass {
-        animation: prism-fill var(--dur) ease-in-out infinite;
-      }
-
       #boot .edge {
         animation: prism-draw var(--dur) cubic-bezier(0.6, 0, 0.3, 1) infinite;
-      }
-
-      #boot .ray-a {
-        animation: prism-ray-a var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
-      }
-
-      #boot .ray-b {
-        animation: prism-ray-b var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
-      }
-
-      #boot .ray-c {
-        animation: prism-ray-c var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
-      }
-
-      #boot .spark {
-        transform-origin: 181px 118px;
-        animation: prism-spark var(--dur) ease-out infinite;
       }
 
       #boot .word {
@@ -199,43 +179,6 @@
         96%, 100% { stroke-dashoffset: 1; }
       }
 
-      @keyframes prism-fill {
-        0%, 20% { opacity: 0; }
-        34%, 76% { opacity: 1; }
-        92%, 100% { opacity: 0; }
-      }
-
-      @keyframes prism-beam {
-        0%, 22% { stroke-dashoffset: 1; }
-        38%, 80% { stroke-dashoffset: 0; }
-        94%, 100% { stroke-dashoffset: 1; }
-      }
-
-      @keyframes prism-ray-a {
-        0%, 38% { stroke-dashoffset: 1; }
-        54%, 82% { stroke-dashoffset: 0; }
-        92%, 100% { stroke-dashoffset: 1; }
-      }
-
-      @keyframes prism-ray-b {
-        0%, 42% { stroke-dashoffset: 1; }
-        58%, 83% { stroke-dashoffset: 0; }
-        93%, 100% { stroke-dashoffset: 1; }
-      }
-
-      @keyframes prism-ray-c {
-        0%, 46% { stroke-dashoffset: 1; }
-        62%, 84% { stroke-dashoffset: 0; }
-        94%, 100% { stroke-dashoffset: 1; }
-      }
-
-      @keyframes prism-spark {
-        0%, 34% { opacity: 0; transform: scale(0.4); }
-        46% { opacity: 0.9; transform: scale(1); }
-        62%, 80% { opacity: 0.25; transform: scale(0.8); }
-        90%, 100% { opacity: 0; transform: scale(0.4); }
-      }
-
       @keyframes prism-word {
         0%, 46% { opacity: 0; letter-spacing: 0.9em; }
         64%, 82% { opacity: 1; letter-spacing: 0.55em; }
@@ -243,7 +186,8 @@
       }
 
       /* Asked for less motion: the mark holds at the frame the loop is built
-         around - beam in, glass lit, all three rays out - and does not cycle. */
+         around - the prism drawn, all three bands of the spectrum out - and
+         does not cycle. */
       /* ── What the wait is actually made of ─────────────────────────────
          Three segments, and each one lights when something has genuinely
          happened: the page arrived, the app finished downloading, the app
@@ -269,10 +213,28 @@
         transition: background-color 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
       }
 
+      /* THE PROGRESS BAR IS THE SPECTRUM. The mark above used to carry three
+         coloured dashes of its own and this bar sat directly under them, so
+         the splash showed two rows of three - the logo saying one thing and
+         the loader saying another in the same shape.
+
+         One row now, and it means something: the prism draws itself, then
+         each band appears as a real stage completes. Same three brand colours
+         as `src/components/PrismMark.tsx`, in the same order light leaves the
+         glass. They do not follow the theme, here or anywhere. */
       #boot[data-step="1"] .thread i:nth-child(1),
-      #boot[data-step="2"] .thread i:nth-child(-n + 2),
-      #boot[data-step="3"] .thread i {
-        background: #a8b862;
+      #boot[data-step="2"] .thread i:nth-child(1),
+      #boot[data-step="3"] .thread i:nth-child(1) {
+        background: #1b98a8;
+      }
+
+      #boot[data-step="2"] .thread i:nth-child(2),
+      #boot[data-step="3"] .thread i:nth-child(2) {
+        background: #e3ae3c;
+      }
+
+      #boot[data-step="3"] .thread i:nth-child(3) {
+        background: #d9645e;
       }
 
       /* Only shown once the wait is long enough to be worth explaining. The
@@ -293,19 +255,12 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
-        #boot .beam,
         #boot .edge,
-        #boot .ray-a,
-        #boot .ray-b,
-        #boot .ray-c,
-        #boot .glass,
         #boot .word {
           animation: none;
           stroke-dashoffset: 0;
           opacity: 1;
         }
-
-        #boot .spark { animation: none; opacity: 0.25; }
       }
 
       /* ── The light half ────────────────────────────────────────────────
@@ -322,9 +277,8 @@
          block, copied by hand for the same reason as everything else here:
          this screen paints before that stylesheet exists.
 
-         The three refracted rays are NOT listed. They are the brand mark and
-         they are the same in both themes - it is the beam going in, the glass
-         and the chrome that have to flip. */
+         The three spectrum bands are NOT listed. They are the brand mark and
+         are identical in both themes; only the triangle and the chrome flip. */
       html[data-theme='light'] #boot {
         background: radial-gradient(60% 60% at 50% 45%, #fffdf9 0%, #f1ebe1 100%);
       }
@@ -334,94 +288,56 @@
         color: #776e63;
       }
 
+      /* Only the UNLIT track flips. The lit bands are the spectrum and are
+         the same in both themes - an earlier light override painted all three
+         olive and, being one selector more specific, silently won over them. */
       html[data-theme='light'] #boot .thread i {
         background: #e1d9cc;
-      }
-
-      html[data-theme='light'] #boot[data-step="1"] .thread i:nth-child(1),
-      html[data-theme='light'] #boot[data-step="2"] .thread i:nth-child(-n + 2),
-      html[data-theme='light'] #boot[data-step="3"] .thread i {
-        background: #55631f;
       }
 
       /* `stroke` and `fill` are presentation ATTRIBUTES on the SVG below, and
          a stylesheet beats a presentation attribute - so these override the
          markup without it needing to know a theme exists. */
-      html[data-theme='light'] #boot .beam,
       html[data-theme='light'] #boot .edge {
-        stroke: #1c1815;
-      }
-
-      html[data-theme='light'] #boot .glass {
-        fill: #55631f;
-        fill-opacity: 0.16;
-      }
-
-      html[data-theme='light'] #boot .spark {
-        fill: #1c1815;
+        stroke: #14392c;
       }
     </style>
 
     <div id="boot" role="status" aria-label="PRISM is starting">
       <div class="stack">
-        <!-- THE MARK KEEPS ITS SPECTRUM, and that is deliberate rather than a
-             palette sweep that missed. Everything else in this file follows
-             the ash theme; the three OUTGOING rays stay red, violet and
-             orange because a prism that splits white light into grey is not a
-             prism, and the product is called PRISM.
+        <!-- THE MARK KEEPS ITS SPECTRUM, deliberately rather than as a colour
+             sweep that missed. The tile and the triangle follow the theme;
+             the three bands under it do not, because a prism that splits
+             white light into one colour is not a prism, and the product is
+             called PRISM.
 
-             The incoming beam and the glass edge changed from violet to
-             `#f7f7f8`. That is both on-theme and physically right: white light
-             goes IN, a spectrum comes OUT. It was violet in and violet out,
-             which never described anything.
-
-             So: `#c96a63`, `#8b7cf6` and `#d69433` below are brand, not
-             chrome. Leave them. -->
+             `#1b98a8`, `#e3ae3c` and `#d9645e` are brand. Leave them.
+             `src/components/PrismMark.tsx` is the definition; this is a copy,
+             because the splash paints before that bundle exists. -->
         <svg
-          viewBox="0 0 420 250"
+          viewBox="0 0 220 190"
           fill="none"
           aria-hidden="true"
-          style="width: 283px; height: 149px"
+          style="width: 176px; height: 152px"
         >
-          <line
-            class="beam"
-            x1="42" y1="118" x2="176" y2="118"
-            stroke="#f7f3ec" stroke-width="2.6" stroke-linecap="round"
-            pathLength="1" stroke-dasharray="1"
-          />
-          <!-- The prism, with its corners turned rather than mitred: three
-               quadratic curves where a polygon would have had points. -->
-          <path
-            class="glass"
-            d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
-            fill="#c9c9c9"
-            fill-opacity="0.3"
-          />
+          <!-- The same mark `src/components/PrismMark.tsx` draws, hand-copied
+               because this paints before that bundle exists. `edge` is the
+               boot animation's own class, reused rather than renamed: it
+               draws the triangle once.
+
+               NO SPECTRUM HERE. The mark carries three coloured dashes and
+               the progress bar sits directly beneath this, so drawing both
+               put two rows of three in the same place - the logo and the
+               loader saying the same thing in the same shape. The bar is the
+               spectrum instead, one band per completed stage.
+
+               The tile is left off too; the splash IS the tile. -->
           <path
             class="edge"
-            d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
-            stroke="#f7f3ec" stroke-width="3" fill="none"
+            d="M110 34 L162 126 H58 Z"
+            fill="none" stroke="#f4f7f4" stroke-width="5.4" stroke-linejoin="round"
             pathLength="1" stroke-dasharray="1"
           />
-          <line
-            class="ray-a"
-            x1="242" y1="108" x2="378" y2="66"
-            stroke="#c96a63" stroke-width="2.6" stroke-linecap="round"
-            pathLength="1" stroke-dasharray="1"
-          />
-          <line
-            class="ray-b"
-            x1="244" y1="118" x2="390" y2="118"
-            stroke="#8b7cf6" stroke-width="2.6" stroke-linecap="round"
-            pathLength="1" stroke-dasharray="1"
-          />
-          <line
-            class="ray-c"
-            x1="242" y1="128" x2="372" y2="170"
-            stroke="#d69433" stroke-width="2.6" stroke-linecap="round"
-            pathLength="1" stroke-dasharray="1"
-          />
-          <circle class="spark" cx="181" cy="118" r="5" fill="#ffffff" />
         </svg>
 
         <p class="word">PRISM</p>
