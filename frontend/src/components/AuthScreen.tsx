@@ -43,6 +43,22 @@ type ProviderChoice = {
   mark: ReactNode
 }
 
+/**
+ * Whether the OAuth providers are actually wired up.
+ *
+ * `false` while neither Google nor Facebook is configured on the Supabase
+ * project. The buttons stay ON SCREEN and go dead rather than being removed,
+ * which is the deliberate choice between two imperfect options: hiding them
+ * means a studio who signed up expecting Google sees no trace of it and
+ * assumes it was dropped, while a live-looking button that fails is worse
+ * than either. Disabled with a reason is the honest middle.
+ *
+ * ONE FLAG, not a per-provider pair, because they are blocked on the same
+ * thing - the provider config, not the code. When that lands, flip this to
+ * `true` and both work; nothing else here needs touching.
+ */
+const SSO_READY = false
+
 const PROVIDERS: ProviderChoice[] = [
   {
     id: 'google',
@@ -355,17 +371,34 @@ export default function AuthScreen() {
           <button
             key={provider.id}
             type="button"
-            disabled={busy}
+            disabled={busy || !SSO_READY}
             onClick={() => sso(provider.id)}
-            title={provider.label}
-            aria-label={provider.label}
-            className="flex flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:opacity-50"
+            /* The title says WHY, not what. On a disabled control the label is
+               already visible and "Continue with Google" describes something
+               that will not happen - the only useful thing a tooltip can add
+               here is the reason it is dead. */
+            title={SSO_READY ? provider.label : `${provider.short} sign-in is not available yet`}
+            aria-label={
+              SSO_READY ? provider.label : `${provider.label} — not available yet`
+            }
+            className="flex flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-paper"
           >
             {provider.mark}
             {provider.short}
           </button>
         ))}
       </div>
+      {/* Said on screen, not only in a tooltip. A greyed control with no
+          reason next to it reads as "broken" or as "you are not allowed",
+          and a title attribute is invisible to anyone on a touch screen -
+          which is most people who will ever see this. One line, and it goes
+          away by itself when the flag flips. */}
+      {SSO_READY ? null : (
+        <p className="mt-2 text-center font-body text-[12.5px] leading-[1.5] text-faint">
+          Google and Facebook sign-in are not connected yet — use your email
+          above.
+        </p>
+      )}
     </>
   )
 
