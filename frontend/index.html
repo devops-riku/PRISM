@@ -131,6 +131,7 @@
          it completely regardless of how long the real path is. No measuring, no
          per-shape length constants. */
       #boot {
+        --mark-line: #f4f7f4;
         position: fixed;
         inset: 0;
         z-index: 100;
@@ -158,8 +159,33 @@
         overflow: visible;
       }
 
+      #boot .beam {
+        animation: prism-beam var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .glass {
+        animation: prism-fill var(--dur) ease-in-out infinite;
+      }
+
+      #boot .spark {
+        transform-origin: 181px 118px;
+        animation: prism-spark var(--dur) ease-out infinite;
+      }
+
       #boot .edge {
         animation: prism-draw var(--dur) cubic-bezier(0.6, 0, 0.3, 1) infinite;
+      }
+
+      #boot .ray-a {
+        animation: prism-ray-a var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .ray-b {
+        animation: prism-ray-b var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+
+      #boot .ray-c {
+        animation: prism-ray-c var(--dur) cubic-bezier(0.65, 0, 0.35, 1) infinite;
       }
 
       #boot .word {
@@ -177,6 +203,43 @@
         0%, 4% { stroke-dashoffset: 1; }
         22%, 78% { stroke-dashoffset: 0; }
         96%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-beam {
+        0%, 22% { stroke-dashoffset: 1; }
+        38%, 80% { stroke-dashoffset: 0; }
+        94%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-fill {
+        0%, 20% { opacity: 0; }
+        34%, 76% { opacity: 1; }
+        92%, 100% { opacity: 0; }
+      }
+
+      @keyframes prism-ray-a {
+        0%, 38% { stroke-dashoffset: 1; }
+        54%, 82% { stroke-dashoffset: 0; }
+        92%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-ray-b {
+        0%, 42% { stroke-dashoffset: 1; }
+        58%, 83% { stroke-dashoffset: 0; }
+        93%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-ray-c {
+        0%, 46% { stroke-dashoffset: 1; }
+        62%, 84% { stroke-dashoffset: 0; }
+        94%, 100% { stroke-dashoffset: 1; }
+      }
+
+      @keyframes prism-spark {
+        0%, 34% { opacity: 0; transform: scale(0.4); }
+        46% { opacity: 0.9; transform: scale(1); }
+        62%, 80% { opacity: 0.25; transform: scale(0.8); }
+        90%, 100% { opacity: 0; transform: scale(0.4); }
       }
 
       @keyframes prism-word {
@@ -213,28 +276,14 @@
         transition: background-color 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
       }
 
-      /* THE PROGRESS BAR IS THE SPECTRUM. The mark above used to carry three
-         coloured dashes of its own and this bar sat directly under them, so
-         the splash showed two rows of three - the logo saying one thing and
-         the loader saying another in the same shape.
-
-         One row now, and it means something: the prism draws itself, then
-         each band appears as a real stage completes. Same three brand colours
-         as `src/components/PrismMark.tsx`, in the same order light leaves the
-         glass. They do not follow the theme, here or anywhere. */
+      /* One accent, not three. The mark above carries the spectrum again, and
+         a bar that also ran teal-amber-coral put two spectrums on one screen
+         saying different things - the logo's, which is fixed, and the
+         loader's, which moves. The bar is progress; the mark is the brand. */
       #boot[data-step="1"] .thread i:nth-child(1),
-      #boot[data-step="2"] .thread i:nth-child(1),
-      #boot[data-step="3"] .thread i:nth-child(1) {
-        background: #1b98a8;
-      }
-
-      #boot[data-step="2"] .thread i:nth-child(2),
-      #boot[data-step="3"] .thread i:nth-child(2) {
-        background: #e3ae3c;
-      }
-
-      #boot[data-step="3"] .thread i:nth-child(3) {
-        background: #d9645e;
+      #boot[data-step="2"] .thread i:nth-child(-n + 2),
+      #boot[data-step="3"] .thread i {
+        background: #a8b862;
       }
 
       /* Only shown once the wait is long enough to be worth explaining. The
@@ -255,12 +304,19 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
+        #boot .beam,
         #boot .edge,
+        #boot .ray-a,
+        #boot .ray-b,
+        #boot .ray-c,
+        #boot .glass,
         #boot .word {
           animation: none;
           stroke-dashoffset: 0;
           opacity: 1;
         }
+
+        #boot .spark { animation: none; opacity: 0.25; }
       }
 
       /* ── The light half ────────────────────────────────────────────────
@@ -288,18 +344,30 @@
         color: #776e63;
       }
 
-      /* Only the UNLIT track flips. The lit bands are the spectrum and are
-         the same in both themes - an earlier light override painted all three
-         olive and, being one selector more specific, silently won over them. */
       html[data-theme='light'] #boot .thread i {
         background: #e1d9cc;
+      }
+
+      html[data-theme='light'] #boot[data-step="1"] .thread i:nth-child(1),
+      html[data-theme='light'] #boot[data-step="2"] .thread i:nth-child(-n + 2),
+      html[data-theme='light'] #boot[data-step="3"] .thread i {
+        background: #55631f;
       }
 
       /* `stroke` and `fill` are presentation ATTRIBUTES on the SVG below, and
          a stylesheet beats a presentation attribute - so these override the
          markup without it needing to know a theme exists. */
-      html[data-theme='light'] #boot .edge {
-        stroke: #14392c;
+      /* One variable rather than a rule per shape: the beam, the prism's
+         edge and the spark are all "the drawn line" and always agree. The
+         three refracted rays are NOT here - they are the spectrum, and the
+         whole point of the mark is that what comes out is not what went in. */
+      html[data-theme='light'] #boot {
+        --mark-line: #14392c;
+      }
+
+      html[data-theme='light'] #boot .glass {
+        fill: #14392c;
+        fill-opacity: 0.12;
       }
     </style>
 
@@ -315,10 +383,10 @@
              `src/components/PrismMark.tsx` is the definition; this is a copy,
              because the splash paints before that bundle exists. -->
         <svg
-          viewBox="0 0 220 190"
+          viewBox="0 0 420 250"
           fill="none"
           aria-hidden="true"
-          style="width: 176px; height: 152px"
+          style="width: 283px; height: 149px"
         >
           <!-- The same mark `src/components/PrismMark.tsx` draws, hand-copied
                because this paints before that bundle exists. `edge` is the
@@ -332,12 +400,45 @@
                spectrum instead, one band per completed stage.
 
                The tile is left off too; the splash IS the tile. -->
-          <path
-            class="edge"
-            d="M110 34 L162 126 H58 Z"
-            fill="none" stroke="#f4f7f4" stroke-width="5.4" stroke-linejoin="round"
+          <line
+            class="beam"
+            x1="42" y1="118" x2="176" y2="118"
+            stroke="var(--mark-line)" stroke-width="2.6" stroke-linecap="round"
             pathLength="1" stroke-dasharray="1"
           />
+          <!-- The prism, with its corners turned rather than mitred: three
+               quadratic curves where a polygon would have had points. -->
+          <path
+            class="glass"
+            d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
+            fill="#c9c9c9"
+            fill-opacity="0.3"
+          />
+          <path
+            class="edge"
+            d="M203 65 L154.5 152 Q148 162 160 162 L260 162 Q272 162 265.5 152 L217 65 Q210 52 203 65 Z"
+            stroke="var(--mark-line)" stroke-width="3" fill="none"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <line
+            class="ray-a"
+            x1="242" y1="108" x2="378" y2="66"
+            stroke="#1b98a8" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <line
+            class="ray-b"
+            x1="244" y1="118" x2="390" y2="118"
+            stroke="#e3ae3c" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <line
+            class="ray-c"
+            x1="242" y1="128" x2="372" y2="170"
+            stroke="#d9645e" stroke-width="2.6" stroke-linecap="round"
+            pathLength="1" stroke-dasharray="1"
+          />
+          <circle class="spark" cx="181" cy="118" r="5" fill="var(--mark-line)" />
         </svg>
 
         <p class="word">PRISM</p>
