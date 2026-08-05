@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FieldLabel } from './FieldRow'
+import InfoHint from './InfoHint'
 import ImageDropzone from './ImageDropzone'
 import CurrencySelect from './CurrencySelect'
 import Dropdown from './Dropdown'
@@ -514,14 +515,25 @@ export default function BriefForm({
         >
           {step === 0 ? (
             <>
-              <p className="pad-question">
-                What kind of work is this?
-              </p>
-              <p className="mt-1 max-w-[62ch] font-body text-[13px] leading-[1.6] text-void">
-                It decides what the second document is: a developer&rsquo;s specification, an
-                accounting engagement letter, an engineering brief. Pick the closest one &mdash;
-                everything after this is shaped around it.
-              </p>
+              {/* The pad's questions carry their guidance the same way every
+                  field does, but `pad-question` is a plain element rather than
+                  a `FieldLabel`, so the arrangement is repeated by hand:
+                  `FieldLabel`'s own flex row, `items-center`, `gap-1.5`, icon
+                  after the text. No `mb-*` on this wrapper — unlike a field
+                  label, what follows a question already carries its own `mt-3`,
+                  and adding a margin here would double that gap.
+
+                  `label` is passed rather than derived because this question is
+                  a `<p>`: there is no control it names, and "About this field"
+                  is what a screen reader would otherwise announce. */}
+              <div className="flex items-center gap-1.5">
+                <p className="pad-question">What kind of work is this?</p>
+                <InfoHint label="the kind of work">
+                  It decides what the second document is: a developer&rsquo;s specification, an
+                  accounting engagement letter, an engineering brief. Pick the closest one &mdash;
+                  everything after this is shaped around it.
+                </InfoHint>
+              </div>
               <div className="mt-3">
                 <KindPicker
                   value={kind}
@@ -536,13 +548,23 @@ export default function BriefForm({
 
           {step === 1 ? (
             <>
-              <label htmlFor="brief" className="pad-question">
-                What is in scope
-              </label>
-              <p className="mt-1 font-body text-[13px] leading-[1.6] text-void">
-                What the client needs, who it is for, and the constraints around it. The more
-                concrete the scope, the tighter the quote.
-              </p>
+              {/* The icon sits OUTSIDE the `<label>`, as it does in
+                  `FieldLabel` and for the same reason: a `<button>` inside a
+                  `<label>` is activated by the label's own click target, so
+                  opening the hint would focus the textarea underneath it. */}
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="brief" className="pad-question">
+                  What is in scope
+                </label>
+                <InfoHint label="what is in scope">
+                  What the client needs, who it is for, and the constraints around it. The more
+                  concrete the scope, the tighter the quote.
+                </InfoHint>
+              </div>
+              {/* `mt-3`, not the `mt-2` this carried while a paragraph sat
+                  between: the gap under a question is `mt-3` on every other
+                  step, and it was only smaller here because the paragraph
+                  already held the two apart. */}
               <textarea
                 id="brief"
                 name="brief"
@@ -551,7 +573,7 @@ export default function BriefForm({
                 disabled={pending}
                 onChange={(event) => setBrief(event.target.value)}
                 placeholder="A booking site for a dive shop in Cebu. Guests pick a date and a boat, pay a deposit online, and the shop sees tomorrow's manifest on a phone."
-                className={`${WELL_TEXTAREA} pad-brief mt-2`}
+                className={`${WELL_TEXTAREA} pad-brief mt-3`}
               />
               {trimmedBrief.length > 0 ? (
                 <p className="mt-2 font-label text-[12px] uppercase tracking-[0.14em] tabular-nums text-void">
@@ -578,7 +600,22 @@ export default function BriefForm({
                   request is what removes them. */}
               {clientFiles.length > 0 ? (
                 <div className="mt-3">
-                  <FieldLabel htmlFor="client-attachments">From the client</FieldLabel>
+                  {/* The list below is the state — which files, how big — and
+                      it stays on screen. What moves into the hint is only the
+                      explanation of what happens to them, which is the same
+                      sentence whatever the client sent. */}
+                  <FieldLabel
+                    htmlFor="client-attachments"
+                    info={
+                      <>
+                        {clientFiles.length === 1 ? 'This file is' : 'These files are'} already read
+                        into the quotation. Anything you add below is read alongside{' '}
+                        {clientFiles.length === 1 ? 'it' : 'them'}.
+                      </>
+                    }
+                  >
+                    From the client
+                  </FieldLabel>
                   <ul
                     id="client-attachments"
                     className="mt-1.5 flex flex-col gap-1 rounded-lg border border-rule bg-duplicate px-3 py-2.5"
@@ -602,34 +639,35 @@ export default function BriefForm({
                       </li>
                     ))}
                   </ul>
-                  <p className="mt-1.5 font-body text-[13px] leading-[1.6] text-void">
-                    {clientFiles.length === 1 ? 'This file is' : 'These files are'} already read into
-                    the quotation. Anything you add below is read alongside{' '}
-                    {clientFiles.length === 1 ? 'it' : 'them'}.
-                  </p>
                 </div>
               ) : null}
 
               <div className="mt-3">
-                <FieldLabel htmlFor="images">
+                <FieldLabel
+                  htmlFor="images"
+                  info={
+                    <>
+                      Screenshots, or the client&rsquo;s own scope as a PDF, Word or Excel file
+                      &mdash; PRISM reads them into the quotation.
+                    </>
+                  }
+                >
                   {clientFiles.length > 0 ? 'Your own reference material' : 'Reference material'}
                 </FieldLabel>
                 <ImageDropzone id="images" onChange={handleImages} disabled={pending} />
-                <p className="mt-2 font-body text-[13px] leading-[1.6] text-void">
-                  Screenshots, or the client&rsquo;s own scope as a PDF, Word or Excel file &mdash;
-                  PRISM reads them into the quotation.
-                </p>
               </div>
             </>
           ) : null}
 
           {step === 2 ? (
             <>
-              <p className="pad-question">Who it is for</p>
-              <p className="mt-1 font-body text-[13px] leading-[1.6] text-void">
-                All optional. Names go on the documents; the hints are read by the model and carry
-                no arithmetic.
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="pad-question">Who it is for</p>
+                <InfoHint label="who it is for">
+                  All optional. Names go on the documents; the hints are read by the model and carry
+                  no arithmetic.
+                </InfoHint>
+              </div>
               <div className="mt-3 grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2">
                 <div>
                   <FieldLabel htmlFor="client_name">Client</FieldLabel>
@@ -689,11 +727,13 @@ export default function BriefForm({
 
           {step === 3 ? (
             <>
-              <p className="pad-question">Target Cost</p>
-              <p className="mt-1 font-body text-[13px] leading-[1.6] text-void">
-                Rates are set for the market below and quoted straight into the currency. Nothing is
-                converted.
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="pad-question">Target Cost</p>
+                <InfoHint label="target cost">
+                  Rates are set for the market below and quoted straight into the currency. Nothing
+                  is converted.
+                </InfoHint>
+              </div>
               <div className="mt-3 grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2">
                 <div>
                   <FieldLabel htmlFor="currency">Currency</FieldLabel>
@@ -967,11 +1007,13 @@ export default function BriefForm({
 
           {step === 5 ? (
             <>
-              <p className="pad-question">Tiers and cap</p>
-              <p className="mt-1 font-body text-[13px] leading-[1.6] text-void">
-                Both optional. Leave them empty for a single quotation quoted at what the work
-                costs.
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="pad-question">Tiers and cap</p>
+                <InfoHint label="tiers and cap">
+                  Both optional. Leave them empty for a single quotation quoted at what the work
+                  costs.
+                </InfoHint>
+              </div>
               <div className="mt-3 grid gap-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,240px)]">
                 <div>
                   <FieldLabel htmlFor="tiers">Tiers</FieldLabel>
