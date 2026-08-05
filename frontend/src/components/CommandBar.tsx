@@ -178,7 +178,7 @@ export default function CommandBar() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="hidden items-center gap-3 rounded-[13px] border border-rule bg-duplicate py-1.5 pl-3 pr-2 text-left transition-colors duration-150 hover:border-ballpoint hover:bg-paper sm:flex"
+        className="hidden items-center gap-3 rounded-[13px] border border-rule bg-duplicate py-1.5 pl-3 pr-2 text-left transition-colors duration-150 hover:bg-paper sm:flex"
         aria-label="Quick navigation: quotations, proposals and screens"
       >
         <span aria-hidden="true" className="text-[13px] text-ballpoint">

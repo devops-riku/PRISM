@@ -135,7 +135,7 @@ export default function KindPicker({ value, label, onChange, onLabel, disabled }
               className={`flex h-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-[border-color,background-color,transform] duration-150 ease-press active:scale-[0.995] disabled:opacity-60 motion-reduce:transform-none ${
                 chosen
                   ? 'border-ballpoint bg-accent-soft'
-                  : 'border-rule bg-paper hover:border-ballpoint hover:bg-duplicate'
+                  : 'border-rule bg-paper hover:bg-duplicate'
               }`}
             >
               <span

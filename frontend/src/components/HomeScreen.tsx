@@ -301,7 +301,7 @@ export default function HomeScreen() {
                 // `.lift:hover`'s own shadow. `shadow-sheet` below is a
                 // utility and would outrank the component rule at rest; a
                 // hover utility is the only thing that can beat it back.
-                className="group rise-in lift flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet hover:border-ballpoint hover:shadow-raised"
+                className="group rise-in lift flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet hover:shadow-raised"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent-soft text-ballpoint">
                   <svg

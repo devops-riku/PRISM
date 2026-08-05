@@ -259,7 +259,7 @@ export default function ImageDropzone({ id, onChange, disabled = false }: ImageD
                 <button
                   type="button"
                   onClick={() => remove(item.key)}
-                  className="absolute -right-2 -top-2 h-6 w-6 rounded-xl border border-rule bg-paper font-label text-[13px] leading-none text-ink hover:border-ink"
+                  className="absolute -right-2 -top-2 h-6 w-6 rounded-xl border border-rule bg-paper font-label text-[13px] leading-none text-ink"
                 >
                   <span aria-hidden="true">&times;</span>
                   <span className="sr-only">Remove {item.file.name}</span>

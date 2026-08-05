@@ -55,7 +55,7 @@ export default function RowMenu({ items = [], label = 'Actions for this row' }: 
     <Menu>
       <MenuButton
         aria-label={label}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-void transition-[color,border-color,background-color] duration-150 hover:border-rule hover:bg-duplicate hover:text-ink active:bg-rule data-[open]:border-rule data-[open]:bg-duplicate data-[open]:text-ink"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-void transition-[color,border-color,background-color] duration-150 hover:bg-duplicate hover:text-ink active:bg-rule data-[open]:border-rule data-[open]:bg-duplicate data-[open]:text-ink"
       >
         {/* Three dots, drawn. A glyph would inherit the body font's baseline
             and sit off-centre in a square button. */}

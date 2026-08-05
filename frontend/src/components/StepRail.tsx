@@ -57,7 +57,7 @@ export default function StepRail({ steps, current, onGo, disabled }: StepRailPro
             className={`group block w-full rounded-r-md border-l-2 py-1.5 pl-3 pr-2 text-left transition-[background-color,border-color] duration-150 ${
               active
                 ? 'border-l-ballpoint bg-paper'
-                : 'border-l-hairline hover:border-l-rule hover:bg-paper/70 disabled:hover:border-l-hairline disabled:hover:bg-transparent'
+                : 'border-l-hairline hover:bg-paper/70 disabled:hover:bg-transparent'
             }`}
           >
             <span

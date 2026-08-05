@@ -851,7 +851,7 @@ export default function App() {
   // worth showing: naming one is the only useful thing on the screen.
   if (workspaceCount === 0 || route === 'workspaces') {
     return (
-      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
         {workspaceCount === 0 ? null : nav}
         <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
           <WorkspacesScreen onChanged={(found: Workspace[]) => setWorkspaceCount(found.length)} />
@@ -874,7 +874,7 @@ export default function App() {
     route === 'proposal'
   ) {
     return (
-      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
         {nav}
         <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
           {route === 'quotations' ? <QuotationList /> : null}
@@ -946,7 +946,7 @@ export default function App() {
   // documents below the fold on every visit.
   if (route === 'quotation') {
     return (
-      <div className="min-h-screen bg-canvas font-body text-body page-glow">
+      <div className="min-h-screen bg-canvas font-body text-body">
         {nav}
         <main className="mx-auto w-full max-w-sheet px-4 py-10 sm:px-6 sm:py-16">
           <div className="mb-8 rounded-xl border border-rule bg-paper shadow-sheet">
@@ -999,7 +999,7 @@ export default function App() {
 
   if (route === 'home') {
     return (
-      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
         {nav}
         <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
           <HomeScreen />
@@ -1015,7 +1015,7 @@ export default function App() {
   // only thing that can overflow is the step panel inside — silently, without a
   // bar, because the card is already the same height it was a moment ago.
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body page-glow">
+    <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
       {nav}
       <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-rule bg-paper shadow-sheet">

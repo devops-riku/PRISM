@@ -45,7 +45,7 @@ export default function LandingScreen() {
     // an ordinary scrolling page. That is not a compromise of the principle:
     // one screen means one idea in view at a time, and on a phone the hero
     // and the form are two.
-    <div className="page-glow grid min-h-dvh grid-cols-1 bg-canvas font-body text-body lg:h-dvh lg:grid-cols-[1.15fr_1fr] lg:overflow-hidden">
+    <div className="grid min-h-dvh grid-cols-1 bg-canvas font-body text-body lg:h-dvh lg:grid-cols-[1.15fr_1fr] lg:overflow-hidden">
       {/* The argument. On a narrow screen this is the whole page and the card
           below it is reached by the only scroll in the layout — see the
           wrapper's own comment. */}

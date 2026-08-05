@@ -200,12 +200,20 @@
      underneath an already-resolved shadow. Both are therefore restated in
      the light block, and if you add a third shadow that names the accent, it
      must be restated there too. */
-  --shadow-sheet: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 2px
-    rgb(0 0 0 / 0.4);
-  --shadow-raised: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 12px 28px -18px
-    rgb(0 0 0 / 0.7);
-  --shadow-action: 0 8px 20px -12px
-    color-mix(in oklab, var(--color-ballpoint) 70%, transparent);
+  --shadow-sheet: -3px -3px 7px var(--neu-light), 3px 3px 8px var(--neu-dark);
+  --shadow-raised: -6px -6px 15px var(--neu-light), 6px 6px 17px var(--neu-dark);
+  /* Fields, and the one shape that goes the other way. A control you type
+     into is a dish, not a bump - that inversion is what tells you it takes
+     input before you read the label. */
+  --shadow-inset: inset -3px -3px 7px var(--neu-light),
+    inset 3px 3px 8px var(--neu-dark);
+  /* The primary keeps its ACCENT FILL and takes the neumorphic lights on top.
+     Full neumorphism would make it the surface colour, defined only by soft
+     shadow - which is exactly the case `.neu`'s comment says the style must
+     not be used for. A button that says "Send this to a client" has to be
+     findable by someone who cannot resolve a shadow, so the fill stays and
+     the style is applied to everything around it. */
+  --shadow-action: -3px -3px 7px var(--neu-light), 4px 4px 11px var(--neu-dark);
   --shadow-ring: 0 0 0 4px
     color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
 
@@ -446,73 +454,20 @@
 }
 
 @layer components {
-  /* The lighting behind every page. TWO SOURCES, not one: a broad key light
-     from the top centre and a weaker fill offset to one side. One flat radial
-     is what made this read as dull - a single symmetrical wash centred on the
-     page is close enough to no gradient at all, because nothing in it implies
-     a direction. Two sources at different positions and strengths is the
-     cheapest thing that makes a flat surface look lit.
+  /* NO AMBIENT GLOW. There was a two-source radial wash here - a key light
+     from the top centre and an offset fill - and it came out when the app
+     went neumorphic, because the two cannot both be true.
 
-     BOTH THEMES NOW, and light mode is not the dark one softened. The rule
-     is that the key light must be BRIGHTER than the ground it sits on, which
-     means it is the accent in dark and near-white in light. Getting that
-     backwards is what the previous version did: it painted the light theme's
-     near-black accent across the top of a cream page, which reads as a smudge
-     rather than as depth, so the override was switched off entirely rather
-     than fixed. `#fff` on `#faf7f2` is only a couple of percent of lift, and
-     a couple of percent is all a lit surface needs.
+     Neumorphism describes a form by lighting it from ONE fixed direction and
+     letting the surface it sits on be flat. A background gradient gives the
+     page its own second light from somewhere else, so every raised control
+     ends up lit from two directions at once - the shadows stop agreeing with
+     the ground and the whole effect reads as smudged rather than moulded.
 
-     On the SHELL rather than on `body`, because a gradient on `body` is
-     painted behind the whole document, and most of these shells are fixed
-     to the viewport - with the quotation route as the exception that
-     scrolls.
-
-     `background-attachment` is deliberately not set: the fixed shells have
-     nothing to fix against, and it costs a compositing layer on every one of
-     them - the quotation route's glow is meant to scroll away with the top
-     of the page, not stay pinned to it. */
-  .page-glow {
-    background-image:
-      radial-gradient(
-        ellipse 82% 48% at 50% -6%,
-        color-mix(in oklab, var(--color-ballpoint) 11%, transparent),
-        transparent 66%
-      ),
-      radial-gradient(
-        ellipse 58% 42% at 88% 2%,
-        color-mix(in oklab, var(--color-ink) 6%, transparent),
-        transparent 60%
-      );
-    background-repeat: no-repeat;
-  }
-
-  /* The light theme's own two sources. `#fff` for the key rather than a token,
-     because there is no token brighter than `--color-paper` and the whole job
-     of this layer is to be brighter than the surface under it. The fill keeps
-     the accent, at half the dark theme's strength - olive on cream is a warmer
-     and more visible tint than olive on near-black, so the same number would
-     be twice as loud.
-
-     The second selector is COMPOUND - `.sheet-light.page-glow`, both classes
-     on one element - and the distinction matters. A descendant selector would
-     mean "any glow inside a light sheet", which would let a paper sheet
-     relight the dark shell it was dropped into. This means "an element that
-     is itself both", which is exactly `ClientShell`'s two roots: they are
-     always paper regardless of what the visitor's browser has stored, so
-     without this a client who had once chosen dark would get the dark theme's
-     key light - the accent at 11% - painted across a cream page. That is the
-     same smudge this whole comment is about, arriving by the one route the
-     attribute selector cannot see. */
-  html[data-theme='light'] .page-glow,
-  .sheet-light.page-glow {
-    background-image:
-      radial-gradient(ellipse 82% 48% at 50% -6%, rgb(255 255 255 / 0.9), transparent 64%),
-      radial-gradient(
-        ellipse 58% 42% at 88% 2%,
-        color-mix(in oklab, var(--color-ballpoint) 5%, transparent),
-        transparent 58%
-      );
-  }
+     The two are alternatives, not layers. If the soft UI is ever dropped,
+     this is worth restoring; while it stands, the flat surface IS the effect.
+     Recorded here rather than deleted silently so nobody re-adds it as a
+     missing polish step. */
 
   /* ── The route announcer's landing point ─────────────────────────────
      The client faces (`ClientForm`/`ClientWaiting`/`ClientQuotation`/
@@ -605,6 +560,9 @@
     border-radius: var(--radius-pill);
     border: 1px solid var(--color-rule);
     background-color: var(--color-duplicate);
+    /* A chip is 20px tall; the full raise reads as a smudge at that size, so
+       it takes the sheet lights rather than the raised pair. */
+    box-shadow: var(--shadow-sheet);
     color: var(--color-void);
     font-family: var(--font-label);
     font-size: 11.5px;
@@ -875,10 +833,11 @@
        about where a property is declared, not about which colours.)
 
        Declared here, the substitution happens against the light accent. */
-    --shadow-sheet: 0 1px 2px rgb(38 28 16 / 0.07);
-    --shadow-raised: 0 12px 28px -18px rgb(38 28 16 / 0.24);
-    --shadow-action: 0 8px 20px -12px
-      color-mix(in oklab, var(--color-ballpoint) 70%, transparent);
+    --shadow-sheet: -3px -3px 7px var(--neu-light), 3px 3px 8px var(--neu-dark);
+    --shadow-raised: -6px -6px 15px var(--neu-light), 6px 6px 17px var(--neu-dark);
+    --shadow-inset: inset -3px -3px 7px var(--neu-light),
+      inset 3px 3px 8px var(--neu-dark);
+    --shadow-action: -3px -3px 7px var(--neu-light), 4px 4px 11px var(--neu-dark);
     --shadow-ring: 0 0 0 4px
       color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
 
@@ -923,8 +882,15 @@
     padding-block: 0.7rem;
     padding-inline: 0.9rem;
     /* Not `--color-rule` - see that token's note. A divider and a field edge
-       are different jobs and only one value can be quiet. */
+       are different jobs and only one value can be quiet.
+
+       THE BORDER STAYS under neumorphism, and it is the one place the style
+       does not get its way. Soft UI drops the border and lets an inset shadow
+       imply the field; WCAG asks 3:1 of a control's boundary and a shadow
+       does not reliably give it. So the field is a dish AND has an edge - the
+       shadow does the describing, the border does the guaranteeing. */
     border: 1px solid var(--well-border);
+    box-shadow: var(--shadow-inset);
     border-radius: var(--radius-lg);
     appearance: none;
     transition:
@@ -936,8 +902,15 @@
      reads as a set of things you can touch before you touch one. It stops
      short of the accent itself - that belongs to focus, which is a stronger
      claim than "your pointer is here". */
+  /* Under neumorphism the pointer DEEPENS THE DISH rather than drawing an
+     outline on it. The border-colour warm this replaced was the right idea in
+     a bordered UI and the wrong one here: a hard edge appearing on hover is
+     exactly the thing soft UI is defined by not having. The resting border
+     stays - it is the 3:1 guarantee, not decoration. */
   .well:hover:not(:focus):not(:disabled) {
-    border-color: color-mix(in oklab, var(--color-ballpoint) 35%, var(--color-rule));
+    box-shadow:
+      inset -4px -4px 9px var(--neu-light),
+      inset 4px 4px 10px var(--neu-dark);
   }
 
   .well:focus {
@@ -1080,6 +1053,7 @@
      A quiet outlined control: download, print, remove, delete. */
   .action-quiet {
     background-color: var(--color-paper);
+    box-shadow: var(--shadow-sheet);
     color: var(--color-body);
     border-color: var(--color-rule);
     transition:
@@ -1087,8 +1061,12 @@
       color 0.15s ease;
   }
 
+  /* No outline on hover. The colour change carries it, and the lights pull in
+     slightly so the pad reads as being pressed towards you. */
   .action-quiet:hover:not(:disabled) {
-    border-color: var(--color-ballpoint);
+    box-shadow:
+      -2px -2px 5px var(--neu-light),
+      2px 2px 6px var(--neu-dark);
     color: var(--color-ballpoint);
     text-decoration: none;
   }

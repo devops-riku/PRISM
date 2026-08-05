@@ -73,7 +73,7 @@ export default function TierSwitcher({ bundle }: TierSwitcherProps) {
                 className={`block rounded-lg border px-4 py-3 no-underline ${
                   current
                     ? 'border-ballpoint bg-accent-soft'
-                    : 'border-rule bg-paper hover:border-ballpoint'
+                    : 'border-rule bg-paper'
                 }`}
               >
                 <span

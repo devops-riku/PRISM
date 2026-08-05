@@ -165,7 +165,7 @@ export default function AppHeader({
           <Menu>
             <MenuButton
               aria-label={`${studio} — menu`}
-              className="flex items-center gap-2 rounded-md border border-transparent py-1 pl-1 pr-2 transition-[background-color,border-color] duration-150 hover:border-rule hover:bg-paper data-[open]:border-rule data-[open]:bg-paper"
+              className="flex items-center gap-2 rounded-md border border-transparent py-1 pl-1 pr-2 transition-[background-color,border-color] duration-150 hover:bg-paper data-[open]:border-rule data-[open]:bg-paper"
             >
               <span className="flex h-7 w-7 items-center justify-center rounded-md bg-ballpoint font-label text-[11px] font-medium tracking-[0.06em] text-paper">
                 {initialsFor(studio)}
@@ -242,7 +242,7 @@ export default function AppHeader({
               }}
               aria-label="Close and go back"
               title="Back"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rule bg-paper text-void no-underline transition-[color,border-color,transform] duration-150 hover:border-ballpoint hover:text-ballpoint active:scale-95 motion-reduce:transform-none"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rule bg-paper text-void no-underline transition-[color,border-color,transform] duration-150 hover:text-ballpoint active:scale-95 motion-reduce:transform-none"
             >
               <svg
                 aria-hidden="true"

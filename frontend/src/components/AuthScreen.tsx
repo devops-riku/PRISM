@@ -357,7 +357,7 @@ export default function AuthScreen() {
             onClick={() => sso(provider.id)}
             title={provider.label}
             aria-label={provider.label}
-            className="flex flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:border-ballpoint hover:bg-duplicate disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:opacity-50"
           >
             {provider.mark}
             {provider.short}
@@ -521,7 +521,7 @@ export default function AuthScreen() {
               }),
             )
           }
-          className="mt-2.5 w-full rounded-[11px] border border-transparent px-4 py-1.5 font-body text-[13px] text-void transition-colors duration-150 hover:border-rule hover:bg-duplicate disabled:opacity-45"
+          className="mt-2.5 w-full rounded-[11px] border border-transparent px-4 py-1.5 font-body text-[13px] text-void transition-colors duration-150 hover:bg-duplicate disabled:opacity-45"
         >
           Or email me a sign-in code
         </button>

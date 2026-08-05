@@ -71,7 +71,7 @@ export default function NotificationBell() {
               aria-label={
                 unread ? `Notifications, ${unread} unread` : 'Notifications, nothing new'
               }
-              className="relative flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-void transition-[background-color,border-color,color] duration-150 hover:border-rule hover:bg-paper hover:text-ballpoint data-[open]:border-rule data-[open]:bg-paper"
+              className="relative flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-void transition-[background-color,border-color,color] duration-150 hover:bg-paper hover:text-ballpoint data-[open]:border-rule data-[open]:bg-paper"
             >
               <svg
                 aria-hidden="true"

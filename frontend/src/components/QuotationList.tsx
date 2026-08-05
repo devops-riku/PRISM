@@ -144,7 +144,7 @@ export default function QuotationList({ onOpen }: QuotationListProps) {
                 aria-pressed={on}
                 onClick={() => setFilter(on && option.id !== 'all' ? 'all' : option.id)}
                 className={`chip transition-colors duration-150 ${
-                  on ? 'chip--live' : 'hover:border-ballpoint hover:text-ink'
+                  on ? 'chip--live' : ' hover:text-ink'
                 }`}
               >
                 {option.label}
