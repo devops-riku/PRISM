@@ -63,9 +63,19 @@ const BY_CODE: Record<string, AuthProblem> = {
     message: 'Too many attempts from here.',
     hint: 'Wait a minute, then try again.',
   },
+  // GoTrue answers "Token has expired or is invalid" for THREE different
+  // situations and gives no way to tell them apart: the code really did
+  // expire, the digits are wrong, or the token was already spent. That last
+  // one bites without anybody typing twice - if the email carries a link as
+  // well, a scanner or a click-tracking redirect can follow it and consume
+  // the token before the person reads the code.
+  //
+  // So this must not assert expiry. Saying "expired" about a code that is
+  // thirty seconds old sends somebody looking for a clock problem that does
+  // not exist.
   otp_expired: {
-    message: 'That code has expired.',
-    hint: 'Ask for another and use it within a few minutes.',
+    message: 'That code did not work.',
+    hint: 'It may have expired, been mistyped, or already been used. Ask for another.',
   },
   otp_disabled: {
     message: 'Sign-in codes are turned off for this install.',

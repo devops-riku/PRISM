@@ -148,13 +148,36 @@ export async function sendEmailCode(email: string): Promise<void> {
   if (error) throw error
 }
 
+/**
+ * Check the six digits.
+ *
+ * TWO TYPES ARE TRIED, and the reason is that the send path decides which one
+ * is right. `sendEmailCode` passes `shouldCreateUser: true`, so an address
+ * that is not yet a user gets GoTrue's SIGNUP confirmation token, while an
+ * existing user gets a plain email OTP. The digits look identical and the
+ * verify call does not: `type: 'email'` against a signup token is rejected
+ * with "Token has expired or is invalid" - the same sentence a genuinely
+ * expired code produces, which is why this failed in a way that read as
+ * expiry on a code that was seconds old.
+ *
+ * The first error is the one re-thrown, not the second. If both fail the
+ * interesting reason is almost always the first one; the fallback failing
+ * only tells you it was not a signup token either.
+ */
 export async function verifyEmailCode(email: string, code: string) {
   const supa = await supabase()
   if (!supa) throw new Error('This install has no sign-in configured.')
-  const { data, error } = await supa.auth.verifyOtp({ email, token: code, type: 'email' })
-  if (error) throw error
-  session = data.session
-  return data
+
+  const first = await supa.auth.verifyOtp({ email, token: code, type: 'email' })
+  if (!first.error) {
+    session = first.data.session
+    return first.data
+  }
+
+  const second = await supa.auth.verifyOtp({ email, token: code, type: 'signup' })
+  if (second.error) throw first.error
+  session = second.data.session
+  return second.data
 }
 
 export async function sendResetLink(email: string): Promise<void> {
