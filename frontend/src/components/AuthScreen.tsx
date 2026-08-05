@@ -246,13 +246,15 @@ type CodeRowProps = {
  * of an eight-digit code. Supabase rejected that as "Token has expired or is
  * invalid", which is how a fresh code reported itself as expired.
  *
- * `CODE_BOXES` is how many boxes are drawn - set to the longest code this
- * project issues. `CODE_MIN` is GoTrue's floor, and the submit guard uses it
- * so a SHORTER code still goes through: if the dashboard is later set back to
- * 6, six digits in eight boxes still submits rather than trapping somebody
- * behind a button that never lights.
+ * `CODE_BOXES` is how many boxes are drawn and must match the dashboard.
+ * `CODE_MIN` is GoTrue's floor, and the submit guard uses it rather than the
+ * box count on purpose: a code SHORTER than the row still submits, so a
+ * dashboard change from 6 to 8 shows as "the last two boxes stay empty"
+ * rather than as a Confirm button that never lights. The reverse - a longer
+ * code than there are boxes - is the one that cannot be survived, which is
+ * why the box count is the number that has to be kept in step.
  */
-const CODE_BOXES = 8
+const CODE_BOXES = 6
 const CODE_MIN = 6
 
 /** The boxes. Paste works too — that is what people actually do. */
@@ -281,6 +283,9 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
   }
 
   return (
+    /* Every pixel of gap comes straight off the width of each box, and the
+       boxes stay square - so the gap is part of how big they end up. `gap-2`
+       fits six comfortably; eight needed `gap-1.5`. */
     <div className="flex gap-2">
       {digits.map((digit, index) => (
         <input
@@ -300,7 +305,16 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
               boxes.current[index - 1]?.focus()
             }
           }}
-          /* `--well-border`, not `border-rule`. These boxes are the only
+          /* SQUARE, via `aspect-square` rather than a fixed height. A fixed
+             `h-12` was right at six boxes and wrong at eight, which is the
+             sort of thing that only shows up when the count changes: the
+             width is whatever a flex child gets after the gaps come out of a
+             24rem card, so the height has to follow the width rather than be
+             declared. `min-w-0` lets them actually shrink - a flex item
+             defaults to `min-width: auto` and would otherwise refuse to go
+             below its content width and overflow the card.
+
+             `--well-border`, not `border-rule`. These boxes are the only
              fields in the app that did not go through `.well`, and inherited a
              DIVIDER colour as their edge: 1.38:1 against the card, on a fill
              that is itself 1.17:1. A row of invisible squares above a button
@@ -308,7 +322,7 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
              other field here measures 3.6-3.8.
              The inset shadow matches them to the rest too - a thing you type
              into is a dish. */
-          className="h-12 w-full rounded-[11px] border border-[color:var(--well-border)] bg-duplicate text-center font-label text-[18px] tabular-nums text-ink shadow-[var(--shadow-inset)] focus:border-ballpoint focus:outline-none focus:ring-4 focus:ring-ballpoint/12"
+          className="aspect-square w-full min-w-0 rounded-[11px] border border-[color:var(--well-border)] bg-duplicate text-center font-label text-[18px] tabular-nums text-ink shadow-[var(--shadow-inset)] focus:border-ballpoint focus:outline-none focus:ring-4 focus:ring-ballpoint/12"
         />
       ))}
     </div>
