@@ -233,24 +233,32 @@ type CodeRowProps = {
 }
 
 /**
- * How many digits a sign-in code has.
+ * How long a sign-in code is.
  *
  * SUPABASE DECIDES THIS, not us: Authentication - Providers - Email - "Email
  * OTP Length", which GoTrue allows anywhere from 6 to 10. There is no API
- * that reports it, so the client cannot discover it and this constant has to
- * agree with the dashboard by hand.
+ * that reports the setting, so the client cannot discover it.
  *
- * It was hard-coded as 6 in five places - the box count, the padding, two
- * slices, the submit guard and the copy - and a project set to 8 therefore
- * rendered six boxes that could never hold the code that was sent. One
- * number now, and everything below reads it.
+ * TWO NUMBERS RATHER THAN ONE, so a mismatch is survivable instead of fatal.
+ * It was a single hard-coded 6 in six places, against a project set to 8: the
+ * screen drew six boxes that could not hold the code, and the submit guard
+ * unlocked at six characters, so pressing Confirm sent the first six digits
+ * of an eight-digit code. Supabase rejected that as "Token has expired or is
+ * invalid", which is how a fresh code reported itself as expired.
+ *
+ * `CODE_BOXES` is how many boxes are drawn - set to the longest code this
+ * project issues. `CODE_MIN` is GoTrue's floor, and the submit guard uses it
+ * so a SHORTER code still goes through: if the dashboard is later set back to
+ * 6, six digits in eight boxes still submits rather than trapping somebody
+ * behind a button that never lights.
  */
-const CODE_LENGTH = 6
+const CODE_BOXES = 8
+const CODE_MIN = 6
 
 /** The boxes. Paste works too — that is what people actually do. */
 function CodeRow({ value, onChange, disabled }: CodeRowProps) {
   const boxes = useRef<(HTMLInputElement | null)[]>([])
-  const digits = value.padEnd(CODE_LENGTH, ' ').slice(0, CODE_LENGTH).split('')
+  const digits = value.padEnd(CODE_BOXES, ' ').slice(0, CODE_BOXES).split('')
 
   const put = (index: number, next: string) => {
     const cleaned = next.replace(/\D/g, '')
@@ -259,16 +267,17 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
       return
     }
     if (cleaned.length > 1) {
-      onChange(cleaned.slice(0, CODE_LENGTH))
-      boxes.current[Math.min(cleaned.length, 5)]?.focus()
+      onChange(cleaned.slice(0, CODE_BOXES))
+      boxes.current[Math.min(cleaned.length, CODE_BOXES - 1)]?.focus()
       return
     }
-    const filled = (value.padEnd(6, ' ').slice(0, index) + cleaned + value.slice(index + 1)).slice(
-      0,
-      6,
-    )
+    const filled = (
+      value.padEnd(CODE_BOXES, ' ').slice(0, index) +
+      cleaned +
+      value.slice(index + 1)
+    ).slice(0, CODE_BOXES)
     onChange(filled.trimEnd())
-    boxes.current[Math.min(index + 1, 5)]?.focus()
+    boxes.current[Math.min(index + 1, CODE_BOXES - 1)]?.focus()
   }
 
   return (
@@ -281,7 +290,7 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
           }}
           inputMode="numeric"
           autoComplete="one-time-code"
-          maxLength={6}
+          maxLength={CODE_BOXES}
           disabled={disabled}
           aria-label={`Digit ${index + 1}`}
           value={digit.trim()}
@@ -291,11 +300,11 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
               boxes.current[index - 1]?.focus()
             }
           }}
-          /* `--well-border`, not `border-rule`. These six are the only fields
-             in the app that did not go through `.well`, and they inherited a
+          /* `--well-border`, not `border-rule`. These boxes are the only
+             fields in the app that did not go through `.well`, and inherited a
              DIVIDER colour as their edge: 1.38:1 against the card, on a fill
-             that is itself 1.17:1. Six invisible squares above a button that
-             says CONFIRM. WCAG asks 3:1 of a control's boundary and every
+             that is itself 1.17:1. A row of invisible squares above a button
+             that says CONFIRM. WCAG asks 3:1 of a control's boundary and every
              other field here measures 3.6-3.8.
              The inset shadow matches them to the rest too - a thing you type
              into is a dish. */
@@ -436,7 +445,7 @@ export default function AuthScreen() {
       return (
         <Card
           title="One more step"
-          blurb={`We sent a ${CODE_LENGTH}-digit code to ${email || 'your email'}. Paste works too.`}
+          blurb={`We sent a code to ${email || 'your email'}. Paste works too.`}
         >
           <form
             onSubmit={(event) => {
@@ -445,7 +454,7 @@ export default function AuthScreen() {
             }}
           >
             <CodeRow value={code} onChange={setCode} disabled={busy} />
-            <Primary disabled={busy || code.replace(/\s/g, '').length < CODE_LENGTH}>
+            <Primary disabled={busy || code.replace(/\s/g, '').length < CODE_MIN}>
               {busy ? 'Checking' : 'Confirm'}
             </Primary>
           </form>
@@ -575,7 +584,7 @@ export default function AuthScreen() {
             run(() =>
               sendEmailCode(email).then(() => {
                 setView('code')
-                notice(`Sent. ${CODE_LENGTH} digits, good for a few minutes.`)
+                notice('Sent. Good for a few minutes.')
               }),
             )
           }
