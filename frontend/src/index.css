@@ -97,6 +97,23 @@
      a screenshot of the wrong screen. */
   --well-border: #7a6f60;
 
+  /* ── Neumorphism, on trial ────────────────────────────────────────────
+     Two lights and no border: a highlight from the top left and a shadow to
+     the bottom right, both in the SURFACE's own colour family, so a control
+     reads as pressed out of the page rather than placed on it.
+
+     The dark theme's highlight is barely there on purpose. Neumorphism was
+     designed for light grey UI, where a white highlight is most of the
+     effect; on a near-black ground a white edge at any real strength reads
+     as a rim light rather than as a soft form, so the dark set leans on the
+     shadow and keeps the highlight to a suggestion.
+
+     Currently applied to ONE control (the theme toggle) while the studio
+     looks at it. Read `.neu`'s own comment before spreading it - the style
+     has a known accessibility problem and the note there says what it is. */
+  --neu-light: rgb(255 255 255 / 0.055);
+  --neu-dark: rgb(0 0 0 / 0.55);
+
   /* ── Type — one family, four roles ────────────────────────────────────
      Figtree: a geometric sans with rounded terminals, replacing the kit's
      Instrument Sans at the studio's request. Modern without being neutral, and
@@ -864,6 +881,13 @@
       color-mix(in oklab, var(--color-ballpoint) 70%, transparent);
     --shadow-ring: 0 0 0 4px
       color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
+
+    /* The light theme is where this style came from, so the highlight can be
+       real: pure white against a cream ground. The shadow is warm rather than
+       black - a neutral drop on a warm surface greys it, and the whole trick
+       depends on the two lights looking like the same material. */
+    --neu-light: #ffffff;
+    --neu-dark: rgb(146 128 102 / 0.34);
 
     color-scheme: light;
   }
@@ -1670,6 +1694,67 @@
     .lift:active {
       transform: translateY(0) scale(0.997);
     }
+  }
+}
+
+@layer components {
+  /* ── `.neu` — neumorphism, on trial on one control ───────────────────
+     A shape lit from the top left and shadowed to the bottom right, in its
+     own surface colour, so it looks pressed out of the page. Pressing it
+     turns both shadows inward and it looks pressed back in - that inversion
+     is the entire idea, and it is why this only belongs on things you
+     actually press.
+
+     THE BACKGROUND MUST MATCH ITS PARENT EXACTLY or the illusion collapses
+     into a grey lozenge. The header is `bg-paper/60` over the canvas, so
+     this is that same blend computed rather than `--color-paper` guessed -
+     get this wrong by two percent and it reads as a slightly-off rectangle.
+     A `.neu` on any other surface needs its own background; that is the main
+     reason this is not simply sprinkled around.
+
+     WHAT IS WRONG WITH IT, stated because the style is fashionable and the
+     problem is not obvious: neumorphism has no border and no fill contrast -
+     the control is the same colour as the page and is defined only by soft
+     shadow. WCAG asks 3:1 of a control's visual boundary, and a soft shadow
+     does not reliably provide it. So:
+
+       · the ICON inside keeps its own contrast (`text-void`, 6.49/7.26), and
+         is what actually identifies this as a button;
+       · `:focus-visible` keeps the standard ring rather than an inset - a
+         keyboard user must never depend on the shadow;
+       · it stays on controls whose position already says what they are.
+
+     Do not put `.neu` on a primary action. A button that says "Send this to
+     a client" has to be findable by someone who cannot resolve a 4px
+     shadow. */
+  .neu {
+    background-color: color-mix(in oklab, var(--color-paper) 60%, var(--color-canvas));
+    box-shadow:
+      -4px -4px 9px var(--neu-light),
+      4px 4px 10px var(--neu-dark);
+    transition: box-shadow 180ms var(--ease-press);
+  }
+
+  /* Both lights turn inward: the same form, seen from inside. Slightly
+     tighter than the raised state because a real dish is shallower than the
+     bump it came from. */
+  .neu:active {
+    box-shadow:
+      inset -3px -3px 7px var(--neu-light),
+      inset 3px 3px 8px var(--neu-dark);
+  }
+
+  /* The ring wins outright. `box-shadow` is one property, so a focus ring
+     expressed as a shadow would REPLACE the neumorphism rather than sit with
+     it - and losing the focus ring is the one failure this style must not
+     have. Listed last so it takes precedence, and it keeps the raised form
+     alongside it. */
+  .neu:focus-visible {
+    outline: none;
+    box-shadow:
+      var(--shadow-ring),
+      -4px -4px 9px var(--neu-light),
+      4px 4px 10px var(--neu-dark);
   }
 }
 

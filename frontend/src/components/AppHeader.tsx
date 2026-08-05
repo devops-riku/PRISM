@@ -135,7 +135,12 @@ export default function AppHeader({
             onClick={onToggleTheme}
             aria-label={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
             title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
-            className="rounded-lg p-2 text-void transition-colors hover:text-ink"
+            /* `neu` is on trial here and nowhere else — see its comment in
+               index.css, including what is wrong with the style. This control
+               is a reasonable first subject: it is a toggle, so the pressed
+               inversion means something, and its job is already given away by
+               the icon rather than by the shape around it. */
+            className="neu rounded-[10px] p-2 text-void transition-colors hover:text-ink"
           >
             <svg
               aria-hidden="true"
