@@ -928,6 +928,10 @@ export type Intake = {
    *  fourteen: a client deciding whether to commission a studio at all is on a
    *  slower clock than a teammate accepting a place already offered to them. */
   token_expires_at: string
+  /** When the client pressed Send. Empty before `submitted`, and empty on
+   *  every record written before the field existed - read it with a fallback
+   *  to `created_at`, never bare. */
+  submitted_at: string
 
   // What the client said. Kept verbatim, never rewritten.
   client_email: string

@@ -704,7 +704,15 @@ function IntakeRow({
               comes to "when this arrived", with the time of day now on it -
               not a true submission instant, which the API does not carry. */}
           <span className={MONO_LABEL}>
-            {formatDate(row.created_at, { withTime: true, hour12: true })}
+            {/* `submitted_at` if it is there, `created_at` if it is not.
+                The fallback is for records written before the field existed,
+                and for rows that have not been submitted yet - where
+                `created_at` (when the link was minted) is the only moment
+                that has happened and is the honest thing to show. */}
+            {formatDate(row.submitted_at || row.created_at, {
+              withTime: true,
+              hour12: true,
+            })}
           </span>
           {when ? <span className={MONO_LABEL}>{when}</span> : null}
         </p>

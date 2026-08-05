@@ -151,6 +151,7 @@ ADVANCE_FIELDS = {
     "client_kind",
     "client_kind_label",
     "attachments",
+    "submitted_at",
 }
 
 
@@ -275,6 +276,19 @@ class Intake(BaseModel):
     #: for days before sending it and the client must be told when they were
     #: actually shown something, not when it was made.
     sent_at: str = ""
+
+    #: When the CLIENT pressed Send - the moment `ISSUED` became `SUBMITTED`.
+    #:
+    #: Not `created_at`, and the difference is the whole reason this exists.
+    #: `created_at` is stamped by `create()` when the STUDIO mints the link,
+    #: which can be days or weeks before anybody fills it in. The queue was
+    #: showing that against the word "SUBMITTED", so a request that arrived
+    #: this morning read as having arrived whenever its link was made.
+    #:
+    #: Empty on every record written before this field existed, and on every
+    #: state before `submitted`. Readers must fall back rather than assume it
+    #: is there - `IntakeListScreen` does exactly that.
+    submitted_at: str = ""
 
     closed_at: str = ""
     closed_by: str = ""

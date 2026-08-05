@@ -4533,6 +4533,10 @@ async def submit_client_intake(
                 client_kind=said_kind,
                 client_kind_label=said_label,
                 attachments=manifest,
+                #: The one moment nothing else on the record captures. Every
+                #: other timestamp here belongs to the studio - when the link
+                #: was minted, sent, closed - and this is the client's.
+                submitted_at=storage.utc_now_iso(),
             )
         except HTTPException:
             # Save, then advance - and this is the failure that ordering leaves.
