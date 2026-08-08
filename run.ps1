@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
-    PRISM - start the API (port 8000) and the web client (port 5173) together.
+    PRISM - start the API (port 8000) and the web client (port 5174) together.
 
     Creates backend\.venv if it is missing, installs backend dependencies if the
-    marker file backend\.venv\.prism-deps-installed is missing, runs npm install
-    if frontend\node_modules is missing, then starts both servers. Ctrl+C stops
-    both.
+    marker file backend\.venv\.prism-deps-installed is missing or older than
+    requirements.txt, runs npm install if frontend\node_modules is missing, then
+    starts both servers. Ctrl+C stops both.
 
     Delete backend\.venv\.prism-deps-installed to force a dependency reinstall.
 
@@ -28,7 +28,7 @@ $PackageJson  = Join-Path $Frontend 'package.json'
 $DotEnv       = Join-Path $Backend '.env'
 
 $ApiPort = 8000
-$WebPort = 5173
+$WebPort = 5174
 
 function Write-Fail {
     param([string]$Message)
@@ -114,7 +114,12 @@ if (-not (Test-Path -LiteralPath $VenvPy)) {
     Write-Fail "The backend\.venv directory exists but has no interpreter at $VenvPy. Delete backend\.venv and run this script again."
 }
 
-if (-not (Test-Path -LiteralPath $Marker)) {
+$needsBackendDependencies = -not (Test-Path -LiteralPath $Marker)
+if (-not $needsBackendDependencies) {
+    $needsBackendDependencies = (Get-Item -LiteralPath $Requirements).LastWriteTimeUtc -gt `
+        (Get-Item -LiteralPath $Marker).LastWriteTimeUtc
+}
+if ($needsBackendDependencies) {
     Write-Host "Installing backend dependencies"
     & $VenvPy -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) {
@@ -124,7 +129,7 @@ if (-not (Test-Path -LiteralPath $Marker)) {
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "Installing backend dependencies failed. Check the output above, then run this script again."
     }
-    New-Item -ItemType File -Path $Marker | Out-Null
+    New-Item -ItemType File -Path $Marker -Force | Out-Null
 }
 
 # --- Frontend environment ----------------------------------------------------
@@ -138,6 +143,20 @@ if (-not (Test-Path -LiteralPath (Join-Path $Frontend 'node_modules'))) {
     }
 }
 
+# Apply every committed schema revision before the API opens a connection.
+# SQLite needs no separate server; Docker supplies PostgreSQL and performs the
+# same command in the backend container.
+Write-Host "Applying database migrations"
+Push-Location $Backend
+try {
+    & $VenvPy -m alembic -c alembic.ini upgrade head
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Database migration failed. Check DATABASE_URL and the output above, then run this script again."
+    }
+} finally {
+    Pop-Location
+}
+
 # --- Start both servers ------------------------------------------------------
 
 $api = $null
@@ -148,7 +167,7 @@ $exitCode = 0
 try {
     Write-Host "Starting API on port $ApiPort"
     $api = Start-Process -FilePath $VenvPy `
-        -ArgumentList '-m', 'uvicorn', 'app.main:app', '--reload', '--port', "$ApiPort" `
+        -ArgumentList '-m', 'uvicorn', 'app.main:app', '--reload', '--no-access-log', '--port', "$ApiPort" `
         -WorkingDirectory $Backend -NoNewWindow -PassThru
 
     Write-Host "Starting web client on port $WebPort"

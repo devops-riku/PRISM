@@ -1,12 +1,13 @@
 """A client's file, before it is ever a client's file.
 
 Two halves, in the order they were built. The first is the assertion that had to
-land *before* an anonymous caller could send a file at all: `app/attachments.py`
+land *before* an anonymous caller could send a file at all: the shared
+attachment adapter
 opens a `.docx` and an `.xlsx` with a zip reader, and a zip reader with no bound
 on what it unpacks will happily turn a quarter of a megabyte on the wire into
 two hundred off it.
 
-The second half, appended below the first, is `app/intakefiles.py` itself -
+The second half, appended below the first, is the intake file adapter itself -
 where an intake's files live, how a caller-supplied id is gated before it can
 reach a path or a bucket key, what the client's own caps are, and what `close()`
 takes with it. It runs against the **local** backend, because that is what
@@ -53,12 +54,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intakefiles-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
-# Blanked for the same reason every other check script blanks them: `app.config`
+# Blanked for the same reason every other check script blanks them: shared config
 # reads these once at import time via `load_dotenv(..., override=False)`, and
 # this repo's real `backend/.env` names an actual Supabase project. Nothing in
 # this file sends a request today, but Task 2's sections will.
@@ -71,7 +73,7 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 # test at all while `intakefiles.configured()` is False, so without these four
 # lines half of this file would silently retarget at that bucket - and the half
 # in question saves objects and then deletes prefixes. Blanked here, before
-# `app.config` reads the environment, so what runs is what this file says it
+# shared config reads the environment, so what runs is what this file says it
 # runs. Do not remove them to "test against the real thing"; write a separate
 # script for that, under a prefix of its own.
 os.environ["DO_SPACES_ACCESS_KEY"] = ""
@@ -83,7 +85,7 @@ os.environ["DO_SPACES_ENDPOINT"] = ""
 import docx  # noqa: E402
 import openpyxl  # noqa: E402
 
-from app import attachments  # noqa: E402
+from app.shared.infrastructure import attachments  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -362,17 +364,21 @@ ok(
 # Task 2: where a client's file lives
 # =============================================================================
 #
-# Everything below is `app/intakefiles.py`. It is appended here rather than
+# Everything below exercises the intake file adapter. It is appended here rather than
 # woven into the sections above because those sections patch `docx.Document`
 # and `openpyxl.load_workbook` on the library modules themselves and assert
 # exact call counts - anything inserted between that block's `try:` and its
 # `finally:` that happened to read a document would break assertions with
 # nothing to do with it.
 
-from app import config, intakefiles, intakes, storage, workspaces  # noqa: E402
+from app.features.intakes.application import service as intakes  # noqa: E402
+from app.features.intakes.infrastructure import files as intakefiles  # noqa: E402
+from app.features.quotations.infrastructure import repository as storage  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
+from app.shared.infrastructure import config  # noqa: E402
 
 ok(
-    "importing app.intakefiles imports neither boto3 nor botocore - every check "
+    "importing the intake file adapter imports neither boto3 nor botocore - every check "
     "in this directory runs offline with no credentials, and a module-level "
     "import would make intakes.py, and so the whole app, unimportable on a "
     "machine that has not installed them yet. Both, not just boto3: the retry "

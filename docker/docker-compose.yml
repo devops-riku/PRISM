@@ -1,0 +1,130 @@
+# PRISM production-style stack: Traefik, PostgreSQL, FastAPI, and the SPA.
+name: prism-app
+
+services:
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${COMPOSE_PROJECT_NAME:-prism-app}_edge
+      - --entrypoints.web.address=:80
+      - --ping=true
+      # Client-access tokens occur in public API paths, so request logging must
+      # remain off. Operational errors still go to the ordinary Traefik log.
+      - --accesslog=false
+      - --log.level=INFO
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prism}
+      POSTGRES_USER: ${POSTGRES_USER:-prism}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    shm_size: 128mb
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-prism}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env}@postgres:5432/${POSTGRES_DB:-prism}
+      GENERATED_DIR: /app/generated
+      HOST: 0.0.0.0
+      PORT: 8000
+      APP_ORIGIN: ${APP_ORIGIN:-http://${APP_HOST:-localhost}}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://${APP_HOST:-localhost}}
+    volumes:
+      - generated_data:/app/generated
+    networks:
+      - edge
+      - data
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-prism-app}_edge
+      traefik.http.routers.prism-api.rule: Host(`${APP_HOST:-localhost}`) && PathPrefix(`/api`)
+      traefik.http.routers.prism-api.entrypoints: web
+      traefik.http.routers.prism-api.priority: "100"
+      traefik.http.routers.prism-api.service: prism-api
+      traefik.http.routers.prism-api.middlewares: prism-compress@docker,prism-security@docker
+      traefik.http.services.prism-api.loadbalancer.server.port: "8000"
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    init: true
+    networks:
+      - edge
+    depends_on:
+      backend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-prism-app}_edge
+      traefik.http.routers.prism-web.rule: Host(`${APP_HOST:-localhost}`)
+      traefik.http.routers.prism-web.entrypoints: web
+      traefik.http.routers.prism-web.priority: "10"
+      traefik.http.routers.prism-web.service: prism-web
+      traefik.http.routers.prism-web.middlewares: prism-compress@docker,prism-security@docker
+      traefik.http.services.prism-web.loadbalancer.server.port: "8080"
+      traefik.http.middlewares.prism-compress.compress: "true"
+      traefik.http.middlewares.prism-security.headers.contenttypenosniff: "true"
+      traefik.http.middlewares.prism-security.headers.framedeny: "true"
+      traefik.http.middlewares.prism-security.headers.referrerpolicy: strict-origin-when-cross-origin
+      traefik.http.middlewares.prism-security.headers.permissionspolicy: camera=(), microphone=(), geolocation=()
+
+networks:
+  edge:
+    name: ${COMPOSE_PROJECT_NAME:-prism-app}_edge
+  data:
+    name: ${COMPOSE_PROJECT_NAME:-prism-app}_data
+    internal: true
+
+volumes:
+  postgres_data:
+  generated_data:

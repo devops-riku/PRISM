@@ -53,10 +53,10 @@ for stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):  # pragma: no cover - non-standard stream
         pass
 
-from app import kinds  # noqa: E402
-from app.costing import recompute  # noqa: E402
-from app.renderers.markdown import render_developer_requirements  # noqa: E402
-import app.renderers.markdown as markdown_module  # noqa: E402
+from app.features.quotations.domain import kinds  # noqa: E402
+from app.features.quotations.domain.costing import recompute  # noqa: E402
+from app.features.rendering.presentation.quotation import render_developer_requirements  # noqa: E402
+import app.features.rendering.presentation.quotation as markdown_module  # noqa: E402
 
 # --- The frozen clock, and why it is a subclass rather than a stub -----------
 #
@@ -80,7 +80,7 @@ class _BaselineDate(date):
 
 
 markdown_module.date = _BaselineDate
-from app.schemas import (  # noqa: E402
+from app.features.quotations.domain.models import (  # noqa: E402
     ApiEndpoint,
     Confidence,
     CostSummary,

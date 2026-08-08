@@ -26,7 +26,7 @@ No chat loop. No follow-up turns. One shot.
 
 ## 2. Data contract
 
-`backend/app/schemas.py` **already exists and is frozen.** Import from it; never
+`backend/app/features/quotations/domain/models.py` is the canonical model contract. Import from it; never
 redefine these models, never fork a second shape. `Estimate` is the only thing
 Gemini returns. Both documents and the whole UI are renderings of that one object.
 
@@ -38,7 +38,8 @@ Key invariants:
 - **Server owns arithmetic.** The model's `subtotal`, `contingency_amount`,
   `tax_amount`, `total`, and `PaymentMilestone.amount` are advisory. `costing.py`
   recomputes all of them from `quantity × unit_rate` and the percentages. A
-  document must never show a total that does not equal the sum of its rows.
+  document must never show a total that does not equal the sum of its rows. The
+  implementation lives in `backend/app/features/quotations/domain/costing.py`.
 - Money is a plain float in the selected currency. Formatting happens at render
   time only (`Intl.NumberFormat` on the client, a helper on the server).
 
@@ -54,7 +55,7 @@ import os
 from google import genai
 from google.genai import types
 
-from app.schemas import Estimate
+from app.features.quotations.domain.models import Estimate
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
@@ -91,7 +92,10 @@ estimate: Estimate = response.parsed   # already an Estimate instance
 
 ## 4. HTTP surface
 
-FastAPI app at `backend/app/main.py`, served on **port 8000**.
+FastAPI app served on **port 8000**. `backend/app/main.py` is the composition
+root; every route below is defined in its owning feature's `presentation/`
+package. Shared dependencies and middleware live under
+`backend/app/shared/presentation/http/`.
 
 ```
 POST /api/proposals            multipart/form-data -> 202 JobView
@@ -136,7 +140,7 @@ POST /api/intakes/{intake_id}/close           -> Intake
 
 `{kind}` is `proposal` or `requirements`.
 
-**JobView** — `backend/app/jobs.py`
+**JobView** — `backend/app/features/jobs/application/service.py`
 
 ```
 id            str
@@ -159,7 +163,8 @@ until `state` leaves `queued`/`running`, then fetches each `result_ids` entry.
 Errors return `{"detail": "..."}` with a real status code. A missing API key is a
 `503` with an actionable message, not a stack trace.
 
-**Intake** — `backend/app/intakes.py`, not `schemas.py`: it is storage-side and
+**Intake** — `backend/app/features/intakes/application/service.py`, not the
+quotation domain model module: it is storage-side and
 never reaches the model, the third kind of record beside a `ProposalBundle`
 and a `ProposalDocument`, and the only one that moves.
 
@@ -177,13 +182,15 @@ closed_at, closed_by                          str
 in Stage 1; `issued`, `sent`, `revision_requested`, `finalized`,
 `proposal_sent` are defined but refused until Stage 2 wires the actor that can
 reach them. `POST /api/proposals`'s `intake_id` moves an intake through this
-machine as a side effect of pricing it - see `intakes.ALLOWED`.
+machine as a side effect of pricing it - see
+`app.features.intakes.application.service.ALLOWED`.
 
-CORS: allow `http://localhost:5173` and `http://127.0.0.1:5173`.
+CORS: allow `http://localhost:5174` and `http://127.0.0.1:5174`.
 
-Persistence: write each bundle to `backend/generated/{id}/` (bundle.json,
-proposal.md, requirements.md) and keep an in-memory index. Restart-safe reads are
-a bonus, not a requirement.
+Persistence: structured records use the same SQL repositories on both database
+modes—SQLite locally and PostgreSQL in production. Aggregate payloads are
+validated by their Pydantic models. Generated Markdown and uploaded bytes stay
+outside SQL under the workspace asset directory or DigitalOcean Spaces.
 
 `python-multipart` **must** be in requirements.txt or every `UploadFile` request
 500s on arrival.
@@ -193,16 +200,18 @@ a bonus, not a requirement.
 ## 5. Stack decisions — already made, do not re-litigate
 
 - Backend: FastAPI + uvicorn, Python 3.10+, `google-genai`, `pydantic>=2`,
-  `python-multipart`, `python-dotenv`.
+  SQLAlchemy 2, Alembic, Psycopg 3, `python-multipart`, `python-dotenv`.
 - Frontend: Vite + React 18 + **Tailwind CSS v4**.
   - v4 is CSS-first: `@import "tailwindcss";` and a `@theme { ... }` block in
     `src/index.css`. **No `tailwind.config.js`. No `postcss.config.js`.**
   - Vite plugin: `import tailwindcss from '@tailwindcss/vite'` in
     `vite.config.js`. Deps: `tailwindcss@^4`, `@tailwindcss/vite@^4`.
-  - Dev server on 5173, proxying `/api` to `http://localhost:8000`.
-- No PDF library. Print-to-PDF via a print stylesheet in the HTML renderer.
-  Do not add weasyprint, reportlab, or a headless browser.
-- No database, no auth, no state manager. Plain `useState`.
+  - Dev server on 5174, proxying `/api` to `http://localhost:8000`.
+- PDF downloads are rendered server-side with ReportLab; printable HTML keeps
+  the browser print stylesheet path as well. No headless browser is required.
+- SQLite is the zero-configuration local database; PostgreSQL is the production
+  database. Supabase authentication remains optional. Frontend state uses plain
+  `useState`.
 
 ---
 
@@ -214,24 +223,26 @@ in this document; do not create it yourself.
 
 | Owner | Files |
 |---|---|
-| backend-core | `backend/app/main.py`, `config.py`, `gemini_service.py`, `prompts.py`, `costing.py`, `storage.py`, `backend/requirements.txt`, `backend/.env.example` |
-| renderers | `backend/app/renderers/__init__.py`, `markdown.py`, `html.py`, `money.py` |
+| backend features | `backend/app/features/` — one package per business capability |
+| shared backend | `backend/app/shared/` — configuration, attachment parsing, shared HTTP |
+| composition | `backend/app/main.py`, `backend/requirements.txt`, `backend/.env.example` |
 | frontend-shell | `frontend/package.json`, `vite.config.js`, `index.html`, `frontend/src/main.jsx`, `src/index.css`, `src/lib/api.js`, `src/lib/format.js`, `src/lib/currencies.js` |
 | frontend-ui | `frontend/src/App.jsx`, everything under `frontend/src/components/` |
 | scaffolding | `README.md`, `run.ps1`, `run.sh`, `.gitignore` |
 
-`backend/app/schemas.py` and `docs/*` are frozen — read-only for every agent.
+The `backend/app/` root contains only `features/`, `shared/`, `main.py`, and
+`__init__.py`. Use canonical feature imports; do not add flat proxy modules.
 
 Cross-module imports that must line up:
 
 ```python
-from app.schemas import Estimate, ProposalBundle, GeneratedFile
-from app.costing import recompute            # recompute(estimate) -> Estimate
-from app.renderers import render_client_proposal, render_developer_requirements, render_print_html
+from app.features.quotations.domain.models import Estimate, ProposalBundle, GeneratedFile
+from app.features.quotations.domain.costing import recompute
+from app.features.rendering.presentation import render_client_proposal, render_developer_requirements, render_print_html
 # render_client_proposal(estimate) -> str  (markdown)
 # render_developer_requirements(estimate) -> str  (markdown)
 # render_print_html(markdown: str, title: str, estimate: Estimate) -> str
-from app.renderers.money import format_money  # format_money(1234.5, "PHP") -> "₱1,234.50"
+from app.features.rendering.presentation.money import format_money
 ```
 
 ```js

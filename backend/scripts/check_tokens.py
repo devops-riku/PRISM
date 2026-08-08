@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-tokens-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
@@ -32,20 +33,28 @@ os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-tokens-")
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # The `clientview` section below drives a real pass through `/api/proposals`
 # via `TestClient` to get a genuine `ProposalBundle` - exactly how
-# `check_intake_gate.py` builds one. `app.config` reads these three once at
+# `check_intake_gate.py` builds one. Shared config reads these three once at
 # import time via `load_dotenv(..., override=False)`, so a real backend/.env
 # (this repo's has a Supabase project configured) would otherwise win and turn
 # on token verification, 401-ing every request below before a single route
-# ran. Set before the first `app.*` import - `workspaces` already imports
-# `app.config`, so that import is what triggers the dotenv read.
+# ran. Set before the first `app.*` import - `workspaces` already imports the
+# shared config, so that import is what triggers the dotenv read.
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_ANON_KEY"] = ""
 os.environ["SUPABASE_JWT_SECRET"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import clientview, intakes, main, settings, storage, tokens, workspaces  # noqa: E402
-from app.schemas import (  # noqa: E402
+from app import main  # noqa: E402
+from app.features.intakes.application import client_view as clientview  # noqa: E402
+from app.features.intakes.application import service as intakes  # noqa: E402
+from app.features.intakes.infrastructure import tokens  # noqa: E402
+from app.features.quotations.infrastructure import repository as storage  # noqa: E402
+from app.features.quotations.presentation import routes as quotation_routes  # noqa: E402
+from app.features.workspaces.application import settings  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
+from app.shared.infrastructure import database  # noqa: E402
+from app.features.quotations.domain.models import (  # noqa: E402
     ClientNarrative,
     CostSummary,
     Estimate,
@@ -407,33 +416,33 @@ ok(
     tokens.resolve(relinked_new.token) == (restart_ws.id, relinked_fixture.id),
 )
 
-# --- the token must actually survive on disk through create, advance, relink
+# --- the token must actually survive in SQL through create, advance, relink
 #
 # `exclude=True` makes any `.model_dump()` on an `Intake` drop `token`
 # silently. `_write` and `advance` both restore it by hand today - this
-# reads the raw JSON file, past `intakes.get()`'s own deserialization, which
+# reads the raw aggregate row, past `intakes.get()`'s own deserialization, which
 # is the check that would actually fail the day a third dump site is added
 # without the same care: `get()` would keep reporting a token correctly even
 # if the file no longer had one, because pydantic fills a missing field from
 # its default (`""`) without complaint.
 
 
-def _on_disk_token(intake_id: str) -> str:
-    path = intakes._path(intake_id)  # noqa: SLF001 - reading the raw file directly
-    return json.loads(path.read_text(encoding="utf-8")).get("token", "")
+def _stored_token(intake_id: str) -> str:
+    record = database.get(workspaces.current(), intakes.RECORD_KIND, intake_id)
+    return "" if record is None else str(record.payload.get("token", ""))
 
 
 durability_ws = workspaces.create("Token Durability")
 durable = make(durability_ws.id, "durable")
-ok("the token is on disk right after create()", bool(_on_disk_token(durable.id)))
+ok("the token is in SQL right after create()", bool(_stored_token(durable.id)))
 
 intakes.advance(durable.id, intakes.SUBMITTED)
-ok("and survives a plain advance() call", bool(_on_disk_token(durable.id)))
+ok("and survives a plain advance() call", bool(_stored_token(durable.id)))
 
 durable_relinked = intakes.relink(durable.id)
 ok(
-    "and the new token lands on disk after relink(), matching the return value",
-    _on_disk_token(durable.id) == durable_relinked.token,
+    "and the new token lands in SQL after relink(), matching the return value",
+    _stored_token(durable.id) == durable_relinked.token,
 )
 
 # --- advance(id, CLOSED) is the second door to the same state, and must ---
@@ -452,8 +461,8 @@ advance_closed_token = advance_closed.token
 intakes.advance(advance_closed.id, intakes.CLOSED)
 
 ok(
-    "advance(id, CLOSED) blanks the token on disk, same as close()",
-    _on_disk_token(advance_closed.id) == "",
+    "advance(id, CLOSED) blanks the token in SQL, same as close()",
+    _stored_token(advance_closed.id) == "",
 )
 
 tokens._index.clear()  # noqa: SLF001 - simulating a fresh process's empty index
@@ -549,8 +558,8 @@ cv_intake = intakes.create(
 # route - so this stands in for it by hand.
 intakes.advance(cv_intake.id, intakes.SUBMITTED)
 
-cv_real_generate_estimate = main.generate_estimate
-main.generate_estimate = _cv_stub_estimate
+cv_real_generate_estimate = quotation_routes.generate_estimate
+quotation_routes.generate_estimate = _cv_stub_estimate
 try:
     cv_response = api.post(
         "/api/proposals",
@@ -568,7 +577,7 @@ finally:
     # global is shared process-wide, and a script that monkeypatches it
     # without restoring is exactly the kind of thing that turns into a
     # confusing failure the day something is appended after it.
-    main.generate_estimate = cv_real_generate_estimate
+    quotation_routes.generate_estimate = cv_real_generate_estimate
 
 cv_quoted = intakes.get(cv_intake.id)
 ok("clientview fixture: the intake reaches quoted", cv_quoted.state == intakes.QUOTED)

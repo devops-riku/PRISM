@@ -20,13 +20,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intakes-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 
-from app import intakes, workspaces  # noqa: E402
+from app.features.intakes.application import service as intakes  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
+from app.shared.infrastructure import database  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -346,16 +349,14 @@ refuses(
     lambda: intakes.close("0" * 12, "riku@neptune.ph"),
 )
 
-# A file that landed in `_intakes/` without going through `_write()` - by hand,
-# or by some other process - must not surface as a queue row just because its
-# name happens to end in `.json`. `listing()` globs the directory and hands
-# every stem to `get()`, so this is a direct check that `get()`'s id
-# validation is what keeps it out, not an accident of what glob happens to see.
-(intakes._directory() / "notes.json").write_text(
-    json.dumps({"scope": "TOP SECRET"}), encoding="utf-8"
+# A malformed SQL row with a non-intake key must not surface as a queue row.
+# This is the database equivalent of a foreign `notes.json` file in the old
+# store and proves listing still validates caller-visible identifiers.
+database.put(
+    workspaces.current(), intakes.RECORD_KIND, "notes", {"scope": "TOP SECRET"}
 )
 ok(
-    "a foreign file in _intakes/ is not a queue row",
+    "a foreign database row is not a queue row",
     all(row.scope != "TOP SECRET" for row in intakes.listing()),
 )
 

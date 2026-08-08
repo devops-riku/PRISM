@@ -1,0 +1,41 @@
+# Optional HTTPS/Let's Encrypt overlay for docker-compose.yml.
+services:
+  traefik:
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${COMPOSE_PROJECT_NAME:-prism-app}_edge
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --ping=true
+      - --accesslog=false
+      - --log.level=INFO
+      - --certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL:?Set LETSENCRYPT_EMAIL in docker/.env}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - letsencrypt_data:/letsencrypt
+
+  backend:
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:?Set APP_HOST in docker/.env}}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${APP_HOST:?Set APP_HOST in docker/.env}}
+    labels:
+      traefik.http.routers.prism-api.entrypoints: websecure
+      traefik.http.routers.prism-api.tls: "true"
+      traefik.http.routers.prism-api.tls.certresolver: letsencrypt
+
+  frontend:
+    labels:
+      traefik.http.routers.prism-web.entrypoints: websecure
+      traefik.http.routers.prism-web.tls: "true"
+      traefik.http.routers.prism-web.tls.certresolver: letsencrypt
+
+volumes:
+  letsencrypt_data:

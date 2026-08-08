@@ -1,9 +1,10 @@
 #!/bin/sh
-# PRISM - start the API (port 8000) and the web client (port 5173) together.
+# PRISM - start the API (port 8000) and the web client (port 5174) together.
 #
 # Creates backend/.venv if it is missing, installs backend dependencies if the
-# marker file backend/.venv/.prism-deps-installed is missing, runs npm install if
-# frontend/node_modules is missing, then starts both servers. Ctrl+C stops both.
+# marker file backend/.venv/.prism-deps-installed is missing or older than
+# requirements.txt, runs npm install if frontend/node_modules is missing, then
+# starts both servers. Ctrl+C stops both.
 #
 # Delete backend/.venv/.prism-deps-installed to force a dependency reinstall.
 
@@ -18,7 +19,7 @@ MARKER="$VENV/.prism-deps-installed"
 REQUIREMENTS="$BACKEND/requirements.txt"
 
 API_PORT=8000
-WEB_PORT=5173
+WEB_PORT=5174
 
 API_PID=""
 WEB_PID=""
@@ -141,7 +142,7 @@ if [ ! -x "$VENV_PY" ]; then
     fail "The backend/.venv directory exists but has no working interpreter at $VENV_PY. Delete backend/.venv and run this script again."
 fi
 
-if [ ! -f "$MARKER" ]; then
+if [ ! -f "$MARKER" ] || [ "$REQUIREMENTS" -nt "$MARKER" ]; then
     echo "Installing backend dependencies"
     "$VENV_PY" -m pip install --upgrade pip
     "$VENV_PY" -m pip install -r "$REQUIREMENTS"
@@ -155,12 +156,20 @@ if [ ! -d "$FRONTEND/node_modules" ]; then
     (cd "$FRONTEND" && npm install)
 fi
 
+# Apply every committed schema revision before the API opens a connection.
+# SQLite needs no separate server; Docker supplies PostgreSQL and performs the
+# same command in the backend container.
+echo "Applying database migrations"
+if ! (cd "$BACKEND" && "$VENV_PY" -m alembic -c alembic.ini upgrade head); then
+    fail "Database migration failed. Check DATABASE_URL and the output above, then run this script again."
+fi
+
 # --- Start both servers ------------------------------------------------------
 
 trap 'cleanup 0' INT TERM EXIT
 
 echo "Starting API on port $API_PORT"
-(cd "$BACKEND" && exec "$VENV_PY" -m uvicorn app.main:app --reload --port "$API_PORT") &
+(cd "$BACKEND" && exec "$VENV_PY" -m uvicorn app.main:app --reload --no-access-log --port "$API_PORT") &
 API_PID=$!
 
 echo "Starting web client on port $WEB_PORT"

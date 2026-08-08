@@ -81,7 +81,7 @@ export default function AuthGate({ children }: AuthGateProps) {
             Sign-in not finished
           </p>
           <p className="mt-2 font-body text-[15px] leading-[1.6] text-void">
-            This API requires a sign-in but did not name a Supabase project to sign in to. Set{' '}
+            This API requires a sign-in but did not name an account service to sign in to. Set{' '}
             <code className="font-label text-[13px] text-ink">SUPABASE_URL</code> and{' '}
             <code className="font-label text-[13px] text-ink">SUPABASE_ANON_KEY</code> in{' '}
             <code className="font-label text-[13px] text-ink">backend/.env</code> and restart it.

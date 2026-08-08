@@ -1,5 +1,5 @@
 import PrismMark from './PrismMark'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ComponentPropsWithoutRef, ReactNode } from 'react'
 import type { Provider, Session } from '@supabase/supabase-js'
 import {
@@ -11,6 +11,7 @@ import {
   verifyEmailCode,
 } from '../lib/auth'
 import { describeAuthError } from '../lib/authErrors'
+import { takeOAuthReturn } from '../lib/oauthReturn'
 import { useToasts } from '../lib/useToasts'
 import Toaster from './Toaster'
 import { DISPLAY, MONO_LABEL, WELL } from './tokens'
@@ -44,20 +45,29 @@ type ProviderChoice = {
 }
 
 /**
- * Whether the OAuth providers are actually wired up.
+ * Whether the OAuth providers are offered at all.
  *
- * `false` while neither Google nor Facebook is configured on the Supabase
- * project. The buttons stay ON SCREEN and go dead rather than being removed,
- * which is the deliberate choice between two imperfect options: hiding them
- * means a studio who signed up expecting Google sees no trace of it and
- * assumes it was dropped, while a live-looking button that fails is worse
- * than either. Disabled with a reason is the honest middle.
+ * `true` now. It was `false` while neither Google nor Facebook was configured
+ * on the Supabase project, with the buttons on screen but dead - the honest
+ * middle between hiding them (a studio who signed up expecting Google sees no
+ * trace of it and assumes it was dropped) and offering a live button that
+ * fails.
  *
- * ONE FLAG, not a per-provider pair, because they are blocked on the same
- * thing - the provider config, not the code. When that lands, flip this to
- * `true` and both work; nothing else here needs touching.
+ * WHAT THIS FLAG DOES NOT DO, and it matters: it does not turn the providers
+ * on. That is a setting on the Supabase project, not in this repository - each
+ * provider needs an OAuth app registered with Google or Meta, its client id and
+ * secret pasted into Supabase, and this app's origin listed as a redirect URL.
+ * With this `true` and that undone, the buttons work and Supabase refuses them.
+ * That refusal is now legible rather than misleading: `authErrors.ts` matches
+ * "provider is not enabled" ahead of its shared error code, so the screen says
+ * the method is not switched on instead of "check the details and try again",
+ * which would send somebody hunting for a typo that does not exist.
+ *
+ * ONE FLAG, not a per-provider pair, because they were blocked on the same
+ * thing. If exactly one of the two is ever configured, this needs to become a
+ * pair rather than being left `true` with one button that always fails.
  */
-const SSO_READY = false
+const SSO_READY = true
 
 const PROVIDERS: ProviderChoice[] = [
   {
@@ -355,6 +365,30 @@ export default function AuthScreen() {
 
   const notice = (message: string, hint = '', duration?: number) =>
     show({ tone: 'note', message, hint, duration })
+
+  /**
+   * Say why Google or Facebook sent them back.
+   *
+   * A provider sign-in leaves this page entirely, so its failure cannot arrive
+   * as a rejected promise the way every other error on this screen does - it
+   * comes back as parameters on a fresh page load, which `lib/oauthReturn.ts`
+   * captured before the Supabase client could consume them.
+   *
+   * No `duration`, unlike `notice`: this one does not time out. Somebody who
+   * pressed a button, watched a redirect, and landed back where they started
+   * needs the reason to still be there when they look up.
+   *
+   * `[]` on purpose. `takeOAuthReturn` is one-shot, and StrictMode's double
+   * mount in development would otherwise be the only thing standing between
+   * this and showing the same failure twice - which is exactly the kind of
+   * thing that works in dev and looks broken in production, or the reverse.
+   */
+  useEffect(() => {
+    const returned = takeOAuthReturn()
+    if (!returned) return
+    const problem = describeAuthError({ code: returned.code, message: returned.message })
+    show({ tone: 'alert', message: problem.message, hint: problem.hint })
+  }, [])
 
   /**
    * What to say once an account has been made.

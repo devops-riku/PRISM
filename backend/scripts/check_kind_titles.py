@@ -1,10 +1,10 @@
 """Does the requirements document carry the title of its kind wherever it prints?
 
 Three places name the second document: the HTML page title, the label stamped on
-every PDF page, and `main._document_title`, which the browser tab and the PDF
-metadata both take. An accounting engagement must be called accounting in all
-three, and a quotation with no kind must still read exactly as it always has -
-that is what every quotation prepared before kinds existed is.
+every PDF page, and the shared HTTP `document_title`, which the browser tab and the
+PDF metadata both take. An accounting engagement must be called accounting in
+all three, and a quotation with no kind must still read exactly as it always has
+- that is what every quotation prepared before kinds existed is.
 
 The markdown body is a stub on purpose. The document's own H1 is
 `renderers/markdown.py`'s to print; this script is about the furniture around
@@ -24,9 +24,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from pypdf import PdfReader
 
-from app.main import _document_title
-from app.renderers import render_pdf, render_print_html
-from app.schemas import Estimate
+from app.features.quotations.domain.models import Estimate
+from app.features.rendering.presentation import render_pdf, render_print_html
+from app.shared.presentation.http.deps import document_title as _document_title
 
 BODY = "## The engagement\n\nTwelve months of ledgers, reconciled and closed.\n"
 

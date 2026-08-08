@@ -15,12 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intake-api-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
-# `app.config` reads these once at import time via `load_dotenv(..., override=False)`,
+# Shared config reads these once at import time via `load_dotenv(..., override=False)`,
 # so a real backend/.env (this repo's has a Supabase project configured) would
 # otherwise win and turn on token verification - every request below is
 # headerless, so the gate would 401 all of them before a single route ran.
@@ -28,17 +29,28 @@ os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_ANON_KEY"] = ""
 os.environ["SUPABASE_JWT_SECRET"] = ""
+# Blanked for the same reason and with more at stake: `POST /api/intakes/{id}/send`
+# emails the client when this install has mail configured, and this repo's real
+# backend/.env has a live Resend key. Left alone, the sends below would leave the
+# machine - a check script that is supposed to touch nothing would post real mail
+# to whatever address a fixture happened to carry. `mailer.configured()` reads
+# both of these on every call, so emptying them here is the whole of the opt-out.
+# `check_send_email.py` sets them the other way on purpose, and stubs the send.
+os.environ["RESEND_API_KEY"] = ""
+os.environ["RESEND_FROM"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import config  # noqa: E402
-from app import intakefiles  # noqa: E402
-from app import intakes as intakes_module  # noqa: E402
 from app import main as main_module  # noqa: E402
-from app import storage  # noqa: E402
-from app import workspaces  # noqa: E402
+from app.features.intakes.application import service as intakes_module  # noqa: E402
+from app.features.intakes.infrastructure import files as intakefiles  # noqa: E402
+from app.features.intakes.presentation import studio_routes as intake_routes  # noqa: E402
+from app.features.quotations.infrastructure import repository as storage  # noqa: E402
+from app.features.quotations.presentation import routes as quotation_routes  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
 from app.main import app  # noqa: E402
-from app.schemas import (  # noqa: E402
+from app.shared.infrastructure import config  # noqa: E402
+from app.features.quotations.domain.models import (  # noqa: E402
     ClientNarrative,
     CostSummary,
     Estimate,
@@ -107,7 +119,7 @@ def _real_bundle() -> str:
         id=bundle_id,
         created_at=storage.utc_now_iso(),
         estimate=FIXTURE_ESTIMATE,
-        files=main_module._build_files(bundle_id, FIXTURE_ESTIMATE),  # noqa: SLF001
+        files=quotation_routes._build_files(bundle_id, FIXTURE_ESTIMATE),  # noqa: SLF001
         revision=1,
         root_id=bundle_id,
     )
@@ -430,7 +442,7 @@ ok(
 # independent layer - not one incidentally covering for the other - rather
 # than to claim either check alone is "the" gate this route depends on.
 _real_read = intakefiles.read
-_real_owned = main_module._owned_attachment
+_real_owned = intake_routes._owned_attachment
 
 
 def _permissive_read(_intake_id, requested_file_id):
@@ -477,7 +489,7 @@ try:
         foreign_still_refused.status_code == 404,
     )
 
-    main_module._owned_attachment = _always_owned
+    intake_routes._owned_attachment = _always_owned
     both_defeated = client.get(
         f"/api/intakes/{intake_a.id}/files/{entry_b['id']}", headers=headers
     )
@@ -493,7 +505,7 @@ try:
     )
 finally:
     intakefiles.read = _real_read
-    main_module._owned_attachment = _real_owned
+    intake_routes._owned_attachment = _real_owned
 
 ok(
     "restored: the same cross-intake fetch is refused again, on the real "
@@ -643,7 +655,7 @@ ok(
 # --- Mutation proof: the bundle-membership guard actually gates the route ---
 #
 # A 400 above is only evidence the check works if disabling the check would
-# make the assertion fail. Proven by breaking `main_module._quoted_bundle` -
+# make the assertion fail. Proven by breaking `intake_routes._quoted_bundle` -
 # the one function `send_intake` calls to decide membership - and watching a
 # bundle id that was never quoted get accepted anyway.
 
@@ -654,7 +666,7 @@ ok(
 # on this being set correctly first.
 workspaces.use(made.id)
 mutation_target = _quoted(["111111111111"])  # its own fixture, distinct from dangling_target's
-_real_quoted_bundle = main_module._quoted_bundle
+_real_quoted_bundle = intake_routes._quoted_bundle
 
 
 def _always_quoted(*_args, **_kwargs) -> bool:
@@ -662,14 +674,14 @@ def _always_quoted(*_args, **_kwargs) -> bool:
 
 
 try:
-    main_module._quoted_bundle = _always_quoted
+    intake_routes._quoted_bundle = _always_quoted
     mutated = client.post(
         f"/api/intakes/{mutation_target.id}/send",
         headers=headers,
         json={"bundle_id": "cccccccccccc"},  # not in mutation_target's own bundle_ids
     )
 finally:
-    main_module._quoted_bundle = _real_quoted_bundle
+    intake_routes._quoted_bundle = _real_quoted_bundle
 
 ok(
     "mutation: with the membership guard disabled, an unquoted bundle id is accepted - "
@@ -691,7 +703,7 @@ ok(
 # calls in main.py were deleted. That is the gap a member/admin split exists
 # to close, so it needs its own section with auth actually turned on.
 #
-# `app.config`'s Supabase settings are plain module attributes that
+# Shared config's Supabase settings are plain module attributes that
 # `app.auth` reads live on every call (`config.SUPABASE_JWT_SECRET.strip()`),
 # not values captured once when `app.auth` was imported - so setting the
 # attribute directly, after `app.main` has already imported everything,
@@ -701,8 +713,8 @@ import time  # noqa: E402
 
 import jwt  # noqa: E402
 
-from app import auth as auth_module  # noqa: E402
-from app import members  # noqa: E402
+from app.features.team.infrastructure import auth as auth_module  # noqa: E402
+from app.features.team.infrastructure import members  # noqa: E402
 
 TEST_JWT_SECRET = "check-intakes-api-test-secret-do-not-reuse-32bytes"
 config.SUPABASE_JWT_SECRET = TEST_JWT_SECRET

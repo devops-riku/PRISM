@@ -11,6 +11,13 @@ google-genai>=1.0
 
 pydantic>=2.7
 
+# Durable application state. Local development uses Python's built-in SQLite
+# driver; production uses PostgreSQL through Psycopg 3. Alembic owns the SQL
+# schema so a container can upgrade before it begins serving requests.
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2
+
 # Required for multipart/form-data. Without it every UploadFile request 500s on
 # arrival, before any handler code runs.
 python-multipart>=0.0.9
@@ -24,7 +31,8 @@ anyio>=4.4
 reportlab
 
 # Reading what the client sent. A scope in Word, a requirement list in Excel and
-# a tender as a PDF are all quoted from as text - see app/attachments.py.
+# a tender as a PDF are all quoted from as text - see
+# app.shared.infrastructure.attachments.
 # pypdf comes with the PDF export already.
 python-docx>=1.1
 openpyxl>=3.1
@@ -32,7 +40,8 @@ pypdf>=4.0
 
 # Where a client's own files go, when a studio has somewhere to put them:
 # DigitalOcean Spaces, over the S3-compatible API. Optional in practice -
-# `app/intakefiles.py` imports it lazily, inside the Spaces backend, and falls
+# `app.features.intakes.infrastructure.files` imports it lazily, inside the
+# Spaces backend, and falls
 # back to the workspace's own folder when no credentials are configured, so the
 # app imports and every check script runs on a machine that has never installed
 # this.

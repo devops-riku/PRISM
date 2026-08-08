@@ -97,7 +97,82 @@ const BY_CODE: Record<string, AuthProblem> = {
     message: 'That session has expired.',
     hint: 'Sign in again.',
   },
+
+  // --- Coming back from Google or Facebook ---------------------------------
+  //
+  // These arrive on the URL after the provider has sent the browser back, not
+  // as a rejected promise - see `lib/oauthReturn.ts`. They are worded for
+  // somebody who just pressed a button and landed here again, so each one says
+  // whether the remedy is theirs or somebody else's; "contact your
+  // administrator" for a thing the person can simply retry is as unhelpful as
+  // silence.
+  access_denied: {
+    message: 'That sign-in was cancelled.',
+    hint: 'Nothing was shared and no account was created. Try again, or use your email above.',
+  },
+  provider_email_needs_verification: {
+    message: 'That account has no verified email address.',
+    hint: 'Verify your email with the provider first, then sign in here again.',
+  },
+  server_error: {
+    message: 'The sign-in service could not finish that.',
+    hint: 'Try again in a moment. If it keeps happening the provider may be misconfigured.',
+  },
+  temporarily_unavailable: {
+    message: 'The sign-in provider is not answering right now.',
+    hint: 'Try again in a minute, or use your email above.',
+  },
+  bad_oauth_state: {
+    message: 'That sign-in could not be matched to the one that started it.',
+    hint: 'It may have been left open too long. Start it again from this page.',
+  },
+  bad_oauth_callback: {
+    message: 'The provider sent back an answer PRISM could not read.',
+    hint: 'Usually a redirect URL that does not match. Try again, or use your email above.',
+  },
+  unexpected_failure: {
+    message: 'The sign-in service hit an error it did not explain.',
+    hint: 'Try again. If it keeps happening, whoever set PRISM up will find it in the sign-in logs.',
+  },
 }
+
+/**
+ * Matched on the message BEFORE the code is consulted, which is the opposite of
+ * how everything else here works and needs its reason stated.
+ *
+ * GoTrue answers a sign-in through a provider nobody turned on with
+ * `error_code: "validation_failed"` and the message "Unsupported provider:
+ * provider is not enabled". That code is shared with genuine bad input, so the
+ * ordinary path would return "Check the details and try again." - which tells a
+ * studio they mistyped something, when in fact there is nothing on this screen
+ * they could type differently. The remedy is not theirs at all; it is somebody
+ * turning the provider on in the Supabase project.
+ *
+ * Only for failures where a shared code would actively mislead. Everything that
+ * a code describes correctly belongs in `BY_CODE`.
+ */
+const BEFORE_CODE: Array<[RegExp, AuthProblem]> = [
+  [
+    /unsupported provider|provider is not enabled/i,
+    {
+      message: 'That sign-in method is not switched on for this install.',
+      hint: 'Use your email and password, or ask whoever set PRISM up to switch it on.',
+    },
+  ],
+  [
+    // The provider handed back a code the account service could not trade for a
+    // token - almost always a redirect URL or a client secret that does not
+    // match what the provider has on file. It arrives under `error=server_error`,
+    // whose own wording is a shrug ("try again in a moment"), and trying again
+    // is precisely what will not fix a mismatched secret. Hence ahead of the
+    // code: the specific cause is known and worth saying.
+    /unable to exchange external code|invalid client|redirect_uri_mismatch/i,
+    {
+      message: 'The provider would not complete that sign-in.',
+      hint: "Usually the app's redirect address or its secret does not match what the provider has on file. Use your email above meanwhile.",
+    },
+  ],
+]
 
 /** A second net: releases that set only a message, matched loosely. */
 const BY_MESSAGE: Array<[RegExp, AuthProblem]> = [
@@ -112,6 +187,15 @@ const BY_MESSAGE: Array<[RegExp, AuthProblem]> = [
   [/token has expired|otp.*expired|expired.*code/i, BY_CODE.otp_expired],
   [/signups? not allowed|signup is disabled/i, BY_CODE.signup_disabled],
   [/unable to validate email|invalid email/i, BY_CODE.email_address_invalid],
+  // Same address already has a PRISM account made another way. Linking is a
+  // deliberate act in Supabase, so the honest advice is to use the first method.
+  [
+    /already registered with|identity is already linked|email address is already/i,
+    {
+      message: 'That address already signs in a different way.',
+      hint: 'Use the email and password below, or the code option, for this account.',
+    },
+  ],
   [
     // Fetch rejects with a bare TypeError when the host is unreachable, which
     // is the one failure that is never the person's fault.
@@ -143,11 +227,17 @@ export function describeAuthError(failure: unknown): AuthProblem {
     return { message: 'That did not work.', hint: 'Try again in a moment.' }
   }
 
+  const message = readString(failure, 'message')
+
+  // Ahead of the code lookup on purpose - see `BEFORE_CODE`.
+  for (const [pattern, problem] of BEFORE_CODE) {
+    if (pattern.test(message)) return problem
+  }
+
   const code = readString(failure, 'code') || readString(failure, 'error_code')
   const known = BY_CODE[code]
   if (known) return known
 
-  const message = readString(failure, 'message')
   for (const [pattern, problem] of BY_MESSAGE) {
     if (pattern.test(message)) return problem
   }

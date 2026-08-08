@@ -46,12 +46,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-client-api-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
-# Blanked first, same fix as every other API-level check script: `app.config`
+# Blanked first, same fix as every other API-level check script: the shared config
 # reads these once at import time via `load_dotenv(..., override=False)`, and
 # a real `backend/.env` (this repo's names an actual Supabase project) would
 # otherwise win. Turned back on deliberately, below, once `config` exists to
@@ -64,20 +65,26 @@ import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pypdf import PdfReader  # noqa: E402
 
-from app import auth as auth_module  # noqa: E402
-from app import config  # noqa: E402
-from app import inbox  # noqa: E402
-from app import intakes  # noqa: E402
-from app.schemas import BriefCheck  # noqa: E402
 from app import main as main_module  # noqa: E402
-from app import members  # noqa: E402
-from app import settings  # noqa: E402
-from app import storage  # noqa: E402
-from app import tokens  # noqa: E402
-from app import workspaces  # noqa: E402
-from app.design import ProposalDesign  # noqa: E402
+from app.features.documents.domain.design import ProposalDesign  # noqa: E402
+from app.features.intakes.application import client_view as clientview  # noqa: E402
+from app.features.intakes.application import service as intakes  # noqa: E402
+from app.features.intakes.infrastructure import tokens  # noqa: E402
+from app.features.intakes.presentation import client_routes  # noqa: E402
+from app.features.notifications.infrastructure import inbox  # noqa: E402
+from app.features.quotations.domain.models import BriefCheck  # noqa: E402
+from app.features.quotations.infrastructure import repository as storage  # noqa: E402
+from app.features.quotations.presentation import routes as quotation_routes  # noqa: E402
+from app.features.rendering.presentation import render_pdf, render_print_html  # noqa: E402
+from app.features.team.infrastructure import auth as auth_module  # noqa: E402
+from app.features.team.infrastructure import members  # noqa: E402
+from app.features.workspaces.application import settings  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
 from app.main import app  # noqa: E402
-from app.schemas import (  # noqa: E402
+from app.shared.infrastructure import config, database  # noqa: E402
+from app.shared.presentation.http import deps as api_deps  # noqa: E402
+from app.shared.presentation.http import middleware as api_middleware  # noqa: E402
+from app.features.quotations.domain.models import (  # noqa: E402
     ClientNarrative,
     CostSummary,
     DeveloperSpec,
@@ -87,6 +94,22 @@ from app.schemas import (  # noqa: E402
     ProposalBundle,
     UnitKind,
 )
+
+
+def _stub_brief_check(fn):
+    """Replace the model's brief check everywhere it is looked up.
+
+    It used to live in `main.py`, where one assignment covered every call site.
+    The split gave it two, in different modules - `app/api/client.py` for the
+    stranger's door and `app/api/quotations.py` for the studio's - and each
+    resolves the name in its OWN module globals. Patching one leaves the other
+    calling the real thing, which on a machine with a key configured means a
+    live model call from a file whose whole premise is that it is offline. So
+    both, always, from one place.
+    """
+    for module in (client_routes, quotation_routes):
+        module.check_brief_is_real = fn
+
 
 
 def pdf_text(data: bytes) -> str:
@@ -322,7 +345,7 @@ with TestClient(app) as client:
     ok(
         "and byte-identical bodies naming the same reason - a stranger cannot tell "
         "which kind of gone this is",
-        unknown.json() == closed.json() == expired.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        unknown.json() == closed.json() == expired.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
     ok("that body carries no clue beyond 'gone'", set(unknown.json()) == {"detail"})
 
@@ -365,16 +388,16 @@ with TestClient(app) as client:
         return found
 
     try:
-        main_module.tokens.resolve = _resolve_then_close_underneath_it
+        tokens.resolve = _resolve_then_close_underneath_it
         interleaved = client.get(f"/api/client/{race_token}")
     finally:
-        main_module.tokens.resolve = _real_resolve
+        tokens.resolve = _real_resolve
 
     ok(
         "a close() landing between resolve's read and the handler's own is still "
         "404, not 200 {'state': 'closed'}",
         interleaved.status_code == 404
-        and interleaved.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and interleaved.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # --- A closed intake with a live token on disk must still be refused ----
@@ -401,15 +424,22 @@ with TestClient(app) as client:
     zombie_token = zombie.token
     intakes.close(zombie.id, "admin@neptune.ph")
 
-    zombie_path = intakes._path(zombie.id)  # noqa: SLF001 - reaching past the public API on purpose
-    zombie_payload = json.loads(zombie_path.read_text(encoding="utf-8"))
+    zombie_record = database.get(other.id, intakes.RECORD_KIND, zombie.id)
+    zombie_payload = dict(zombie_record.payload)
     ok(
-        "close() did blank the token on disk, before this fixture undoes it",
+        "close() did blank the token in SQL, before this fixture undoes it",
         zombie_payload["token"] == "",
     )
     zombie_payload["token"] = zombie_token
     zombie_payload["token_expires_at"] = intakes._later(60)  # noqa: SLF001 - fresh, unexpired
-    zombie_path.write_text(json.dumps(zombie_payload), encoding="utf-8")
+    database.put(
+        other.id,
+        intakes.RECORD_KIND,
+        zombie.id,
+        zombie_payload,
+        sort_key=zombie.created_at,
+        lookup_key=zombie_token,
+    )
     # What `tokens._build_locked`'s walk would do on finding this record - no
     # state check, by design - reproduced directly rather than waiting for a
     # process restart to trigger the real walk.
@@ -420,7 +450,7 @@ with TestClient(app) as client:
         "a closed intake with a live token restored on disk is still 404, not "
         "200 {'state': 'closed'}",
         zombie_resp.status_code == 404
-        and zombie_resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and zombie_resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # --- A state clientview.of cannot show must not become a traceback ------
@@ -433,20 +463,20 @@ with TestClient(app) as client:
     # is still good at this point in the run - forcing `clientview.of` itself
     # to fail is the only way to reach this branch without a real state
     # clientview cannot show.
-    _real_of = main_module.clientview.of
+    _real_of = clientview.of
 
     def _boom_of(*_args, **_kwargs):
         raise ValueError("a state clientview does not know how to show")
 
     try:
-        main_module.clientview.of = _boom_of
+        clientview.of = _boom_of
         broken = client.get(f"/api/client/{home_token}")
     finally:
-        main_module.clientview.of = _real_of
+        clientview.of = _real_of
 
     ok(
         "a clientview failure answers the same 404 body, not a 500 with a traceback",
-        broken.status_code == 404 and broken.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        broken.status_code == 404 and broken.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # ==========================================================================
@@ -539,7 +569,7 @@ with TestClient(app) as client:
             id=bundle_id,
             created_at=storage.utc_now_iso(),
             estimate=estimate,
-            files=main_module._build_files(bundle_id, estimate),  # noqa: SLF001
+            files=quotation_routes._build_files(bundle_id, estimate),  # noqa: SLF001
             revision=1,
             root_id=bundle_id,
         )
@@ -627,7 +657,7 @@ with TestClient(app) as client:
     ok(
         "submit twice: the second attempt is refused with the same opaque body an unknown "
         "token gets",
-        second.status_code == 404 and second.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        second.status_code == 404 and second.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
     unchanged = intakes.get(fresh.id)
     ok("submit twice: the record on disk is still submitted, not re-issued or re-submitted", unchanged.state == intakes.SUBMITTED)
@@ -690,7 +720,7 @@ with TestClient(app) as client:
         )
         ok(
             f"submit from {label}: refused with the same opaque body as an unknown token",
-            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
         )
 
     workspaces.use(home.id)
@@ -704,7 +734,7 @@ with TestClient(app) as client:
     )
     ok(
         "submit from closed: refused with the same opaque body as an unknown token",
-        resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # --- Over-length scope/budget: the studio's own convention, not a second -
@@ -715,7 +745,7 @@ with TestClient(app) as client:
         created_by="admin@neptune.ph",
     )
     try:
-        main_module._normalise_scope(LONG_TEXT)  # noqa: SLF001
+        client_routes._normalise_scope(LONG_TEXT)  # noqa: SLF001
         expected_scope_detail = None
     except Exception as exc:  # noqa: BLE001 - capturing FastAPI's own HTTPException
         expected_scope_detail = exc.detail
@@ -736,7 +766,7 @@ with TestClient(app) as client:
     )
 
     try:
-        main_module._normalise_budget_text(LONG_TEXT)  # noqa: SLF001
+        client_routes._normalise_budget_text(LONG_TEXT)  # noqa: SLF001
         expected_budget_detail = None
     except Exception as exc:  # noqa: BLE001
         expected_budget_detail = exc.detail
@@ -872,14 +902,14 @@ with TestClient(app) as client:
     async def accepting_check(_text):
         return BriefCheck()
 
-    real_check = main_module.check_brief_is_real
+    real_check = client_routes.check_brief_is_real
     ai_client = _client_for("203.0.113.70")
     ai_fixture = intakes.create(
         client_email="", client_phone="", scope="", budget_text="", preset={},
         created_by="admin@neptune.ph",
     )
     config.CHECK_BRIEF_IS_REAL = True
-    main_module.check_brief_is_real = refusing_check
+    _stub_brief_check(refusing_check)
     refused = ai_client.post(
         f"/api/client/{ai_fixture.token}/submit",
         data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
@@ -906,7 +936,7 @@ with TestClient(app) as client:
         and intakes.get(ai_fixture.id).scope == "",
     )
 
-    main_module.check_brief_is_real = accepting_check
+    _stub_brief_check(accepting_check)
     accepted = ai_client.post(
         f"/api/client/{ai_fixture.token}/submit",
         data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
@@ -918,7 +948,7 @@ with TestClient(app) as client:
     )
 
     config.CHECK_BRIEF_IS_REAL = False
-    main_module.check_brief_is_real = refusing_check
+    _stub_brief_check(refusing_check)
     flag_fixture = intakes.create(
         client_email="", client_phone="", scope="", budget_text="", preset={},
         created_by="admin@neptune.ph",
@@ -933,7 +963,7 @@ with TestClient(app) as client:
         ).status_code
         == 200,
     )
-    main_module.check_brief_is_real = real_check
+    _stub_brief_check(real_check)
 
     # The studio's own door now carries the SAME floor, and this assertion is
     # the reverse of what it used to say. It once recorded that the floor was
@@ -943,14 +973,14 @@ with TestClient(app) as client:
     # time and a bundle on disk, all bought by "a". Free to check, so checked.
     for shared in ("", "a", "asdasdas", "............................"):
         try:
-            main_module._normalise_brief(shared)  # noqa: SLF001
+            quotation_routes._normalise_brief(shared)  # noqa: SLF001
             refused = False
         except Exception:  # noqa: BLE001 - HTTPException is what a refusal is
             refused = True
         ok(f"the studio's own brief is refused for {shared[:12]!r} too", refused)
     ok(
         "and a real studio brief still passes both doors unchanged",
-        main_module._normalise_brief(GOOD_SCOPE) == GOOD_SCOPE,  # noqa: SLF001
+        quotation_routes._normalise_brief(GOOD_SCOPE) == GOOD_SCOPE,  # noqa: SLF001
     )
 
     # --- client_email/client_phone are bounded too, not just scope/budget ---
@@ -959,10 +989,10 @@ with TestClient(app) as client:
     # on the first anonymous write in this codebase, and persisted verbatim
     # into the studio's own `GET /api/intakes`. Same idiom as scope/budget:
     # the exact detail is captured live from the normaliser itself.
-    LONG_CONTACT = "y" * (main_module._MAX_CONTACT_CHARS + 1)  # noqa: SLF001
+    LONG_CONTACT = "y" * (client_routes._MAX_CONTACT_CHARS + 1)  # noqa: SLF001
 
     try:
-        main_module._normalise_client_email(LONG_CONTACT)  # noqa: SLF001
+        client_routes._normalise_client_email(LONG_CONTACT)  # noqa: SLF001
         expected_email_detail = None
     except Exception as exc:  # noqa: BLE001
         expected_email_detail = exc.detail
@@ -978,7 +1008,7 @@ with TestClient(app) as client:
     )
 
     try:
-        main_module._normalise_client_phone(LONG_CONTACT)  # noqa: SLF001
+        client_routes._normalise_client_phone(LONG_CONTACT)  # noqa: SLF001
         expected_phone_detail = None
     except Exception as exc:  # noqa: BLE001
         expected_phone_detail = exc.detail
@@ -1004,7 +1034,7 @@ with TestClient(app) as client:
         "_normalise_client_email strips control characters rather than storing them, "
         "including a tab/newline in the middle - not only what .strip() alone would catch "
         "at the two ends",
-        main_module._normalise_client_email("a\x00b\x1fc\td\ne@example.com")  # noqa: SLF001
+        client_routes._normalise_client_email("a\x00b\x1fc\td\ne@example.com")  # noqa: SLF001
         == "abcde@example.com",
     )
     workspaces.use(home.id)
@@ -1038,7 +1068,7 @@ with TestClient(app) as client:
     # by reading the exception's own message. Proven twice, the same way
     # this file already forces `clientview.of` to raise for the "state
     # clientview cannot show" case above: patch `intakes.advance` (through
-    # `main_module.intakes`, the attribute the handler actually resolves
+    # `intakes`, the attribute the handler actually resolves
     # through) to raise `IntakeWriteError`, and confirm the door answers
     # 500 - a real error - rather than quietly claiming the link is gone.
     # The second patch uses a message that shares not one word with
@@ -1057,21 +1087,21 @@ with TestClient(app) as client:
             "That intake could not be saved: [Errno 28] No space left on device"
         )
 
-    _real_advance = main_module.intakes.advance
+    _real_advance = intakes.advance
     try:
-        main_module.intakes.advance = _advance_that_cannot_save
+        intakes.advance = _advance_that_cannot_save
         save_failed = submit_client.post(
             f"/api/client/{save_failure_fixture.token}/submit",
             data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
         )
     finally:
-        main_module.intakes.advance = _real_advance
+        intakes.advance = _real_advance
 
     ok("a genuine save failure answers 500, not this door's usual refusal", save_failed.status_code == 500)
     ok(
         "and its body is not the opaque 'gone' text - a lost submission must not read as a "
         "dead link",
-        save_failed.json() != {"detail": main_module._CLIENT_LINK_GONE},
+        save_failed.json() != {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     def _advance_that_cannot_save_reworded(*_args, **_kwargs):
@@ -1083,19 +1113,19 @@ with TestClient(app) as client:
         created_by="admin@neptune.ph",
     )
     try:
-        main_module.intakes.advance = _advance_that_cannot_save_reworded
+        intakes.advance = _advance_that_cannot_save_reworded
         save_failed_reworded = submit_client.post(
             f"/api/client/{reworded_fixture.token}/submit",
             data={"client_email": "x@y.com", "scope": GOOD_SCOPE, "budget_text": GOOD_BUDGET},
         )
     finally:
-        main_module.intakes.advance = _real_advance
+        intakes.advance = _real_advance
 
     ok(
         "a save failure is still classified correctly even with a completely different "
         "message - this is a type dispatch on IntakeWriteError, not a resurrected string match",
         save_failed_reworded.status_code == 500
-        and save_failed_reworded.json() != {"detail": main_module._CLIENT_LINK_GONE},
+        and save_failed_reworded.json() != {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # And the ordinary refusal path is untouched: a plain `IntakeError` (not
@@ -1116,7 +1146,7 @@ with TestClient(app) as client:
     ok(
         "a plain IntakeError (illegal move) still answers the ordinary opaque 404, not 500",
         ordinary_refusal.status_code == 404
-        and ordinary_refusal.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and ordinary_refusal.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # --- /revise: only from `sent` --------------------------------------------
@@ -1166,7 +1196,7 @@ with TestClient(app) as client:
     ok(
         "revise twice before a re-quote: refused with the same opaque body",
         second_revise.status_code == 404
-        and second_revise.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and second_revise.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
     ok(
         "revise twice: the revisions log did not gain a second entry",
@@ -1196,7 +1226,7 @@ with TestClient(app) as client:
         "revise against a sent intake whose bundle was deleted answers this door's usual "
         "opaque refusal, not a 500 with a traceback",
         dangling_revise.status_code == 404
-        and dangling_revise.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and dangling_revise.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     REVISE_REFUSAL_FIXTURES = (
@@ -1214,7 +1244,7 @@ with TestClient(app) as client:
         resp = revise_client.post(f"/api/client/{candidate.token}/revise", json={"asked": "change it"})
         ok(
             f"revise from {label}: refused with the same opaque body as an unknown token",
-            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
         )
 
     workspaces.use(home.id)
@@ -1226,12 +1256,12 @@ with TestClient(app) as client:
     resp = revise_client.post(f"/api/client/{revise_closed.token}/revise", json={"asked": "change it"})
     ok(
         "revise from closed: refused with the same opaque body as an unknown token",
-        resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     revise_len_sent, _ = _sent_intake(home, "author2@neptune.ph")
     try:
-        main_module._normalise_instruction(LONG_TEXT)  # noqa: SLF001
+        api_deps.normalise_instruction(LONG_TEXT)  # noqa: SLF001
         expected_instruction_detail = None
     except Exception as exc:  # noqa: BLE001
         expected_instruction_detail = exc.detail
@@ -1363,7 +1393,7 @@ with TestClient(app) as client:
         "finalize against a sent intake whose bundle was deleted answers this door's usual "
         "opaque refusal, not a 500 with a traceback",
         dangling_finalize.status_code == 404
-        and dangling_finalize.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and dangling_finalize.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
     ok(
         "the intake still genuinely moved to finalized - _client_advance's write cannot be "
@@ -1397,7 +1427,7 @@ with TestClient(app) as client:
         resp = finalize_client.post(f"/api/client/{candidate.token}/finalize")
         ok(
             f"finalize from {label}: refused with the same opaque body as an unknown token",
-            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
         )
 
     workspaces.use(notif_ws.id)
@@ -1409,7 +1439,7 @@ with TestClient(app) as client:
     resp = finalize_client.post(f"/api/client/{finalize_closed.token}/finalize")
     ok(
         "finalize from closed: refused with the same opaque body as an unknown token",
-        resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # A second finalize, now that the intake is already finalized, is refused
@@ -1432,7 +1462,7 @@ with TestClient(app) as client:
     ok(
         "finalize twice: refused with the same opaque body",
         refinalize.status_code == 404
-        and refinalize.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and refinalize.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
     owner_finalized_notes_after = sum(
         1
@@ -1476,7 +1506,7 @@ with TestClient(app) as client:
         "still judged on the merits (404, already submitted), not swept into the first "
         "address's limit",
         rate_other_ip.status_code == 404
-        and rate_other_ip.json() == {"detail": main_module._CLIENT_LINK_GONE},
+        and rate_other_ip.json() == {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # --- The rate limit runs before FastAPI ever parses the body -------------
@@ -1505,7 +1535,7 @@ with TestClient(app) as client:
     oversized_body = {
         "client_email": "x@y.com",
         "client_phone": "",
-        "scope": "x" * (main_module._MAX_CLIENT_BODY_BYTES + 1000),  # noqa: SLF001
+        "scope": "x" * (api_middleware._MAX_CLIENT_BODY_BYTES + 1000),  # noqa: SLF001
         "budget_text": "y",
     }
     oversized_resp = oversized_client.post(
@@ -1542,11 +1572,11 @@ with TestClient(app) as client:
     # the same at any size. Both the dict and the cap are swapped back in a
     # `finally`, the same discipline this file already uses for `generate_estimate`,
     # `tokens.resolve` and `clientview.of`.
-    _real_rate_limit_hits = main_module._rate_limit_hits
-    _real_max_tracked_keys = main_module._RATE_LIMIT_MAX_TRACKED_KEYS
+    _real_rate_limit_hits = api_middleware._rate_limit_hits
+    _real_max_tracked_keys = api_middleware._RATE_LIMIT_MAX_TRACKED_KEYS
     try:
-        main_module._rate_limit_hits = {}
-        main_module._RATE_LIMIT_MAX_TRACKED_KEYS = 3
+        api_middleware._rate_limit_hits = {}
+        api_middleware._RATE_LIMIT_MAX_TRACKED_KEYS = 3
         eviction_clients = [_client_for(f"203.0.113.{50 + i}") for i in range(5)]
         workspaces.use(home.id)
         eviction_fixture = intakes.create(
@@ -1561,17 +1591,17 @@ with TestClient(app) as client:
         ok(
             "the rate limiter's dict reached its tracked-key cap rather than growing to one "
             "entry per distinct address",
-            len(main_module._rate_limit_hits) == 3,
+            len(api_middleware._rate_limit_hits) == 3,
         )
         ok(
             "and it holds the three most recently first-seen addresses, not an arbitrary "
             "three - the two earliest callers were evicted, the three latest were not",
-            {key[0] for key in main_module._rate_limit_hits}
+            {key[0] for key in api_middleware._rate_limit_hits}
             == {"203.0.113.52", "203.0.113.53", "203.0.113.54"},
         )
     finally:
-        main_module._rate_limit_hits = _real_rate_limit_hits
-        main_module._RATE_LIMIT_MAX_TRACKED_KEYS = _real_max_tracked_keys
+        api_middleware._rate_limit_hits = _real_rate_limit_hits
+        api_middleware._RATE_LIMIT_MAX_TRACKED_KEYS = _real_max_tracked_keys
 
     # ==========================================================================
     # Task 5: the client reads the quotation - GET .../quotation.html and .pdf
@@ -1598,9 +1628,9 @@ with TestClient(app) as client:
     #     call it. Reads live source via `inspect.getsource`, not a copy, so
     #     it cannot go stale relative to what is actually deployed.
     _GUARDED_FUNCTIONS = (
-        main_module._client_quotation,  # noqa: SLF001
-        main_module.client_quotation_html,
-        main_module.client_quotation_pdf,
+        client_routes._client_quotation,  # noqa: SLF001
+        client_routes.client_quotation_html,
+        client_routes.client_quotation_pdf,
     )
     _guarded_source = "\n".join(inspect.getsource(fn) for fn in _GUARDED_FUNCTIONS)
     ok(
@@ -1645,18 +1675,18 @@ with TestClient(app) as client:
     #     that the marker is *present* somewhere real - without this, a typo
     #     that dropped the marker from the estimate entirely would make every
     #     "absent" assertion pass for the wrong reason.
-    _internal_markdown = main_module.render_developer_requirements(QUOTATION_ESTIMATE)
+    _internal_markdown = quotation_routes.render_developer_requirements(QUOTATION_ESTIMATE)
     ok(
         "fixture control: the internal document's own markdown carries the marker",
         QUOTATION_MARKER in _internal_markdown,
     )
-    _proposal_markdown = main_module.render_client_proposal(QUOTATION_ESTIMATE)
+    _proposal_markdown = quotation_routes.render_client_proposal(QUOTATION_ESTIMATE)
     ok(
         "fixture control: the proposal's own markdown does not carry the marker - it was "
         "never written into a field that renderer reads",
         QUOTATION_MARKER not in _proposal_markdown,
     )
-    _internal_pdf_direct = main_module.render_pdf(
+    _internal_pdf_direct = render_pdf(
         _internal_markdown, "Fixture control", QUOTATION_ESTIMATE, kind="requirements"
     )
     _internal_pdf_text_direct = pdf_text(_internal_pdf_direct)
@@ -1925,7 +1955,7 @@ with TestClient(app) as client:
             resp = quotation_client.get(f"/api/client/{candidate.token}/{suffix}")
             ok(
                 f"{suffix} from {label}: refused with the same opaque body as an unknown token",
-                resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+                resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
             )
 
     workspaces.use(home.id)
@@ -1938,14 +1968,14 @@ with TestClient(app) as client:
         resp = quotation_client.get(f"/api/client/{quotation_closed.token}/{suffix}")
         ok(
             f"{suffix} from closed: refused with the same opaque body as an unknown token",
-            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
         )
 
     for suffix in ("quotation.html", "quotation.pdf"):
         resp = quotation_client.get(f"/api/client/not-a-real-token-at-all/{suffix}")
         ok(
             f"{suffix} for an unknown token: refused with the same opaque body",
-            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
         )
 
     # --- A sent intake whose bundle has since been deleted is refused, not a
@@ -1964,7 +1994,7 @@ with TestClient(app) as client:
         ok(
             f"{suffix} against a sent intake whose bundle was deleted: opaque refusal, "
             "not a 500 with a traceback",
-            resp.status_code == 404 and resp.json() == {"detail": main_module._CLIENT_LINK_GONE},
+            resp.status_code == 404 and resp.json() == {"detail": client_routes._CLIENT_LINK_GONE},
         )
 
     # --- Both routes answer the same way for a renderer bug ------------------
@@ -1979,30 +2009,36 @@ with TestClient(app) as client:
     def _boom_render(*_args, **_kwargs):
         raise RuntimeError("simulated renderer bug")
 
-    _real_render_print_html = main_module.render_print_html
+    # Patched on `client_routes`, not on the rendering package. The route does
+    # The route imports `render_print_html` directly, which copies the function
+    # into that module's own globals - so rebinding it in the rendering package
+    # (or here) leaves the route calling the real renderer, the stub never
+    # fires, and this assertion passes for the wrong reason. Patch the module
+    # whose globals the call site actually resolves in.
+    _real_render_print_html = client_routes.render_print_html
     try:
-        main_module.render_print_html = _boom_render
+        client_routes.render_print_html = _boom_render
         html_boom = quotation_client.get(f"/api/client/{quotation_sent.token}/quotation.html")
     finally:
-        main_module.render_print_html = _real_render_print_html
+        client_routes.render_print_html = _real_render_print_html
     ok(
         "quotation.html: a renderer bug answers 500 with a real body, not a traceback and "
         "not this door's opaque 'gone' text",
         html_boom.status_code == 500
-        and html_boom.json() != {"detail": main_module._CLIENT_LINK_GONE},
+        and html_boom.json() != {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
-    _real_render_pdf = main_module.render_pdf
+    _real_render_pdf = client_routes.render_pdf
     try:
-        main_module.render_pdf = _boom_render
+        client_routes.render_pdf = _boom_render
         pdf_boom = quotation_client.get(f"/api/client/{quotation_sent.token}/quotation.pdf")
     finally:
-        main_module.render_pdf = _real_render_pdf
+        client_routes.render_pdf = _real_render_pdf
     ok(
         "quotation.pdf: a renderer bug answers 500 with a real body too - the same shape "
         "quotation.html now answers with, not merely a coincidence of two separate "
         "code paths",
-        pdf_boom.status_code == 500 and pdf_boom.json() != {"detail": main_module._CLIENT_LINK_GONE},
+        pdf_boom.status_code == 500 and pdf_boom.json() != {"detail": client_routes._CLIENT_LINK_GONE},
     )
 
     # --- .pdf runs off the event loop; .html does not, on purpose ------------
@@ -2018,12 +2054,12 @@ with TestClient(app) as client:
         "client_quotation_pdf is a plain `def` - FastAPI runs it on its threadpool, off "
         "the event loop, since reportlab's layout pass is real CPU work on a door with no "
         "rate limit of its own",
-        not inspect.iscoroutinefunction(main_module.client_quotation_pdf),
+        not inspect.iscoroutinefunction(client_routes.client_quotation_pdf),
     )
     ok(
         "client_quotation_html stays `async def` - it does no comparable CPU work, so "
         "this is a deliberate asymmetry with .pdf, not an oversight",
-        inspect.iscoroutinefunction(main_module.client_quotation_html),
+        inspect.iscoroutinefunction(client_routes.client_quotation_html),
     )
 
 print()

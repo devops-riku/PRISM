@@ -36,7 +36,6 @@ import asyncio
 import base64
 import json
 import os
-import shutil
 import sys
 import tempfile
 import time
@@ -45,12 +44,13 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-intake-gate-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
-# `app.config` reads these once at import time via `load_dotenv(..., override=False)`,
+# The shared config reads these once at import time via `load_dotenv(..., override=False)`,
 # so a real backend/.env (this repo's has a Supabase project configured) would
 # otherwise win and turn on token verification - every request below is
 # headerless, so the gate would 401 all of them before a single route ran.
@@ -74,10 +74,19 @@ os.environ["DO_SPACES_ENDPOINT"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import config, inbox, intakefiles, intakes, jobs, main, members, workspaces  # noqa: E402
-from app.gemini_service import GeminiConfigError, GeminiResponseError  # noqa: E402
-from app.schemas import BriefCheck  # noqa: E402
-from app.schemas import Estimate  # noqa: E402
+from app import main  # noqa: E402
+from app.features.intakes.application import service as intakes  # noqa: E402
+from app.features.intakes.infrastructure import files as intakefiles  # noqa: E402
+from app.features.intakes.presentation import client_routes  # noqa: E402
+from app.features.jobs.application import service as jobs  # noqa: E402
+from app.features.notifications.infrastructure import inbox  # noqa: E402
+from app.features.quotations.domain.models import BriefCheck, Estimate  # noqa: E402
+from app.features.quotations.infrastructure.gemini import GeminiConfigError, GeminiResponseError  # noqa: E402
+from app.features.quotations.presentation import routes as quotation_routes  # noqa: E402
+from app.features.team.infrastructure import members  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
+from app.shared.infrastructure import config, database  # noqa: E402
+from app.shared.presentation.http import middleware as api_middleware  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -201,7 +210,7 @@ entry = intakes.create(
 # `/api/proposals` needs the same hop, for the same reason.
 intakes.advance(entry.id, intakes.SUBMITTED)
 
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 response = client.post(
     "/api/proposals",
     headers=headers,
@@ -225,7 +234,7 @@ ok("the client's own words are untouched", done.scope == "A booking site for a t
 # pointing at what is now on screen, not at both bundles or, worse, still the
 # first one.
 first_bundle_ids = list(done.bundle_ids)
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 second_pass = client.post(
     "/api/proposals",
     headers=headers,
@@ -263,7 +272,7 @@ tiered = intakes.create(
     created_by="riku@neptune.ph",
 )
 intakes.advance(tiered.id, intakes.SUBMITTED)  # see the comment above `entry`
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 client.post(
     "/api/proposals",
     headers=headers,
@@ -293,7 +302,7 @@ second = intakes.create(
     created_by="riku@neptune.ph",
 )
 intakes.advance(second.id, intakes.SUBMITTED)  # see the comment above `entry`
-main.generate_estimate = stub_failure
+quotation_routes.generate_estimate = stub_failure
 client.post(
     "/api/proposals",
     headers=headers,
@@ -317,13 +326,28 @@ ok(
 # rather than the generic failure, and that the flag switches the whole thing
 # out. Whether the model's judgement is any good is a different question and
 # not one a check script can answer.
-import app.config as config_module  # noqa: E402
-import app.gemini_service as gemini_module  # noqa: E402
+import app.features.quotations.infrastructure.gemini as gemini_module  # noqa: E402
+import app.shared.infrastructure.config as config_module  # noqa: E402
 
 #: The genuine article, captured before any stub replaces it - the fail-open
 #: case below needs the REAL function, because what it is testing is that
 #: function's own error handling.
-REAL_BRIEF_CHECK = main.check_brief_is_real
+def _stub_brief_check(fn):
+    """Replace the model's brief check everywhere it is looked up.
+
+    It used to live in `main.py`, where one assignment covered every call site.
+    The split gave it two, in different modules - `app/api/client.py` for the
+    stranger's door and `app/api/quotations.py` for the studio's - and each
+    resolves the name in its OWN module globals. Patching one leaves the other
+    calling the real thing, which on a machine with a key configured means a
+    live model call from a file whose whole premise is that it is offline. So
+    both, always, from one place.
+    """
+    for module in (client_routes, quotation_routes):
+        module.check_brief_is_real = fn
+
+
+REAL_BRIEF_CHECK = quotation_routes.check_brief_is_real
 
 
 async def stub_refuses(_text):
@@ -340,8 +364,8 @@ not_a_brief = intakes.create(
     budget_text="", preset={}, created_by="riku@neptune.ph",
 )
 intakes.advance(not_a_brief.id, intakes.SUBMITTED)
-main.generate_estimate = stub_estimate
-main.check_brief_is_real = stub_refuses
+quotation_routes.generate_estimate = stub_estimate
+_stub_brief_check(stub_refuses)
 config_module.CHECK_BRIEF_IS_REAL = True
 priced_before = len(PRICED_CALLS)
 client.post(
@@ -412,7 +436,7 @@ config_module.CHECK_BRIEF_IS_REAL = True
 # is how the mistake was caught. `_get_client` is what `check_brief_is_real`
 # reaches for first, so a client that cannot be built is the closest offline
 # stand-in for the API being unreachable.
-main.check_brief_is_real = REAL_BRIEF_CHECK
+_stub_brief_check(REAL_BRIEF_CHECK)
 _real_get_client = gemini_module._get_client  # noqa: SLF001
 
 
@@ -438,7 +462,7 @@ ok(
 
 gemini_module._get_client = _real_get_client  # noqa: SLF001
 config_module.CHECK_BRIEF_IS_REAL = True
-main.check_brief_is_real = stub_accepts
+_stub_brief_check(stub_accepts)
 
 # 2. GeminiConfigError - the key is missing or rejected.
 config_broken = intakes.create(
@@ -450,7 +474,7 @@ config_broken = intakes.create(
     created_by="riku@neptune.ph",
 )
 intakes.advance(config_broken.id, intakes.SUBMITTED)  # see the comment above `entry`
-main.generate_estimate = stub_config_error
+quotation_routes.generate_estimate = stub_config_error
 client.post(
     "/api/proposals",
     headers=headers,
@@ -476,7 +500,7 @@ response_broken = intakes.create(
     created_by="riku@neptune.ph",
 )
 intakes.advance(response_broken.id, intakes.SUBMITTED)  # see the comment above `entry`
-main.generate_estimate = stub_response_error
+quotation_routes.generate_estimate = stub_response_error
 client.post(
     "/api/proposals",
     headers=headers,
@@ -505,7 +529,7 @@ target_broken = intakes.create(
     created_by="riku@neptune.ph",
 )
 intakes.advance(target_broken.id, intakes.SUBMITTED)  # see the comment above `entry`
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 client.post(
     "/api/proposals",
     headers=headers,
@@ -565,7 +589,7 @@ broken_stamp = intakes.create(
 # because the stamp genuinely never landed, and that is only true if it
 # reached `submitted` before the patch was in place to swallow it.
 intakes.advance(broken_stamp.id, intakes.SUBMITTED)
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 try:
     intakes.advance = _boom_advance
     stamp_broken = client.post(
@@ -593,7 +617,7 @@ ok(
 
 # --- The field is optional, and a quotation without one must behave exactly
 #     as before. ----------------------------------------------------------
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 plain = client.post("/api/proposals", headers=headers, data={"brief": "No intake here, just a booking site for two dental clinics."})
 ok("a quotation with no intake_id still answers 202", plain.status_code == 202)
 
@@ -731,7 +755,7 @@ def price(
     """One Generate through the real handler, waited out, with the capture reset."""
     SEEN.clear()
     NOTES.clear()
-    main.generate_estimate = stub_capture
+    quotation_routes.generate_estimate = stub_capture
     inbox.notify = stub_notify
     try:
         payload = {"brief": brief}
@@ -875,17 +899,24 @@ finally:
 # proves the behaviour and not the layer: it would pass just as well if the
 # manifest had been found and the bytes then refused, or if nothing had been
 # looked up at all. So the first layer is removed - beta is given a real intake
-# record with the *same id and the same manifest*, copied on disk, exactly as
+# record with the *same id and the same manifest*, copied in SQL, exactly as
 # though `intakes.get` were not workspace-scoped - and the same request is run
 # again. Storage's own workspace-scoped prefix has to refuse it on its own.
 #
 # It is also the honest version of Step 3: a record that names files storage
 # does not have is precisely what a closed intake is, and what must be reported
 # rather than raised.
-gamma_record = workspaces.dir_for(gamma.id) / intakes.DIRNAME / f"{both_kinds}.json"
-beta_records = workspaces.dir_for(beta.id) / intakes.DIRNAME
-beta_records.mkdir(parents=True, exist_ok=True)
-shutil.copyfile(gamma_record, beta_records / f"{both_kinds}.json")
+gamma_record = database.get(gamma.id, intakes.RECORD_KIND, both_kinds)
+beta_payload = dict(gamma_record.payload)
+# Tokens are globally unique in SQL and irrelevant to this authenticated path.
+beta_payload["token"] = ""
+database.put(
+    beta.id,
+    intakes.RECORD_KIND,
+    both_kinds,
+    beta_payload,
+    sort_key=str(beta_payload.get("created_at", "")),
+)
 
 borrowed = workspaces.borrow(beta.id)
 try:
@@ -1053,7 +1084,7 @@ ok(
     and "scope.txt could not be read from storage" in note_bodies(),
 )
 
-main.generate_estimate = stub_estimate
+quotation_routes.generate_estimate = stub_estimate
 # The section below drives raw ASGI rather than this client, and nothing after
 # it needs a background task to finish, so the long-lived loop is given back
 # here rather than left running to the end of the process.
@@ -1145,7 +1176,7 @@ def drive(
 
 
 JSON_HEADERS = [(b"content-type", b"application/json"), (b"transfer-encoding", b"chunked")]
-JSON_CAP = main._MAX_CLIENT_BODY_BYTES  # noqa: SLF001
+JSON_CAP = api_middleware._MAX_CLIENT_BODY_BYTES  # noqa: SLF001
 BOGUS = "/api/client/not-a-real-token-at-all/submit"
 
 # Twenty times the cap, offered a chunk at a time. A gate that only reads

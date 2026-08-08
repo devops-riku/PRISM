@@ -17,6 +17,7 @@ import { currentWorkspace, setCurrentWorkspace } from './workspace'
 import type {
   Currency,
   DocumentKind,
+  Health,
   Intake,
   IntakeAttachment,
   IntakeIssued,
@@ -1283,9 +1284,41 @@ export async function createIntake(
  * one candidate on file, so which one the client sees is a decision somebody
  * makes rather than an accident of ordering.
  */
+export type QuotationDraft = {
+  /** The subject line as the studio last saw it. */
+  subject: string
+  /** The body as the studio last saw it, newlines and all. */
+  message: string
+  /**
+   * False when the studio is delivering the link themselves - the intake
+   * advances and nothing is emailed. The compose window sets this when the
+   * server has no mail configured, and when somebody chooses Copy over Send.
+   */
+  notify: boolean
+}
+
+/**
+ * Hand a prepared quotation to the client: `quoted -> sent`. Admin-only, and
+ * `bundleId` is required rather than inferred - the server refuses a bundle
+ * that is not this request's own, and a re-quoted request can have more than
+ * one candidate on file, so which one the client sees is a decision somebody
+ * makes rather than an accident of ordering.
+ *
+ * `draft` is what the studio read in the compose window before pressing Send.
+ * It is passed up rather than composed on the server so the words on screen and
+ * the words in the client's inbox cannot drift apart. Omitted entirely, the
+ * server writes its own - which is what every caller that is not the compose
+ * window does.
+ *
+ * **A 502 here means the email was refused and the intake did NOT move.** The
+ * server mails first and advances second precisely so that a row reading `sent`
+ * always means a client was really emailed; a caller that treats 502 as "it
+ * probably went through" throws that away.
+ */
 export async function sendIntake(
   id: string,
   bundleId: string,
+  draft?: QuotationDraft,
   options: CallOptions = {},
 ): Promise<Intake> {
   const intakeId = String(id ?? '').trim()
@@ -1293,13 +1326,38 @@ export async function sendIntake(
   const bundle = String(bundleId ?? '').trim()
   if (!bundle) throw new ApiError('Say which quotation to send.', { kind: 'validation' })
 
+  const body: Record<string, unknown> = { bundle_id: bundle }
+  if (draft) {
+    body.subject = draft.subject
+    body.message = draft.message
+    body.notify = draft.notify
+  }
+
   const sent = await request<Intake>(`/intakes/${encodeURIComponent(intakeId)}/send`, {
     method: 'POST',
-    body: JSON.stringify({ bundle_id: bundle }),
+    body: JSON.stringify(body),
     headers: { 'Content-Type': 'application/json' },
     signal: options.signal,
   })
   return readIntake(sent)
+}
+
+/**
+ * What this server can do, as it reports itself. Used by the compose window to
+ * decide whether it can offer Send at all, or only Copy.
+ *
+ * Deliberately forgiving: a server too old to report `mail_configured` answers
+ * without the field, and the window then behaves exactly as PRISM did before it
+ * could send anything. A missing capability reads as absent, never as present.
+ */
+export async function fetchHealth(options: CallOptions = {}): Promise<Health> {
+  const data = await request<Record<string, unknown>>('/health', options)
+  return {
+    status: typeof data?.status === 'string' ? data.status : '',
+    model: typeof data?.model === 'string' ? data.model : '',
+    key_configured: data?.key_configured === true,
+    mail_configured: data?.mail_configured === true,
+  }
 }
 
 /**

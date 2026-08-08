@@ -48,12 +48,13 @@ for stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):  # pragma: no cover - non-standard stream
         pass
 
-# Set before `app.config` is imported, because it reads the environment once at
+# Set before shared config is imported, because it reads the environment once at
 # import time. A real variable wins over backend/.env, so blanking the Supabase
 # settings is what lets this call the API without a token, and GENERATED_DIR
 # keeps every file this writes out of the studio's own generated/ folder.
 SCRATCH = Path(mkdtemp(prefix="prism-kind-check-"))
 os.environ["GENERATED_DIR"] = str(SCRATCH)
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
@@ -66,14 +67,15 @@ os.environ["SUPABASE_JWT_SECRET"] = ""
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main as api  # noqa: E402
+from app.features.quotations.presentation import routes as quotation_routes  # noqa: E402
 
 # `app.main` configures the root logger on import. Four quotations' worth of
 # progress logging would bury the three lines this script exists to print, and
 # a real failure is logged at ERROR and still gets through.
 logging.getLogger().setLevel(logging.WARNING)
 
-from app import workspaces  # noqa: E402
-from app.schemas import (  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
+from app.features.quotations.domain.models import (  # noqa: E402
     ClientNarrative,
     CostSummary,
     Estimate,
@@ -151,7 +153,7 @@ def main() -> int:
     print("=" * 78)
     print(f"  scratch  {SCRATCH}")
 
-    api.generate_estimate = _stubbed_gemini  # type: ignore[assignment]
+    quotation_routes.generate_estimate = _stubbed_gemini  # type: ignore[assignment]
 
     with TestClient(api.app) as client:
         # A scratch generated/ has no workspace, and every handler that files

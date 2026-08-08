@@ -1,7 +1,7 @@
 """PRISM offline smoke test - the whole render path, no network, no API key.
 
 Builds a fully populated `Estimate` by hand, runs it through
-`app.costing.recompute`, asserts the arithmetic is internally consistent, then
+quotation-domain `costing.recompute`, asserts the arithmetic is internally consistent, then
 renders both markdown deliverables and both printable HTML pages and writes
 everything to `backend/generated/_smoke/`.
 
@@ -35,14 +35,14 @@ for stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):  # pragma: no cover - non-standard stream
         pass
 
-from app.costing import CostingError, money_decimals, recompute, snap_to_total  # noqa: E402
-from app.renderers import (  # noqa: E402
+from app.features.quotations.domain.costing import CostingError, money_decimals, recompute, snap_to_total  # noqa: E402
+from app.features.rendering.presentation import (  # noqa: E402
     render_client_proposal,
     render_developer_requirements,
     render_print_html,
 )
-from app.renderers.money import currency_decimals, format_amount  # noqa: E402
-from app.schemas import (  # noqa: E402
+from app.features.rendering.presentation.money import currency_decimals, format_amount  # noqa: E402
+from app.features.quotations.domain.models import (  # noqa: E402
     ApiEndpoint,
     ClientNarrative,
     Confidence,

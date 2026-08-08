@@ -1197,3 +1197,18 @@ export type AuthConfig = {
   /** The publishable key. Public by design; the secret is never sent. */
   anon_key: string
 }
+
+/**
+ * What this server can do, as it reports itself. `/api/health`.
+ *
+ * Two capability flags rather than one, and neither says anything about the
+ * key behind it - only whether one exists. `key_configured` decides whether a
+ * brief can be priced at all; `mail_configured` decides whether the compose
+ * window can offer to send a quotation, or only to copy it.
+ */
+export type Health = {
+  status: string
+  model: string
+  key_configured: boolean
+  mail_configured: boolean
+}

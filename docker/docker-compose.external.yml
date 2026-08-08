@@ -1,0 +1,114 @@
+# PRISM behind an existing Traefik instance.
+# The proxy itself is owned by another Compose project and must already be
+# attached to TRAEFIK_NETWORK_NAME on the deployment host.
+name: prism-neptune
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prism}
+      POSTGRES_USER: ${POSTGRES_USER:-prism}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    shm_size: 128mb
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      traefik.enable: "false"
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-prism}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env}@postgres:5432/${POSTGRES_DB:-prism}
+      GENERATED_DIR: /app/generated
+      HOST: 0.0.0.0
+      PORT: 8000
+      APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:?Set APP_HOST in docker/.env}}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${APP_HOST:?Set APP_HOST in docker/.env}}
+    volumes:
+      - generated_data:/app/generated
+    networks:
+      - traefik-proxy
+      - data
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: asseqr-system_app-network
+      traefik.http.routers.prism-neptune-api.rule: Host(`${APP_HOST:?Set APP_HOST in docker/.env}`) && PathPrefix(`/api`)
+      traefik.http.routers.prism-neptune-api.entrypoints: ${TRAEFIK_ENTRYPOINT:?Set TRAEFIK_ENTRYPOINT in docker/.env}
+      traefik.http.routers.prism-neptune-api.priority: "100"
+      traefik.http.routers.prism-neptune-api.tls: "true"
+      traefik.http.routers.prism-neptune-api.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?Set TRAEFIK_CERTRESOLVER in docker/.env}
+      traefik.http.routers.prism-neptune-api.service: prism-neptune-api
+      traefik.http.routers.prism-neptune-api.middlewares: prism-neptune-api-compress@docker,prism-neptune-api-security@docker
+      traefik.http.services.prism-neptune-api.loadbalancer.server.port: "8000"
+      traefik.http.middlewares.prism-neptune-api-compress.compress: "true"
+      traefik.http.middlewares.prism-neptune-api-security.headers.contenttypenosniff: "true"
+      traefik.http.middlewares.prism-neptune-api-security.headers.framedeny: "true"
+      traefik.http.middlewares.prism-neptune-api-security.headers.referrerpolicy: strict-origin-when-cross-origin
+      traefik.http.middlewares.prism-neptune-api-security.headers.permissionspolicy: camera=(), microphone=(), geolocation=()
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    init: true
+    networks:
+      - traefik-proxy
+    depends_on:
+      backend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: asseqr-system_app-network
+      traefik.http.routers.prism-neptune-web.rule: Host(`${APP_HOST:?Set APP_HOST in docker/.env}`)
+      traefik.http.routers.prism-neptune-web.entrypoints: ${TRAEFIK_ENTRYPOINT:?Set TRAEFIK_ENTRYPOINT in docker/.env}
+      traefik.http.routers.prism-neptune-web.priority: "10"
+      traefik.http.routers.prism-neptune-web.tls: "true"
+      traefik.http.routers.prism-neptune-web.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?Set TRAEFIK_CERTRESOLVER in docker/.env}
+      traefik.http.routers.prism-neptune-web.service: prism-neptune-web
+      traefik.http.routers.prism-neptune-web.middlewares: prism-neptune-web-compress@docker,prism-neptune-web-security@docker
+      traefik.http.services.prism-neptune-web.loadbalancer.server.port: "8080"
+      traefik.http.middlewares.prism-neptune-web-compress.compress: "true"
+      traefik.http.middlewares.prism-neptune-web-security.headers.contenttypenosniff: "true"
+      traefik.http.middlewares.prism-neptune-web-security.headers.framedeny: "true"
+      traefik.http.middlewares.prism-neptune-web-security.headers.referrerpolicy: strict-origin-when-cross-origin
+      traefik.http.middlewares.prism-neptune-web-security.headers.permissionspolicy: camera=(), microphone=(), geolocation=()
+
+networks:
+  traefik-proxy:
+    external: true
+    name: asseqr-system_app-network
+  data:
+    name: ${COMPOSE_PROJECT_NAME:-prism-neptune}_data
+    internal: true
+
+volumes:
+  postgres_data:
+  generated_data:

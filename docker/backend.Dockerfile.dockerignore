@@ -1,0 +1,21 @@
+**
+!backend/
+!backend/requirements.txt
+!backend/alembic.ini
+!backend/app/
+!backend/app/**
+!backend/migrations/
+!backend/migrations/**
+!backend/alembic/
+!backend/alembic/**
+
+# Re-exclude local/runtime material pulled back in by the parent-directory
+# exception above. In particular, never send backend/.env to the builder.
+backend/.env
+backend/.env.*
+backend/.venv/
+backend/generated/
+backend/scripts/
+backend/.gstack/
+backend/**/__pycache__/
+backend/**/*.pyc

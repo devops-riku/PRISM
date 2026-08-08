@@ -39,12 +39,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="prism-client-upload-")
+os.environ["DATABASE_URL"] = ""
 # Off, because every check in this project runs OFFLINE. The brief check is a
 # real Gemini call on the generation path; left on, these scripts would reach
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
-# Blanked before `app.config` reads the environment, exactly as every other
+# Blanked before the shared config reads the environment, exactly as every other
 # API-level check script does: `config` loads `backend/.env` once at import via
 # `load_dotenv(..., override=False)`, and this repo's real one names an actual
 # Supabase project.
@@ -72,14 +73,15 @@ from PIL import Image  # noqa: E402
 from reportlab.lib.pagesizes import A4  # noqa: E402
 from reportlab.pdfgen import canvas  # noqa: E402
 
-from app import clientview  # noqa: E402
-from app import config  # noqa: E402
-from app import intakefiles  # noqa: E402
-from app import intakes  # noqa: E402
 from app import main as main_module  # noqa: E402
-from app import settings  # noqa: E402
-from app import workspaces  # noqa: E402
+from app.features.intakes.application import client_view as clientview  # noqa: E402
+from app.features.intakes.application import service as intakes  # noqa: E402
+from app.features.intakes.infrastructure import files as intakefiles  # noqa: E402
+from app.features.intakes.presentation import client_routes  # noqa: E402
+from app.features.workspaces.application import settings  # noqa: E402
+from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
 from app.main import app  # noqa: E402
+from app.shared.infrastructure import config  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -724,7 +726,7 @@ with TestClient(app) as client:
         "a second submit against the same token is refused with this door's usual "
         "opaque 404",
         second.status_code == 404
-        and second.json() == {"detail": main_module._CLIENT_LINK_GONE},  # noqa: SLF001
+        and second.json() == {"detail": client_routes._CLIENT_LINK_GONE},  # noqa: SLF001
     )
     after_second = intakes.get(both.id)
     ok(
@@ -761,24 +763,24 @@ with TestClient(app) as client:
     # must be told their submission was lost rather than told the link is dead.
 
     failing = fresh()
-    _real_save = main_module.intakefiles.save
+    _real_save = intakefiles.save
 
     def _save_that_fails(*_args, **_kwargs):
         raise intakefiles.IntakeFileError("That file could not be saved.")
 
     try:
-        main_module.intakefiles.save = _save_that_fails
+        intakefiles.save = _save_that_fails
         save_failed = submit(
             failing.token,
             files=[("documents", ("scope.pdf", PDF, "application/pdf"))],
         )
     finally:
-        main_module.intakefiles.save = _real_save
+        intakefiles.save = _real_save
 
     ok("a storage failure answers 500, not this door's usual refusal", save_failed.status_code == 500)
     ok(
         "and not the opaque 'gone' body - a lost submission must not read as a dead link",
-        save_failed.json() != {"detail": main_module._CLIENT_LINK_GONE},  # noqa: SLF001
+        save_failed.json() != {"detail": client_routes._CLIENT_LINK_GONE},  # noqa: SLF001
     )
     untouched(failing, "a save that failed")
 

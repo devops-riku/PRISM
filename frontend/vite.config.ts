@@ -34,9 +34,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
 
   server: {
-    port: 5173,
-    // The backend's CORS allow-list names 5173 explicitly. Silently sliding to
-    // 5174 when the port is busy would produce a confusing CORS failure later,
+    port: 5174,
+    // The backend's CORS allow-list names 5174 explicitly. Silently sliding to
+    // another port when it is busy would produce a confusing CORS failure later,
     // so fail loudly at start-up instead.
     strictPort: true,
     proxy: apiProxy,
@@ -45,7 +45,7 @@ export default defineConfig({
   // `npm run preview` serves the production build; it needs the same proxy or
   // every request for a bundle or a document 404s against the static server.
   preview: {
-    port: 5173,
+    port: 5174,
     strictPort: true,
     proxy: apiProxy,
   },

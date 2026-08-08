@@ -9,8 +9,10 @@ import {
   relinkIntake,
   sendIntake,
 } from '../lib/api'
+import type { QuotationDraft } from '../lib/api'
 import { formatBytes, formatDate } from '../lib/format'
 import RowMenu from './RowMenu'
+import SendToClientDialog from './SendToClientDialog'
 import { useRole } from '../lib/role'
 import { ACTION, ACTION_PRIMARY, CARD, DISPLAY, MONO_LABEL, WELL } from './tokens'
 import { openAttachment } from '../lib/openAttachment'
@@ -521,7 +523,6 @@ type IntakeRowProps = {
   copyNote: string
   onCancel: () => void
   onClose: (id: string) => void
-  onSend: (id: string, bundleId: string) => void
   onReissue: (id: string) => void
   onDismissLink: (id: string) => void
 }
@@ -541,7 +542,6 @@ function IntakeRow({
   copyNote,
   onCancel,
   onClose,
-  onSend,
   onReissue,
   onDismissLink,
 }: IntakeRowProps) {
@@ -817,98 +817,12 @@ function IntakeRow({
         </p>
       ) : null}
 
-      {confirming === 'send' ? (
-        <ConfirmPanel label="Send to client">
-          {busy === 'send' ? (
-            <p className="mt-1 font-body text-[13.5px] leading-[1.6] text-void">
-              Sending it to the client.
-            </p>
-          ) : row.bundle_ids.length > 1 ? (
-            // More than one quotation on file, so which one the client sees is
-            // a decision rather than an accident of ordering - `send_intake`
-            // takes the id explicitly for exactly this reason. They are
-            // numbered rather than named because nothing on the record names
-            // them: the intake carries bare ids, and the preset's tier names
-            // are what the studio *asked* for before the pad had its say, not
-            // a description of what came back. So each one opens instead.
-            <>
-              <p className="mt-1 max-w-[62ch] font-body text-[13.5px] leading-[1.6] text-body">
-                This request has {row.bundle_ids.length} quotations on file and the client sees one
-                of them. Open them to see which is which, then send that one. You cannot unsend it.
-              </p>
-              <ul className="mt-2 flex flex-col gap-2">
-                {row.bundle_ids.map((id, index) => (
-                  <li key={id} className="flex flex-wrap items-center gap-2">
-                    <span className={MONO_LABEL}>Quotation {index + 1}</span>
-                    {/* A new tab, and the only place in this file that opens
-                        one. Every other link here replaces the queue happily,
-                        but this confirm is component state: navigating away
-                        and coming back with Back would leave the panel closed,
-                        so "open them, then send that one" would be two passes
-                        and the sentence above would be a lie. A hash href
-                        resolves against this document, so the new tab boots
-                        the app straight at the quotation. */}
-                    <a
-                      href={`#/q/${id}`}
-                      target="_blank"
-                      rel="noopener"
-                      className={ACTION}
-                      aria-label={`Open quotation ${index + 1} in a new tab`}
-                    >
-                      Open it
-                    </a>
-                    <button
-                      type="button"
-                      disabled={locked}
-                      className={ACTION_PRIMARY}
-                      onClick={() => onSend(row.id, id)}
-                    >
-                      Send this one
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-2">
-                <button type="button" className={ACTION} onClick={onCancel}>
-                  Not yet
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="mt-1 max-w-[62ch] font-body text-[13.5px] leading-[1.6] text-body">
-                The client opens their own link and reads this quotation there, and can ask for a
-                change or finalize it from the same page. You cannot unsend it.
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={locked}
-                  className={ACTION_PRIMARY}
-                  onClick={() => onSend(row.id, row.bundle_ids[0] || '')}
-                >
-                  Send it
-                </button>
-                {/* A new tab for the same reason the numbered ones above take
-                    one: reading it first must not close the confirm that
-                    offered it. */}
-                <a
-                  href={`#/q/${row.bundle_ids[0] || ''}`}
-                  target="_blank"
-                  rel="noopener"
-                  aria-label="Read this quotation first, in a new tab"
-                  className={ACTION}
-                >
-                  Read it first
-                </a>
-                <button type="button" className={ACTION} onClick={onCancel}>
-                  Not yet
-                </button>
-              </div>
-            </>
-          )}
-        </ConfirmPanel>
-      ) : null}
+      {/* Send has no panel here any more - it opens `SendToClientDialog`,
+          rendered once at the screen level below. A compose window is not a
+          row-level control: it is modal, it is the width of a page, and two
+          of them open at once would be two half-written emails. What used to
+          live here - the choice between several quotations on file, and the
+          warning that a send cannot be taken back - moved into it intact. */}
 
       {confirming === 'reissue' ? (
         <ConfirmPanel label="Reissue link" danger>
@@ -1099,8 +1013,22 @@ export default function IntakeListScreen() {
       'That request was not closed.',
     )
 
-  const handleSend = (id: string, bundleId: string) =>
-    act(id, 'send', () => sendIntake(id, bundleId), 'That quotation was not sent to the client.')
+  //: The row whose compose window is open, or null. Looked up from `rows`
+  //: rather than held separately so the window always renders the current
+  //: record - a queue refresh mid-compose must not leave it showing a stale
+  //: address or a bundle list that has since changed.
+  const sendingRow =
+    confirming && confirming.action === 'send'
+      ? rows.find((row) => row.id === confirming.id) || null
+      : null
+
+  const handleSend = (id: string, bundleId: string, draft: QuotationDraft) =>
+    act(
+      id,
+      'send',
+      () => sendIntake(id, bundleId, draft),
+      'That quotation was not sent to the client.',
+    )
 
   /**
    * Copy the link this request already has. No confirm and no `act()`: it
@@ -1234,7 +1162,6 @@ export default function IntakeListScreen() {
                   copyNote={copyNotes.get(row.id) || ''}
                   onCancel={() => setConfirming(null)}
                   onClose={handleClose}
-                  onSend={handleSend}
                   onReissue={handleReissue}
                   onDismissLink={forget}
                 />
@@ -1243,6 +1170,32 @@ export default function IntakeListScreen() {
           </div>
         ) : null}
       </section>
+
+      {/* One compose window for the whole screen, opened by whichever row asked
+          for it. Rendered here rather than inside the row because a modal is
+          not a row's to own: two of them would be two half-written emails, and
+          a row that unmounts while its dialog is open - which happens the
+          moment a send succeeds and the row changes section - would take the
+          window down mid-keystroke.
+
+          `problem` is passed in only when it belongs to this send. `act` clears
+          it before every call, so anything left over with heading "Not done"
+          while the send dialog is open is this send's own refusal - a 502 from
+          a mail service that would not take the message. It has to be shown
+          INSIDE the window, because the screen-level banner it would otherwise
+          land in is behind the backdrop where nobody can read it. */}
+      {sendingRow ? (
+        <SendToClientDialog
+          row={sendingRow}
+          busy={Boolean(busy && busy.id === sendingRow.id && busy.action === 'send')}
+          error={problem && problem.heading === 'Not done' ? problem.detail : ''}
+          onSend={(bundleId, draft) => handleSend(sendingRow.id, bundleId, draft)}
+          onClose={() => {
+            setProblem(null)
+            setConfirming(null)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

@@ -5,7 +5,7 @@ Three questions, no network and no API key:
   1. Is the software brief byte-identical to what it was before disciplines
      existed? Every quotation prepared until now is a software quotation and
      none of them may change by a character - so the briefs are hashed, and the
-     hashes below were taken from `app.prompts` before it was edited.
+     hashes below were taken from the quotation prompt module before it was edited.
   2. Does an accounting brief speak accounting, and does it stop asking for the
      software fields?
   3. Does every non-software brief name that discipline's own section headings,
@@ -42,12 +42,13 @@ for stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):  # pragma: no cover - non-standard stream
         pass
 
-from app import kinds, prompts  # noqa: E402
-from app.gemini_service import _build_contents  # noqa: E402
-from app.schemas import ProposalRequest  # noqa: E402
+from app.features.quotations.application import prompts  # noqa: E402
+from app.features.quotations.domain import kinds  # noqa: E402
+from app.features.quotations.domain.models import ProposalRequest  # noqa: E402
+from app.features.quotations.infrastructure.gemini import _build_contents  # noqa: E402
 
 
-#: Taken from `app.prompts` before the kind branch was added to it.
+#: Taken from the quotation prompt module before the kind branch was added.
 #:
 #: Re-baselined twice in Stage 2 Task 6:
 #:
@@ -205,7 +206,7 @@ def check_accounting_vocabulary() -> None:
     report(WANTED in brief, f"the brief contains {WANTED!r}")
 
     # The forbidden words are checked against what PRISM writes, not against the
-    # guidance quoted from app/kinds.py - which contains all three, inside its
+    # guidance quoted from the quotation kind module - which contains all three, inside its
     # own prohibition: "Never write about a tech stack, an API, a deployment".
     # A check that fails on the sentence forbidding the thing is not a check.
     authored = brief.replace(kind.guidance, "")

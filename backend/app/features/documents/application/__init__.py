@@ -1,0 +1,1 @@
+"""Proposal document use cases."""

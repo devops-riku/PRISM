@@ -1,10 +1,8 @@
 """PRISM backend package.
 
-Deliberately inert: importing `app` must have no side effects and must not pull
-in `config`, `gemini_service` or `renderers`. Every module imports what it needs
-by its full path (`from app.config import ...`), which keeps the import graph
-acyclic and lets `config`, `costing`, `prompts` and `storage` be imported and
-tested without an API key present.
+Deliberately inert: importing ``app`` has no side effects. Runtime code uses
+explicit canonical paths under ``app.features`` and ``app.shared`` so every
+dependency's owner is visible without loading the composition root.
 """
 
 __all__: list[str] = []

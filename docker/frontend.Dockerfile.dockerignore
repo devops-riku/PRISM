@@ -1,0 +1,23 @@
+**
+!frontend/
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/index.html
+!frontend/tsconfig.json
+!frontend/tsconfig.node.json
+!frontend/vite.config.ts
+!frontend/src/
+!frontend/src/**
+!frontend/public/
+!frontend/public/**
+!docker/
+!docker/nginx.conf
+
+# The directory exception above is necessary to reach src/, but must not make
+# the local dependency tree or previous build output part of the build context.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.tscheck/
+frontend/.gstack/
+frontend/*.tsbuildinfo

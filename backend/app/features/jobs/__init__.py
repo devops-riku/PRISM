@@ -1,0 +1,1 @@
+"""Background generation job lifecycle."""

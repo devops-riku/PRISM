@@ -4,6 +4,12 @@ import { createRoot } from 'react-dom/client'
 
 // The design system first, so every rule is in place before anything paints.
 import './index.css'
+// Before anything that could touch the URL. This reads what a provider sent us
+// back with and clears it; `detectSessionInUrl` would otherwise consume the same
+// parameters and the reason for a failed Google or Facebook sign-in would be
+// gone before the screen that has to explain it ever mounts. Import order is the
+// mechanism, so this line stays above `App`.
+import './lib/oauthReturn'
 import App from './App'
 import AuthGate from './components/AuthGate'
 import ClientShell from './components/client/ClientShell'

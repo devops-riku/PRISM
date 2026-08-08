@@ -43,11 +43,11 @@ You need Python 3.10 or newer, Node 20 or newer, and a Gemini API key.
    ./run.sh
    ```
 
-3. Open http://localhost:5173
+3. Open http://localhost:5174
 
 `run.ps1` and `run.sh` create the virtual environment, install backend and
-frontend dependencies the first time, start the API on port 8000 and the web
-client on port 5173, print both URLs, and shut both down on Ctrl+C. Later runs
+frontend dependencies the first time, apply database migrations, start the API
+on port 8000 and the web client on port 5174, print both URLs, and shut both down on Ctrl+C. Later runs
 skip the installs. To force a dependency reinstall, delete the marker file
 `backend/.venv/.prism-deps-installed`.
 
@@ -92,7 +92,7 @@ file; `--reload` does not pick up environment changes on its own.
 
 ## Running the servers manually
 
-Both servers must be running. The web client on 5173 proxies `/api` to the API
+Both servers must be running. The web client on 5174 proxies `/api` to the API
 on 8000.
 
 ### Windows
@@ -105,7 +105,8 @@ cd backend
 py -m venv .venv
 .venv\Scripts\Activate.ps1
 py -m pip install -r requirements.txt
-py -m uvicorn app.main:app --reload --port 8000
+py -m alembic -c alembic.ini upgrade head
+py -m uvicorn app.main:app --reload --no-access-log --port 8000
 ```
 
 The `py` launcher uses the interpreter of an activated virtual environment, so
@@ -120,7 +121,8 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8000
+python -m alembic -c alembic.ini upgrade head
+python -m uvicorn app.main:app --reload --no-access-log --port 8000
 ```
 
 ### Frontend, both platforms
@@ -133,16 +135,31 @@ npm install
 npm run dev
 ```
 
-Then open http://localhost:5173.
+Then open http://localhost:5174.
 
 Check the API on its own at http://localhost:8000/api/health. It reports the
 model in use and whether a key is configured.
+
+### Database modes
+
+No database setup is needed locally. When `DATABASE_URL` is unset, the backend
+uses SQLite at `backend/generated/prism.db`. Set `DATABASE_URL` to a
+`postgresql+psycopg://...` URL for PostgreSQL. Existing JSON records are
+imported once and retained as a non-authoritative migration archive; a durable
+marker prevents that stale archive from being imported again after a database
+reset. Generated and uploaded files remain under `backend/generated/` or
+DigitalOcean Spaces. Back up the SQL database itself for real recovery.
+
+For the production-style PostgreSQL stack behind Traefik, see
+[`docker/README.md`](docker/README.md).
 
 ---
 
 ## API surface
 
-FastAPI app at `backend/app/main.py`, served on port 8000.
+FastAPI app served on port 8000. `backend/app/main.py` builds it and includes
+routers from the feature packages under `backend/app/features/`; the routes
+live with their owning feature, not in `main.py`.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -166,7 +183,7 @@ A 202 means the brief was accepted, not that it was priced. Everything that can
 be rejected outright — a bad currency, a payment schedule that does not total
 100%, a target above its cap — is still rejected synchronously, before a job
 exists. Pricing then runs behind the request, reporting each step as it actually
-finishes. Jobs are mirrored to `generated/_jobs/`, so they survive a reload;
+finishes. Jobs are persisted in SQL, so they survive a reload;
 anything still running when the process dies comes back marked failed rather
 than pretending to continue.
 
@@ -225,10 +242,11 @@ built first.
 Errors return `{"detail": "..."}` with a real status code. A missing API key is a
 `503` with an actionable message, not a stack trace.
 
-CORS allows `http://localhost:5173` and `http://127.0.0.1:5173`.
+CORS allows `http://localhost:5174` and `http://127.0.0.1:5174`.
 
-Each result is written to `backend/generated/{id}/` as `bundle.json`,
-`proposal.md` and `requirements.md`. That directory is git-ignored.
+Each result's structured aggregate is stored in SQL. Rendered Markdown and
+uploaded/generated assets remain under the workspace's git-ignored
+`backend/generated/` directory.
 
 ---
 
@@ -265,8 +283,10 @@ documents them with their defaults.
 |---|---|---|
 | `GEMINI_API_KEY` | none | Required to generate anything. |
 | `GEMINI_MODEL` | `gemini-3.5-flash` | Which model to call. |
+| `DATABASE_URL` | local SQLite | SQLAlchemy URL; set a `postgresql+psycopg://...` URL in production. |
 | `GENERATED_DIR` | `generated` | Where bundles are written. Relative paths resolve against `backend/`. |
-| `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated browser origins allowed to call the API. |
+| `ALLOWED_ORIGINS` | `http://localhost:5174,http://127.0.0.1:5174` | Comma-separated browser origins allowed to call the API. |
+| `APP_ORIGIN` | `http://localhost:5174` | Browser origin used in client and invitation links. |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address and port. |
 | `MAX_IMAGES` | `8` | How many images one brief may carry. |
 | `MAX_IMAGE_BYTES` | `8388608` | Per-image ceiling, in bytes. |
@@ -320,28 +340,34 @@ paste it into your own template.
 PRISM-/
   backend/
     app/
-      main.py             FastAPI app and routes
-      config.py           environment and settings
-      gemini_service.py   the single Gemini call
-      prompts.py          system instruction and brief assembly
-      costing.py          recomputes all arithmetic server-side
-      storage.py          writes and reads generated bundles
-      schemas.py          the data contract - every module renders this
-      renderers/
-        __init__.py
-        markdown.py       the two Markdown documents
-        html.py           printable HTML with the print stylesheet
-        money.py          currency formatting
+      features/           vertical business capabilities
+        quotations/       estimate, pricing, prompts, Gemini, storage, routes
+          domain/
+          application/
+          infrastructure/
+          presentation/
+        documents/        proposal design, templates, lifecycle, routes
+        intakes/          intake lifecycle, files, tokens, studio/client routes
+        workspaces/       workspace context, settings, reference numbering
+        team/             identity, membership, invitations, team routes
+        jobs/             background-job lifecycle
+        notifications/    persisted inbox and live event hub
+        rendering/        Markdown, HTML, PDF, and money output
+        platform/         health and reference endpoints
+      shared/             SQL, configuration, attachment parsing, shared HTTP
+      main.py             composition root - builds the app and includes routers
+    migrations/           Alembic SQL schema migrations
     scripts/
       smoke.py            offline test of the costing and render path
-    generated/            generated bundles, git-ignored
+      check_*.py          offline behavior and architecture checks
+    generated/            local SQLite and generated/uploaded assets, git-ignored
     requirements.txt
     .env.example
     .env                  you create this, git-ignored
   frontend/
     index.html
     package.json
-    vite.config.js        dev server on 5173, proxies /api to 8000
+    vite.config.ts        dev server on 5174, proxies /api to 8000
     src/
       main.jsx
       App.jsx
@@ -354,14 +380,18 @@ PRISM-/
   docs/
     CONTRACT.md           API shape, SDK call, stack decisions
     DESIGN.md             visual direction
+  docker/                 Traefik, PostgreSQL, backend, and frontend deployment
   README.md
   run.ps1
   run.sh
 ```
 
-Stack: FastAPI, uvicorn, `google-genai` and Pydantic on the backend; Vite,
-React 18 and Tailwind CSS v4 on the frontend. No database, no auth, no PDF
-library.
+Stack: FastAPI, uvicorn, `google-genai`, Pydantic, SQLAlchemy, SQLite/PostgreSQL,
+and Alembic on the backend; Vite, React 18 and Tailwind CSS v4 on the frontend.
+Authentication is optional through Supabase; PDF rendering uses ReportLab.
+
+See `backend/ARCHITECTURE.md` for feature boundaries, DDD layer rules, and
+canonical import conventions.
 
 ---
 
@@ -369,7 +399,8 @@ library.
 
 `backend/scripts/smoke.py` exercises everything downstream of the Gemini call
 without a key, a network connection or a running server. It builds a complete
-`Estimate` by hand, runs it through `costing.recompute`, asserts the arithmetic
+`Estimate` by hand, runs it through the quotation domain's `costing.recompute`,
+and asserts the arithmetic
 is internally consistent — line item subtotals sum to `cost.subtotal`, milestone
 amounts sum to `cost.total`, the summary adds up — then renders both Markdown
 documents and both printable HTML pages into `backend/generated/_smoke/`.
@@ -382,8 +413,8 @@ cd backend
 (`.venv/bin/python scripts/smoke.py` on macOS and Linux.) It prints what it
 proved, writes the four documents, echoes the first 40 lines of the client
 proposal so the money formatting is visible, and exits non-zero on the first
-failed assertion. Run it after touching `costing.py` or anything under
-`renderers/`.
+failed assertion. Run it after touching `app/features/quotations/domain/costing.py`
+or anything under `app/features/rendering/presentation/`.
 
 ---
 
@@ -426,8 +457,8 @@ interpreter, as above, sidesteps it. Failing that, delete `backend/.venv` and le
 ### Port already in use
 
 You will see `[Errno 10048]` or `address already in use` from uvicorn, or
-`Port 5173 is already in use` from Vite. Vite runs with `strictPort`, so it fails
-rather than sliding to 5174 and leaving you with a confusing CORS error later.
+`Port 5174 is already in use` from Vite. Vite runs with `strictPort`, so it fails
+rather than sliding to another port and leaving you with a confusing CORS error later.
 `run.ps1` and `run.sh` check both ports before starting anything and tell you
 which one is taken.
 
@@ -454,18 +485,18 @@ stop talking to each other:
   `PRISM_API_TARGET`, which `frontend/vite.config.js` reads to decide where to
   proxy `/api`, for example `PRISM_API_TARGET=http://localhost:8001 npm run dev`.
 - Web client port: the `--port` flag **and** `ALLOWED_ORIGINS` in
-  `backend/.env`, which otherwise permits only 5173.
+  `backend/.env`, which otherwise permits only 5174.
 
-`run.ps1` and `run.sh` hard-code 8000 and 5173, so start the servers manually
+`run.ps1` and `run.sh` hard-code 8000 and 5174, so start the servers manually
 when you are running on other ports.
 
 ### CORS errors in the browser console
 
 "blocked by CORS policy" means the page is not being served from an allowed
-origin. The API allows exactly `http://localhost:5173` and
-`http://127.0.0.1:5173`.
+origin. The API allows exactly `http://localhost:5174` and
+`http://127.0.0.1:5174`.
 
-Use the Vite dev server at http://localhost:5173. Opening `frontend/index.html`
+Use the Vite dev server at http://localhost:5174. Opening `frontend/index.html`
 from the filesystem gives a `file://` origin, and hitting the API's own port
 directly gives `http://localhost:8000` — both are blocked, and neither goes
 through the `/api` proxy that makes the whole app same-origin in development.
@@ -474,7 +505,7 @@ If you are deliberately serving the client from somewhere else, add that origin
 to `ALLOWED_ORIGINS` in `backend/.env` and restart the API:
 
 ```
-ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173
+ALLOWED_ORIGINS=http://localhost:5174,http://127.0.0.1:5174,http://localhost:4173
 ```
 
 ### `py -m uvicorn` says "No module named uvicorn"
@@ -484,7 +515,7 @@ is running the system Python instead of the one in `.venv`. Call the environment
 interpreter directly. From the `backend` directory:
 
 ```
-.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+.venv\Scripts\python -m uvicorn app.main:app --reload --no-access-log --port 8000
 ```
 
 That is what `run.ps1` does, which is why it never hits this.
