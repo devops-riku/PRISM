@@ -91,17 +91,17 @@ export default function WorkspacesScreen({ onChanged }: WorkspacesScreenProps) {
 
   const chosen = currentWorkspace()
 
-  const load = () =>
-    listWorkspaces()
+  const load = () => {
+    setError('')
+    return listWorkspaces()
       .then((found) => {
         setRows(found)
-        setError('')
         if (onChanged) onChanged(found)
       })
       .catch((failure) => {
-        setRows([])
         setError(failure?.message || 'The workspaces did not load.')
       })
+  }
 
   useEffect(() => {
     load()
@@ -139,8 +139,26 @@ export default function WorkspacesScreen({ onChanged }: WorkspacesScreenProps) {
   }
 
   if (rows === null) {
+    if (error) {
+      return (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <div className="max-w-[30rem] text-center">
+            <p role="alert" className="font-body text-[15px] leading-[1.6] text-void">
+              {error}
+            </p>
+            <button type="button" className={`${ACTION} mt-4`} onClick={load}>
+              Try again
+            </button>
+          </div>
+        </div>
+      )
+    }
+
     return (
-      <p className="px-5 py-12 text-center font-label text-[12px] uppercase tracking-[0.14em] text-void">
+      <p
+        aria-busy="true"
+        className="px-5 py-12 text-center font-label text-[12px] uppercase tracking-[0.14em] text-void"
+      >
         Reading
       </p>
     )

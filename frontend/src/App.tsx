@@ -449,6 +449,12 @@ export default function App() {
   // app has nowhere to file anything, which is the one state that overrides
   // whatever screen the address bar asks for.
   const [workspaceCount, setWorkspaceCount] = useState<number | null>(null)
+  // A failed list is not an empty list. Keep the app behind this gate until the
+  // server has positively answered whether at least one workspace exists; that
+  // prevents both the home screen flashing before first-workspace onboarding
+  // and a transient outage pretending this is a brand-new installation.
+  const [workspaceReadError, setWorkspaceReadError] = useState('')
+  const [workspaceLoadAttempt, setWorkspaceLoadAttempt] = useState(0)
   // What this person may do here. The server refuses the rest either way;
   // this is so the app does not offer it.
   const { isAdmin } = useRole()
@@ -621,16 +627,20 @@ export default function App() {
    */
   useEffect(() => {
     let live = true
+    setWorkspaceReadError('')
     listWorkspaces()
       .then((found) => {
         if (!live) return
-        setWorkspaceCount(found.length)
 
         const chosen = currentWorkspace()
-        if (chosen && found.some((workspace) => workspace.id === chosen)) return
+        if (chosen && found.some((workspace) => workspace.id === chosen)) {
+          setWorkspaceCount(found.length)
+          return
+        }
 
         if (found.length === 0) {
           if (chosen) setCurrentWorkspace('')
+          setWorkspaceCount(0)
           return
         }
 
@@ -642,15 +652,23 @@ export default function App() {
 
         setCurrentWorkspace('')
         window.location.hash = '#/workspaces'
+        // `hashchange` is a later browser task. Update the local router in the
+        // same React batch as the count so HomeScreen cannot appear between
+        // choosing the workspace page and the event arriving.
+        setRoute('workspaces')
+        setHash('#/workspaces')
+        setWorkspaceCount(found.length)
       })
-      // Unreadable is not the same as none. Assume there is one and let the
-      // screens report their own errors, rather than sending somebody to name a
-      // workspace because the API was briefly down.
-      .catch(() => live && setWorkspaceCount(1))
+      // Unreadable is not the same as none. Leave the workspace gate closed and
+      // offer a retry instead of rendering either the dashboard or the
+      // first-workspace form on a guess.
+      .catch(() => {
+        if (live) setWorkspaceReadError('The workspaces did not load. Check your connection and try again.')
+      })
     return () => {
       live = false
     }
-  }, [])
+  }, [workspaceLoadAttempt])
 
   useEffect(() => {
     let live = true
@@ -832,6 +850,37 @@ export default function App() {
   // choosing - `quotation` is the one route still on the sheet's reading
   // measure, so it is the one case that asks for `sheet` here. Everything
   // else is app chrome at `--container-app`.
+  if (workspaceCount === null) {
+    return (
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
+        <main
+          aria-busy={workspaceReadError ? undefined : true}
+          className="mx-auto flex w-full min-h-0 max-w-app flex-1 items-center justify-center px-4 py-6 sm:px-6 sm:py-8"
+        >
+          <div className="max-w-[30rem] text-center">
+            <p className={`${MONO_LABEL} text-ink`}>
+              {workspaceReadError ? 'Workspaces unavailable' : 'Opening PRISM'}
+            </p>
+            {workspaceReadError ? (
+              <>
+                <p role="alert" className="mt-3 font-body text-[15px] leading-[1.6] text-void">
+                  {workspaceReadError}
+                </p>
+                <button
+                  type="button"
+                  className="mt-5 rounded-lg border border-rule bg-paper px-5 py-2.5 font-body text-[14px] text-ink shadow-sheet"
+                  onClick={() => setWorkspaceLoadAttempt((attempt) => attempt + 1)}
+                >
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   const nav = (
     <AppHeader
       screenName={SCREEN_NAME[route] || ''}
