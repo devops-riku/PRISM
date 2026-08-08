@@ -55,6 +55,36 @@ function readFrom(raw: string): OAuthReturn | null {
   }
 }
 
+/** A successful Supabase redirect that still needs its session parsed. */
+function isSessionReturn(): boolean {
+  if (typeof window === 'undefined') return false
+  const hash = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
+  const query = new URLSearchParams((window.location.search || '').replace(/^\?/, ''))
+
+  // Implicit-flow responses carry tokens in the fragment. PKCE responses
+  // carry an authorization code in the query string. Do not clean either one
+  // until supabase-js has had the opportunity to exchange/read it.
+  return hash.has('access_token') || hash.has('refresh_token') || query.has('code')
+}
+
+/** The canonical private entry point, without callback credentials. */
+function studioPath(): string {
+  return `${window.location.pathname || '/'}#/`
+}
+
+/**
+ * Replace a callback URL without adding a sensitive history entry, then tell
+ * the hash router about the replaceState change (replaceState itself emits no
+ * `hashchange` event).
+ */
+function replaceWithStudio(): void {
+  window.history.replaceState(null, '', studioPath())
+  // No callback URL is attached to the synthetic event: implicit-flow URLs
+  // contain bearer tokens, and listeners only need the signal to reread the
+  // already-clean location.
+  window.dispatchEvent(new Event('hashchange'))
+}
+
 function capture(): OAuthReturn | null {
   if (typeof window === 'undefined') return null
 
@@ -63,12 +93,11 @@ function capture(): OAuthReturn | null {
   const found = fromHash || fromQuery
   if (!found) return null
 
-  // Put the URL back the way somebody would want to bookmark it. `replaceState`
-  // rather than assigning `location.hash`, which would push a history entry and
-  // make Back walk through the failure again.
+  // An OAuth failure belongs on the focused sign-in route, where AuthScreen can
+  // consume and explain it. Returning to the now-public empty-hash root would
+  // hide the error and strand the person on marketing content.
   try {
-    const clean = window.location.pathname + (fromQuery ? '' : window.location.search)
-    window.history.replaceState(null, '', clean || '/')
+    replaceWithStudio()
   } catch {
     // Some embedded browsers refuse `replaceState` on a file: origin. The
     // message still gets shown; it just survives a reload. Not worth failing
@@ -79,6 +108,27 @@ function capture(): OAuthReturn | null {
 }
 
 let pending: OAuthReturn | null = capture()
+let sessionReturnPending = isSessionReturn()
+
+/** Whether the root must mount AuthGate so Supabase can consume a PKCE code. */
+export function hasPendingSessionReturn(): boolean {
+  return sessionReturnPending
+}
+
+/**
+ * Finish a successful implicit/PKCE return after supabase-js has consumed it.
+ * Calling this earlier would erase the credentials before a session exists.
+ */
+export function finishSessionReturn(): void {
+  if (!sessionReturnPending || typeof window === 'undefined') return
+  sessionReturnPending = false
+  try {
+    replaceWithStudio()
+  } catch {
+    // The session is already stored; an embedded browser that refuses history
+    // replacement can keep the callback-shaped URL without breaking sign-in.
+  }
+}
 
 /**
  * The failure a provider sent us back with, once.

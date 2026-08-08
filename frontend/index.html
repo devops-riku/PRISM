@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>PRISM | AI Quotation &amp; Technical Specification Builder</title>
+    <title>PRISM | AI Quotation &amp; Requirements Builder</title>
     <meta
       name="description"
-      content="Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+      content="Turn one project brief into a review-ready client quotation and a discipline-specific requirements sheet, both rendered from the same checked estimate."
     />
     <meta name="application-name" content="PRISM" />
     <link rel="canonical" href="https://prism.neptune.ph/" />
@@ -27,11 +27,14 @@
         if (!meta) return
 
         function updateRobots() {
+          var query = new URLSearchParams(window.location.search)
+          var authReturn =
+            query.has('code') || query.has('error') || query.has('error_code')
           meta.setAttribute(
             'content',
-            window.location.hash
-              ? 'noindex, nofollow, noarchive, nosnippet, noimageindex'
-              : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1',
+            window.location.pathname === '/' && !window.location.hash && !authReturn
+              ? 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'
+              : 'noindex, nofollow, noarchive, nosnippet, noimageindex',
           )
         }
 
@@ -45,11 +48,11 @@
     <meta property="og:locale" content="en_PH" />
     <meta
       property="og:title"
-      content="PRISM | AI Quotation &amp; Technical Specification Builder"
+      content="PRISM | AI Quotation &amp; Requirements Builder"
     />
     <meta
       property="og:description"
-      content="Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+      content="Turn one project brief into a review-ready client quotation and a discipline-specific requirements sheet, both rendered from the same checked estimate."
     />
     <meta property="og:url" content="https://prism.neptune.ph/" />
     <meta property="og:image" content="https://prism.neptune.ph/og-image.png" />
@@ -58,22 +61,22 @@
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="PRISM — from scope to quotation and technical specification."
+      content="PRISM - one scope becomes a client quotation and requirements sheet."
     />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="PRISM | AI Quotation &amp; Technical Specification Builder"
+      content="PRISM | AI Quotation &amp; Requirements Builder"
     />
     <meta
       name="twitter:description"
-      content="Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+      content="Turn one project brief into a review-ready client quotation and a discipline-specific requirements sheet, both rendered from the same checked estimate."
     />
     <meta name="twitter:image" content="https://prism.neptune.ph/og-image.png" />
     <meta
       name="twitter:image:alt"
-      content="PRISM — from scope to quotation and technical specification."
+      content="PRISM - one scope becomes a client quotation and requirements sheet."
     />
 
     <script type="application/ld+json">
@@ -84,7 +87,7 @@
         "url": "https://prism.neptune.ph/",
         "name": "PRISM",
         "alternateName": "PRISM Quotation Builder",
-        "description": "Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+        "description": "Turn one project brief into a review-ready client quotation and a discipline-specific requirements sheet, both rendered from the same checked estimate."
       }
     </script>
 

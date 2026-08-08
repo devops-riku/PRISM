@@ -1781,6 +1781,420 @@
    whichever spelling gets reached for.
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* The landing animation explains the product in one restrained sequence:
+   scope arrives, the prism reacts, and the two documents resolve. These
+   selectors are intentionally namespaced so the public page cannot change
+   motion elsewhere in the studio. */
+@layer components {
+  .landing-hero-backdrop {
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .landing-hero-backdrop > svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .landing-backdrop-shape {
+    opacity: 0.72;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .landing-backdrop-spectrum {
+    opacity: 0.58;
+  }
+
+  .landing-line-draw {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+  }
+
+  .landing-scope-ray {
+    animation: landing-line-reveal 1.2s var(--ease-press) 0.4s forwards;
+  }
+
+  .landing-output-ray-one {
+    animation: landing-line-reveal 1s var(--ease-press) 1.5s forwards;
+  }
+
+  .landing-output-ray-two {
+    animation: landing-line-reveal 1s var(--ease-press) 1.7s forwards;
+  }
+
+  /* SVG transforms otherwise use the whole viewbox as their origin in some
+     engines, which makes a four-pixel endpoint fly in from the top-left. */
+  .landing-diagram-dot {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .landing-dot-start {
+    animation: landing-dot-settle 0.4s var(--ease-press) 0.1s both;
+  }
+
+  .landing-dot-end-one {
+    animation: landing-dot-settle 0.4s var(--ease-press) 2.4s both;
+  }
+
+  .landing-dot-end-two {
+    animation: landing-dot-settle 0.4s var(--ease-press) 2.6s both;
+  }
+
+  .landing-output-label-one {
+    animation: landing-label-settle 0.8s ease 2.7s both;
+  }
+
+  .landing-output-label-two {
+    animation: landing-label-settle 0.8s ease 2.9s both;
+  }
+
+  .landing-prism-impact {
+    animation: landing-prism-impact 0.4s ease 1.4s;
+  }
+
+  /* A tracer replays the same cause-and-effect story, then disappears for a
+     long quiet interval. Its phase offsets make scope travel first. */
+  .landing-ray-tracer {
+    display: none;
+  }
+
+  @supports (offset-path: path("M0 0 L1 1")) {
+    .landing-ray-tracer {
+      display: initial;
+      opacity: 0;
+      offset-distance: 0%;
+      offset-rotate: 0deg;
+      animation: landing-tracer-cycle 9s var(--ease-press) 8s infinite;
+    }
+  }
+
+  .landing-tracer-scope {
+    offset-path: path("M50 155 L625 155");
+  }
+
+  .landing-tracer-output-one {
+    offset-path: path("M775 155 L1250 65");
+    animation-delay: 9.3s;
+  }
+
+  .landing-tracer-output-two {
+    offset-path: path("M775 155 L1250 245");
+    animation-delay: 9.5s;
+  }
+
+  .landing-tracer-scope-mobile {
+    offset-path: path("M160 20 L160 120");
+  }
+
+  .landing-tracer-output-one-mobile {
+    offset-path: path("M160 270 L65 360");
+    animation-delay: 9.3s;
+  }
+
+  .landing-tracer-output-two-mobile {
+    offset-path: path("M160 270 L255 360");
+    animation-delay: 9.5s;
+  }
+
+  .landing-fade-up {
+    animation: landing-fade-up 0.9s var(--ease-press) both;
+  }
+
+  .landing-stagger-1 {
+    animation-delay: 150ms;
+  }
+
+  .landing-stagger-2 {
+    animation-delay: 300ms;
+  }
+
+  .landing-diagram-label {
+    fill: var(--color-faint);
+    font-family: var(--font-label);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  /* The rest of the page uses ruled editorial structures rather than a grid
+     of interchangeable feature cards. */
+  .landing-process {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .landing-process-step {
+    padding-block: 2.25rem;
+  }
+
+  .landing-process-step + .landing-process-step {
+    border-top: 1px solid var(--color-rule);
+  }
+
+  .landing-scope-branch {
+    position: relative;
+    display: flex;
+    height: 5.5rem;
+    justify-content: center;
+  }
+
+  .landing-scope-branch::before {
+    position: absolute;
+    top: 2.25rem;
+    bottom: 0;
+    left: 50%;
+    border-left: 1px solid var(--color-rule);
+    content: '';
+  }
+
+  .landing-scope-branch::after {
+    position: absolute;
+    right: 25%;
+    bottom: 0;
+    left: 25%;
+    border-top: 1px solid var(--color-rule);
+    content: '';
+  }
+
+  .landing-scope-branch > span {
+    position: relative;
+    z-index: 1;
+    height: fit-content;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-pill);
+    background: var(--color-duplicate);
+    color: var(--color-ink);
+    font-family: var(--font-label);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    line-height: 1;
+    padding: 0.7rem 1rem;
+    text-transform: uppercase;
+  }
+
+  .landing-document {
+    --landing-document-tone: var(--color-ballpoint);
+
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-2xl);
+    background: var(--color-paper);
+    box-shadow: var(--shadow-sheet);
+    padding: clamp(1.5rem, 4vw, 2.5rem);
+  }
+
+  .landing-document::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 3px;
+    background: var(--landing-document-tone);
+    content: '';
+  }
+
+  .landing-document-quotation {
+    --landing-document-tone: #1b98a8;
+  }
+
+  .landing-document-requirements {
+    --landing-document-tone: #d9645e;
+  }
+
+  .landing-document-swatch,
+  .landing-document-index {
+    display: inline-block;
+    flex: none;
+    border-radius: var(--radius-pill);
+    background: var(--landing-document-tone);
+  }
+
+  .landing-document-swatch {
+    width: 0.55rem;
+    height: 0.55rem;
+  }
+
+  .landing-document-index {
+    width: 0.38rem;
+    height: 0.38rem;
+  }
+
+  .landing-workflow {
+    position: relative;
+    display: grid;
+    gap: 1.75rem;
+  }
+
+  .landing-workflow::before {
+    position: absolute;
+    top: 1.1rem;
+    bottom: 1.1rem;
+    left: 1.1rem;
+    border-left: 1px solid var(--color-rule);
+    content: '';
+  }
+
+  .landing-workflow-step {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 2.2rem 1fr;
+    column-gap: 1.25rem;
+    align-items: start;
+  }
+
+  .landing-workflow-step > :last-child {
+    margin-top: 0.42rem;
+  }
+
+  .landing-workflow-marker {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    width: 2.2rem;
+    height: 2.2rem;
+    place-items: center;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-pill);
+    background: var(--color-paper);
+    color: var(--color-ballpoint);
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  @media (min-width: 1024px) {
+    .landing-process {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .landing-process-step {
+      padding: 2.75rem 2.5rem;
+    }
+
+    .landing-process-step:first-child {
+      padding-left: 0;
+    }
+
+    .landing-process-step:last-child {
+      padding-right: 0;
+    }
+
+    .landing-process-step + .landing-process-step {
+      border-top: 0;
+      border-left: 1px solid var(--color-rule);
+    }
+
+    .landing-workflow {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 1.5rem;
+    }
+
+    .landing-workflow::before {
+      top: 1.1rem;
+      right: 10%;
+      bottom: auto;
+      left: 0;
+      border-top: 1px solid var(--color-rule);
+      border-left: 0;
+    }
+
+    .landing-workflow-step {
+      display: block;
+    }
+
+    .landing-workflow-step > :last-child {
+      margin-top: 1.25rem;
+    }
+  }
+
+  /* Progressive enhancement: browsers with scroll-driven animation reveal
+     each narrative band when it enters view. Unsupported browsers simply
+     show the static layout. */
+  @supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+      .landing-section-reveal {
+        animation: landing-section-reveal 1ms linear both;
+        animation-range: entry 5% cover 28%;
+        animation-timeline: view();
+      }
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .landing-backdrop-shape-left {
+      animation: landing-backdrop-drift 18s ease-in-out infinite alternate;
+    }
+
+    .landing-backdrop-shape-right {
+      animation: landing-backdrop-drift 22s ease-in-out -7s infinite alternate-reverse;
+    }
+
+    .landing-backdrop-spectrum {
+      animation: landing-backdrop-breathe 8s ease-in-out infinite alternate;
+    }
+
+    .landing-studio-link {
+      transition:
+        background-color 180ms var(--ease-press),
+        box-shadow 180ms var(--ease-press),
+        transform 180ms var(--ease-press);
+    }
+
+    .landing-cta-arrow {
+      transition: transform 300ms var(--ease-press);
+    }
+
+    .landing-studio-link:hover .landing-cta-arrow {
+      transform: translateX(4px);
+    }
+
+    .action-primary.landing-studio-link:active {
+      transform: translateY(1px) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-line-draw,
+    .landing-fade-up,
+    .landing-diagram-dot,
+    .landing-output-label-one,
+    .landing-output-label-two,
+    .landing-prism-impact,
+    .landing-section-reveal {
+      animation: none !important;
+      opacity: 1 !important;
+      transform: none !important;
+      stroke-dashoffset: 0 !important;
+    }
+
+    .landing-ray-tracer {
+      display: none !important;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .landing-backdrop-shape {
+      opacity: 0.46;
+    }
+
+    .landing-backdrop-spectrum {
+      opacity: 0.35;
+    }
+  }
+}
+
 @layer utilities {
   /* Scrolls, but shows nothing for it.
      Used on the pad, where the card is pinned to the viewport and a bar that
@@ -1899,5 +2313,104 @@
 @keyframes ck-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes landing-line-reveal {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes landing-dot-settle {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes landing-label-settle {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes landing-prism-impact {
+  0%,
+  100% {
+    opacity: 1;
+    stroke-width: 3.5;
+  }
+  50% {
+    opacity: 0.7;
+    stroke-width: 5;
+  }
+}
+
+@keyframes landing-tracer-cycle {
+  0%,
+  33.3% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  34%,
+  35% {
+    opacity: 1;
+  }
+  65%,
+  66% {
+    opacity: 1;
+  }
+  66.6%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes landing-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes landing-section-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes landing-backdrop-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, -12px, 0);
+  }
+}
+
+@keyframes landing-backdrop-breathe {
+  from {
+    opacity: 0.38;
+  }
+  to {
+    opacity: 0.68;
   }
 }

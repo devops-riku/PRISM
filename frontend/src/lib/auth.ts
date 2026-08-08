@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type { Provider, Session, SupabaseClient, User } from '@supabase/supabase-js'
 import type { AuthConfig } from '../types'
+import { finishSessionReturn } from './oauthReturn'
 import { setCurrentWorkspace } from './workspace'
 
 /**
@@ -66,8 +67,20 @@ export async function supabase(): Promise<SupabaseClient | null> {
     },
   })
 
-  const { data } = await client.auth.getSession()
+  // `getSession()` waits for URL initialisation but does not expose an error
+  // raised while exchanging a PKCE code. `initialize()` returns that result,
+  // and calling it here only awaits the promise the constructor already
+  // started. Keep callback credentials in place when that exchange fails so a
+  // reload can retry them.
+  const { error: initializationError } = await client.auth.initialize()
+  const { data, error } = await client.auth.getSession()
   session = data?.session || null
+  // Supabase's implicit callback uses the fragment for its tokens, the same
+  // place PRISM uses for routes. Only after getSession has parsed/exchanged
+  // those credentials is it safe to replace them with the private `#/`
+  // entry point. If session initialisation reports an error, leave the
+  // callback intact so a reload can retry its one-time credentials.
+  if (session && !initializationError && !error) finishSessionReturn()
   client.auth.onAuthStateChange((_event, next) => {
     session = next || null
     listeners.forEach((listen) => listen(session))
@@ -195,6 +208,11 @@ export async function signInWithProvider(provider: Provider): Promise<void> {
   if (!supa) throw new Error('This install has no sign-in configured.')
   const { error } = await supa.auth.signInWithOAuth({
     provider,
+    // Provider OAuth must start with a fragment-free return URL. The recent
+    // public-landing refactor sent `/#/` here, which changed a previously
+    // working provider request and made Meta reject it. Supabase writes its
+    // own success/error fragment on return; `oauthReturn.ts` consumes that
+    // first and only then cleans the browser URL to the private `/#/` route.
     options: { redirectTo: window.location.origin },
   })
   if (error) throw error

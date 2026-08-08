@@ -1,4 +1,4 @@
-import { Component, StrictMode } from 'react'
+import { Component, StrictMode, useEffect, useState } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 
@@ -9,9 +9,10 @@ import './index.css'
 // parameters and the reason for a failed Google or Facebook sign-in would be
 // gone before the screen that has to explain it ever mounts. Import order is the
 // mechanism, so this line stays above `App`.
-import './lib/oauthReturn'
+import { hasPendingSessionReturn } from './lib/oauthReturn'
 import App from './App'
 import AuthGate from './components/AuthGate'
+import LandingScreen from './components/LandingScreen'
 import ClientShell from './components/client/ClientShell'
 
 /**
@@ -96,9 +97,9 @@ class RootErrorBoundary extends Component<RootErrorBoundaryProps, RootErrorBound
 }
 
 /**
- * Where a client's own link points - `#/c/<token>`, minted by
- * `backend/app/main.py`'s `_client_link` and handed out nowhere else. Read
- * once, here, before anything downstream of `AuthGate` gets a chance to run.
+ * Where a client's own link points - `#/c/<token>`, minted by the backend and
+ * handed out nowhere else. It is matched before anything downstream of
+ * `AuthGate` gets a chance to run.
  *
  * This is the one structural rule this file exists to keep: `App.tsx` fires
  * `listWorkspaces()` and `fetchSettings()` unconditionally from its own
@@ -112,14 +113,49 @@ class RootErrorBoundary extends Component<RootErrorBoundaryProps, RootErrorBound
  * mounted somewhere beneath it and its effects have already fired the two
  * calls this rule exists to prevent.
  *
- * The token's own character set is `secrets.token_urlsafe(24)`'s - see
- * `backend/app/tokens.py` - which never emits anything outside
+ * The token's own character set is `secrets.token_urlsafe(24)`'s, which never
+ * emits anything outside
  * `[A-Za-z0-9_-]`. This match is intentionally on the raw hash, computed
- * once at load: like the rest of this file, boot is a one-time decision, not
- * something that re-runs as the hash changes later.
+ * before either private component can mount.
  */
 const CLIENT_LINK = /^#\/c\/([A-Za-z0-9_-]{1,300})$/
-const clientToken = CLIENT_LINK.exec(window.location.hash || '')?.[1] || ''
+
+/**
+ * The public page and the private hash application share one React root.
+ *
+ * Keeping the current hash in state matters for the landing page's `#/` CTA:
+ * changing a fragment does not reload the document, so a boot-time branch
+ * would leave the landing page mounted forever. The same listener also makes
+ * Back and Forward move cleanly between the public page and the studio.
+ */
+function ApplicationRoot() {
+  const [hash, setHash] = useState(() => window.location.hash || '')
+
+  useEffect(() => {
+    const readHash = () => setHash(window.location.hash || '')
+    window.addEventListener('hashchange', readHash)
+    return () => window.removeEventListener('hashchange', readHash)
+  }, [])
+
+  const clientToken = CLIENT_LINK.exec(hash)?.[1] || ''
+  if (clientToken) {
+    // A stranger's own link is resolved with no session at all. The key makes
+    // a direct transition between two client links start a fresh client shell.
+    return <ClientShell key={clientToken} token={clientToken} />
+  }
+
+  // Only the canonical, empty-hash root is public. `/#/` and every other
+  // non-client fragment belong to the studio and must pass through its gate.
+  if (window.location.pathname === '/' && !hash && !hasPendingSessionReturn()) {
+    return <LandingScreen />
+  }
+
+  return (
+    <AuthGate>
+      <App />
+    </AuthGate>
+  )
+}
 
 const container = document.getElementById('root')
 
@@ -130,18 +166,7 @@ if (!container) {
 createRoot(container).render(
   <StrictMode>
     <RootErrorBoundary>
-      {clientToken ? (
-        // A stranger's own link, resolved with no session at all - see
-        // CLIENT_LINK's own comment above for why this branch has to come
-        // ahead of AuthGate rather than live inside it.
-        <ClientShell token={clientToken} />
-      ) : (
-        // Who is asking, before anything is shown - on the installs that ask.
-        // Where no project is configured the gate renders the app untouched.
-        <AuthGate>
-          <App />
-        </AuthGate>
-      )}
+      <ApplicationRoot />
     </RootErrorBoundary>
   </StrictMode>,
 )
