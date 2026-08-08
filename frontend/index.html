@@ -4,11 +4,89 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>PRISM - proposal builder</title>
+    <title>PRISM | AI Quotation &amp; Technical Specification Builder</title>
     <meta
       name="description"
-      content="PRISM turns one client brief into two documents: a priced proposal for the client and a numbered requirements spec for the developer. One submission, no chat loop."
+      content="Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
     />
+    <meta name="application-name" content="PRISM" />
+    <link rel="canonical" href="https://prism.neptune.ph/" />
+
+    <!-- Only the signed-out landing page is public. Every in-app screen is a
+         hash route, including client and invitation links whose fragments can
+         contain bearer credentials. Fragments never reach robots.txt, so this
+         decision has to happen in the document before the application starts. -->
+    <meta
+      id="robots-meta"
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+    <script>
+      ;(function () {
+        var meta = document.getElementById('robots-meta')
+        if (!meta) return
+
+        function updateRobots() {
+          meta.setAttribute(
+            'content',
+            window.location.hash
+              ? 'noindex, nofollow, noarchive, nosnippet, noimageindex'
+              : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1',
+          )
+        }
+
+        updateRobots()
+        window.addEventListener('hashchange', updateRobots)
+      })()
+    </script>
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="PRISM" />
+    <meta property="og:locale" content="en_PH" />
+    <meta
+      property="og:title"
+      content="PRISM | AI Quotation &amp; Technical Specification Builder"
+    />
+    <meta
+      property="og:description"
+      content="Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+    />
+    <meta property="og:url" content="https://prism.neptune.ph/" />
+    <meta property="og:image" content="https://prism.neptune.ph/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="PRISM — from scope to quotation and technical specification."
+    />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="PRISM | AI Quotation &amp; Technical Specification Builder"
+    />
+    <meta
+      name="twitter:description"
+      content="Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+    />
+    <meta name="twitter:image" content="https://prism.neptune.ph/og-image.png" />
+    <meta
+      name="twitter:image:alt"
+      content="PRISM — from scope to quotation and technical specification."
+    />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "@id": "https://prism.neptune.ph/#website",
+        "url": "https://prism.neptune.ph/",
+        "name": "PRISM",
+        "alternateName": "PRISM Quotation Builder",
+        "description": "Create priced client quotations and structured technical specifications from one project brief, grounded in your rate card, policies, and scope."
+      }
+    </script>
 
     <!-- The app is dark by default. src/index.css carries the authoritative
          color-scheme on html; this meta is the pre-stylesheet hint that
@@ -60,16 +138,13 @@
     <!-- The app mark: a prism as an outlined triangle on a rounded tile, with
          the spectrum it produces as three dashes beneath.
 
-         URL-encoded (%23 is #), which is why colour sweeps miss it. A tab icon
-         cannot follow a theme, so this is the DARK tile in both - the light
-         one would vanish against a light tab strip. The three dashes are brand
-         and never change; `src/components/PrismMark.tsx` is the definition
-         this copies. -->
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2064%2064%27%3E%3Crect%20width=%2764%27%20height=%2764%27%20rx=%2718%27%20fill=%27%2316281E%27/%3E%3Cpath%20d=%27M32%2015.5L47.5%2043H16.5Z%27%20fill=%27none%27%20stroke=%27%23F4F7F4%27%20stroke-width=%273.1%27%20stroke-linejoin=%27round%27/%3E%3Cg%20stroke-width=%272.8%27%20stroke-linecap=%27round%27%3E%3Cline%20x1=%2718.5%27%20y1=%2751.5%27%20x2=%2725.5%27%20y2=%2751.5%27%20stroke=%27%231B98A8%27/%3E%3Cline%20x1=%2728.1%27%20y1=%2751.5%27%20x2=%2735.1%27%20y2=%2751.5%27%20stroke=%27%23E3AE3C%27/%3E%3Cline%20x1=%2737.7%27%20y1=%2751.5%27%20x2=%2744.7%27%20y2=%2751.5%27%20stroke=%27%23D9645E%27/%3E%3C/g%3E%3C/svg%3E"
-    />
+         A tab icon cannot follow a theme, so this is the DARK tile in both -
+         the light one would vanish against a light tab strip. The three dashes
+         are brand and never change; `src/components/PrismMark.tsx` is the
+         definition the public icon files copy. -->
+    <link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
 
     <!--
       Two families, seven roles: Instrument Sans sets every heading and

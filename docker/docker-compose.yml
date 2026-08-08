@@ -87,8 +87,9 @@ services:
       traefik.http.routers.prism-api.entrypoints: web
       traefik.http.routers.prism-api.priority: "100"
       traefik.http.routers.prism-api.service: prism-api
-      traefik.http.routers.prism-api.middlewares: prism-compress@docker,prism-security@docker
+      traefik.http.routers.prism-api.middlewares: prism-compress@docker,prism-security@docker,prism-api-noindex@docker
       traefik.http.services.prism-api.loadbalancer.server.port: "8000"
+      traefik.http.middlewares.prism-api-noindex.headers.customresponseheaders.X-Robots-Tag: "noindex, nofollow, noarchive, nosnippet"
 
   frontend:
     build:

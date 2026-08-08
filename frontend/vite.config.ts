@@ -52,7 +52,9 @@ export default defineConfig({
 
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // Production source maps expose the complete private application source.
+    // Local development still gets Vite's normal in-browser module mapping.
+    sourcemap: false,
     target: 'es2020',
   },
 })

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="100%" height="100%" role="img" aria-labelledby="title">
+  <title id="title">PRISM</title>
+  <rect width="64" height="64" rx="18" fill="#16281e" />
+  <path d="M32 15.5 47.5 43h-31Z" fill="none" stroke="#f4f7f4" stroke-width="3.1" stroke-linejoin="round" />
+  <g fill="none" stroke-width="2.8" stroke-linecap="round">
+    <path d="M18.5 51.5h7" stroke="#1b98a8" />
+    <path d="M28.1 51.5h7" stroke="#e3ae3c" />
+    <path d="M37.7 51.5h7" stroke="#d9645e" />
+  </g>
+</svg>

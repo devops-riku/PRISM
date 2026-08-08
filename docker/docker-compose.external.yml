@@ -70,6 +70,7 @@ services:
       traefik.http.middlewares.prism-neptune-api-security.headers.framedeny: "true"
       traefik.http.middlewares.prism-neptune-api-security.headers.referrerpolicy: strict-origin-when-cross-origin
       traefik.http.middlewares.prism-neptune-api-security.headers.permissionspolicy: camera=(), microphone=(), geolocation=()
+      traefik.http.middlewares.prism-neptune-api-security.headers.customresponseheaders.X-Robots-Tag: "noindex, nofollow, noarchive, nosnippet"
 
   frontend:
     build:
