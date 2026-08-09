@@ -1,0 +1,2188 @@
+# PRISM Theme Context
+
+## Part 1 — Compact token summary
+
+### Stack and theme model
+
+- React 18, Vite 6, and Tailwind CSS 4 via `@tailwindcss/vite`.
+- Tailwind is CSS-first: there is intentionally no `tailwind.config.*` or `postcss.config.*`. `frontend/src/index.css` is the design-system source of truth.
+- Styling combines Tailwind utilities with semantic classes in `@layer components`; Headless UI is behavior-only, not a visual component system.
+- Base `@theme` values are the dark fallback. Runtime default is light: `data-theme="light"` is applied unless `localStorage["prism.theme"]` is exactly `"dark"`. `.sheet-light` creates a light document island.
+- Layer order: `@theme` → base → components → utilities; keyframes are top-level.
+
+### Palette
+
+| Token | Dark/base | Light / `.sheet-light` | Role |
+| --- | --- | --- | --- |
+| `canvas` | `#12100e` | `#faf7f2` | Page |
+| `paper` | `#1b1815` | `#fffdf9` | Cards, sheets, fields |
+| `duplicate` | `#262119` | `#f1ebe1` | Secondary fills |
+| `rule` | `#38312a` | `#e1d9cc` | Borders |
+| `hairline` | `#2b2621` | `#ece6dc` | Internal dividers |
+| `ink` | `#f7f3ec` | `#1c1815` | Headings |
+| `body` | `#d6cec2` | `#3e3830` | Body copy |
+| `void` | `#a89f92` | `#605850` | Secondary copy |
+| `faint` | `#8d8478` | `#776e63` | Captions |
+| `ballpoint` | `#a8b862` | `#55631f` | Action olive |
+| `accent-deep` | `#c0cf8d` | `#414c13` | Hover |
+| `accent-soft` | `#22240f` | `#eef1de` | Accent tint |
+| `alert` | `#f2777a` | `#a8342a` | Error/destructive |
+| `alert-soft` | `#2a1a1f` | `#fdf3f2` | Error tint |
+| `well-border` | `#7a6f60` | `#8a8074` | Input edge |
+| `logo-tile` | `#16281e` | `#e2eae4` | Brand tile |
+| `logo-mark` | `#f4f7f4` | `#14392c` | Brand prism |
+
+Shadow bases: dark `transparent / rgb(0 0 0 / 0.55)`; light `transparent / rgb(146 128 102 / 0.34)`.
+
+### Typography
+
+- Display/labels/figures: `"Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif`; labels and figures use tabular numerals.
+- Body: `"Figtree", ui-sans-serif, system-ui, sans-serif`.
+- Quote: `"Instrument Serif", Georgia, "Times New Roman", serif`.
+- Google Fonts loaded by `frontend/index.html`: Figtree 300–900, Instrument Sans 400–700, Instrument Serif regular/italic.
+- Scale: `xs 12px/1.4`, `sm 13px/1.5`, `base 15px/1.6`, `lg 18px/1.6`, `xl 26px/1.2/-0.01em`, `2xl 34px/1.1/-0.02em`, `3xl 58px/1.05/-0.03em`.
+
+### Spacing, layout, breakpoints
+
+- No custom spacing override; Tailwind v4's imported base is 4px (`--spacing: 0.25rem`).
+- Containers: `sheet 1080px`, `ledger 1180px`, `app 1400px`.
+- Default breakpoints: `sm 40rem`, `md 48rem`, `lg 64rem`, `xl 80rem`, `2xl 96rem`.
+
+### Radius, shadows, motion
+
+- Radius: `DEFAULT 11px`, `xs 7px`, `sm 9px`, `md 11px`, `lg 12px`, `xl 14px`, `2xl 18px`, `3xl 22px`, `4xl 26px`, `pill 99px`.
+- `sheet`: `-3px -3px 7px var(--neu-light), 3px 3px 8px var(--neu-dark)`.
+- `raised`: `-6px -6px 15px var(--neu-light), 6px 6px 17px var(--neu-dark)`; inset uses the corresponding 3px inset pair.
+- Action uses a 3px/4px raised pair; focus ring is a 4px, 22% accent mix.
+- Easing: `cubic-bezier(0.2, 0.7, 0.2, 1)`; CSS motion collapses under `prefers-reduced-motion`.
+
+### Semantic component contracts
+
+- `DISPLAY = "display"`; `MONO_LABEL` is 12px medium uppercase, 0.14em tracked, faint copy.
+- `WELL = "well"`; `WELL_TEXTAREA = "well well-ruled min-h-[184px]"`.
+- `ACTION_PRIMARY = "action-primary"`; `ACTION = "action-quiet"`.
+- `CARD = "rounded-xl border border-rule bg-paper shadow-sheet"`.
+- Direction: warm paper neutrals, one olive action color, stepped soft radii/shadows, and “one screen, one thing at a time.”
+
+## Part 2 — Complete raw sources
+
+There is no Tailwind configuration file. Complete Vite/Tailwind wiring, global CSS, semantic token aliases, and theme-state utility follow.
+
+## Vite configuration
+
+Path: `frontend/vite.config.ts`
+
+```ts
+import { defineConfig } from 'vite'
+import type { ProxyOptions } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+/**
+ * PRISM dev server.
+ *
+ * Tailwind v4 is CSS-first: there is no tailwind.config.js and no
+ * postcss.config.js in this project on purpose. The whole design system lives
+ * in src/index.css behind `@import "tailwindcss"` and a `@theme` block, and the
+ * Vite plugin below is the only wiring it needs.
+ *
+ * The API is a separate FastAPI process on :8000. Every client call is made to
+ * a same-origin `/api/...` path and proxied here, so the browser never deals
+ * with CORS in development and the production build can be served from the same
+ * origin as the API without changing a single URL.
+ */
+const API_TARGET = process.env.PRISM_API_TARGET || 'http://localhost:8000'
+
+const apiProxy: Record<string, ProxyOptions> = {
+  '/api': {
+    target: API_TARGET,
+    changeOrigin: true,
+    // Notifications are pushed over a WebSocket on /api/notifications/stream.
+    // Without this the upgrade is proxied as a plain request, the socket never
+    // opens, and the client silently falls back to its slow poll - which works,
+    // and hides the fact that the fast path is broken.
+    ws: true,
+  },
+}
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+
+  server: {
+    port: 5174,
+    // The backend's CORS allow-list names 5174 explicitly. Silently sliding to
+    // another port when it is busy would produce a confusing CORS failure later,
+    // so fail loudly at start-up instead.
+    strictPort: true,
+    proxy: apiProxy,
+  },
+
+  // `npm run preview` serves the production build; it needs the same proxy or
+  // every request for a bundle or a document 404s against the static server.
+  preview: {
+    port: 5174,
+    strictPort: true,
+    proxy: apiProxy,
+  },
+
+  build: {
+    outDir: 'dist',
+    // Production source maps expose the complete private application source.
+    // Local development still gets Vite's normal in-browser module mapping.
+    sourcemap: false,
+    target: 'es2020',
+  },
+})
+```
+
+## Global theme and styles
+
+Path: `frontend/src/index.css`
+
+```css
+@import "tailwindcss";
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PRISM — Clarity Kit
+
+   The whole design system. There is no tailwind.config.js and no
+   postcss.config.js in this project: Tailwind v4 is CSS-first and this file is
+   the single source of truth for every colour, typeface, size, radius, shadow
+   and easing curve in the client.
+
+   The direction is the client's own kit, supplied as
+   `Desktop/Design Framework/Clarity Kit.dc.html` and summarised in
+   docs/DESIGN.md: "one screen, one thing at a time". Warm paper tones, generous
+   radii, soft shadows, and a single deep pine green carrying every action. It
+   replaces the earlier carbon-copy pad direction outright.
+
+   The token NAMES are kept from that earlier direction because their semantic
+   roles carried over one for one — `ballpoint` is still "the one accent", `rule`
+   is still "borders", `duplicate` is still "the second surface". Only the values
+   changed, so the whole client re-skinned without rewiring every component.
+
+   Layer discipline matters here. CSS written outside a @layer is unlayered and
+   beats *everything*, including Tailwind's utilities. So:
+     · @theme      → tokens
+     · @layer base → element defaults (canvas, ink, focus) — utilities override
+     · @layer components → hand-written classes — utilities override
+     · @keyframes  → top level (layers do not apply)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── Colour — the dark studio ─────────────────────────────────────────
+     Warm near-black, cards one step above it, and one olive doing every
+     action. The names describe the JOB, which is the whole reason a re-skin
+     is a palette change rather than 54 files: `bg-paper` compiles to
+     `var(--color-paper)`, so a component never learns what colour it is.
+
+     WARM neutrals, not grey ones. Every surface and text value below carries
+     a little red and yellow - `#12100e` is a near-black with a brown cast,
+     not `#0d0d0f`. Held to a consistent warmth so the set reads as one
+     family rather than as greys that drifted.
+
+     THE PALETTE HAS BEEN THREE THINGS ON THIS BRANCH, which is worth knowing
+     before you "correct" something to a value you remember: indigo and violet
+     (`#0e0e16` / `#8b7cf6`), then a cold monochrome ash, then this. If you
+     find a stray `#8b7cf6`, `#f7f7f8` or `#0d0d0f` anywhere, it is a leftover
+     from one of those, not a deliberate exception.
+
+     THE ACCENT IS A HUE AGAIN, and that undoes a constraint the ash palette
+     imposed. Under ash, `--color-ballpoint` and `--color-ink` were the same
+     value, so nothing could use the accent alone to mean "not a heading" -
+     two places had to be rewritten for it. Olive is 1.96 from the ink here
+     and 2.68 in light, and separated by hue in both, so the accent can do its
+     normal job again. The two rewrites stay as they are: an underline on an
+     inline link and a `void` idle state are better than colour-only signals
+     regardless of which palette is loaded.
+
+     DARK IS THE DEFAULT, AND IT IS DECLARED HERE so that <html> carries it.
+     Headless UI renders dropdowns and the command palette into a portal at
+     the end of <body> - a sibling of every shell, not a child of any - so
+     anything scoped to a shell would leave every dropdown light. Inheriting
+     from the root is the only arrangement where they are dark for free.
+     `.sheet-light` below is how the three printed surfaces opt out.
+
+     Every text pair was measured, not judged: headings 15.98:1 on a card,
+     body 11.33, secondary 6.77, captions 4.80, the olive 8.16. */
+  --color-canvas: #12100e; /* the page itself                       */
+  --color-paper: #1b1815; /* cards, sheets, inputs                 */
+  --color-duplicate: #262119; /* secondary fill: wells, chips, stripes  */
+  --color-rule: #38312a; /* borders                               */
+  --color-hairline: #2b2621; /* dividers inside a card                */
+  --color-ink: #f7f3ec; /* headings                              */
+  --color-body: #d6cec2; /* body copy                             */
+  --color-void: #a89f92; /* secondary copy                        */
+  --color-faint: #8d8478; /* eyebrows, captions, table headers     */
+  --color-ballpoint: #a8b862; /* the one action colour, olive          */
+  --color-accent-deep: #c0cf8d; /* hover — LIGHTER, see below            */
+  --color-accent-soft: #22240f; /* accent tint background                */
+  --color-alert: #f2777a; /* the single warm red, real problems    */
+  --color-alert-soft: #2a1a1f; /* its tint                              */
+
+  /* `accent-deep` INVERTS on a dark ground. In light it is a darker olive
+     than the accent; here it is a lighter one. Hover means "more", and on a
+     dark page more light is more - a hover that darkened would read as the
+     control going away. */
+
+  /* The edge of a text input, and the reason it is not `--color-rule`.
+     `rule` is asked to be two things: the hairline between table rows, and the
+     border of a field. One value cannot do both: as an edge `#38312a`
+     measures about 1.3:1 - correct for a divider, invisible as a border, and
+     a field whose edge cannot be found is a fault rather than a preference.
+
+     An input is a control you have to locate, so it needs 3:1 against every
+     ground one actually sits on - the page, a card, AND the duplicate fill
+     that wells use. `#7a6f60` is the darkest value clearing all three (3.86 /
+     3.59 / 3.25). `#6b6155` and `#726859` were tried first: each passes on
+     the page and fails inside a well, which is the failure that looks fine in
+     a screenshot of the wrong screen. */
+  --well-border: #7a6f60;
+
+  /* ── Neumorphism, on trial ────────────────────────────────────────────
+     Two lights and no border: a highlight from the top left and a shadow to
+     the bottom right, both in the SURFACE's own colour family, so a control
+     reads as pressed out of the page rather than placed on it.
+
+     The dark theme's highlight is barely there on purpose. Neumorphism was
+     designed for light grey UI, where a white highlight is most of the
+     effect; on a near-black ground a white edge at any real strength reads
+     as a rim light rather than as a soft form, so the dark set leans on the
+     shadow and keeps the highlight to a suggestion.
+
+     Currently applied to ONE control (the theme toggle) while the studio
+     looks at it. Read `.neu`'s own comment before spreading it - the style
+     has a known accessibility problem and the note there says what it is. */
+  /* NO HIGHLIGHT. `--neu-light` is `transparent` in both themes, and the
+     name is kept rather than the ten `box-shadow` declarations being rewritten
+     - every one of them still reads it, so this single value is what turns
+     the white halo on and off.
+
+     The studio asked for the glows out. What that costs, stated so it is a
+     decision rather than a discovery: neumorphism describes a form with TWO
+     lights, and with one of them gone these are ordinary soft drop shadows.
+     The pressed inversion still works, because the dark half inverts too.
+
+     Put a colour back here and the soft-UI look returns everywhere at once. */
+  --neu-light: transparent;
+  --neu-dark: rgb(0 0 0 / 0.55);
+
+  /* ── The mark ─────────────────────────────────────────────────────────
+     The logo is BRAND, not chrome, and it is the one thing in this file that
+     does not take the app's palette. Its tile is green where the app is warm
+     olive, and that is the supplied artwork rather than a drift - the three
+     spectrum dashes are the same, and the reason is the same as the boot
+     mark's: a prism that splits white light into one colour is not a prism.
+
+     Only the tile and the triangle flip between themes; the dashes never do.
+     Held here rather than in the component so the favicon, the boot splash
+     and the React mark can all be checked against one place - though the
+     first two are still hand-copied, because neither can read a stylesheet. */
+  --logo-tile: #16281e;
+  --logo-mark: #f4f7f4;
+
+  /* ── Type — one family, four roles ────────────────────────────────────
+     Figtree: a geometric sans with rounded terminals, replacing the kit's
+     Instrument Sans at the studio's request. Modern without being neutral, and
+     rounded without turning a quotation into a greetings card.
+
+     Neither `font-label` nor `font-figure` is a separate family. They are named
+     for their job so the small tracked captions and the big display figures
+     each have one definition, and both ask for tabular figures - which Figtree
+     carries, checked before it was adopted, because a rounded face without
+     `tnum` would have broken every money column in the project. */
+  /* Instrument Sans for anything that is read as a title or a label: it is
+     tighter and more spoken than Figtree at large sizes, and it is what the
+     Clarity Kit sets its own headings in. */
+  --font-display: "Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Figtree", ui-sans-serif, system-ui, sans-serif;
+
+  --font-label: "Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-label--font-feature-settings: "tnum"; /* figures always align */
+
+  /* A serif, for the one figure a document is actually about. Used sparingly:
+     a page where everything is emphasised has emphasised nothing. */
+  --font-quote: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-figure: "Instrument Sans", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-figure--font-feature-settings: "tnum";
+
+  /* ── Scale — 12 / 13 / 15 / 18 / 26 / 34 / 58 ─────────────────────────
+     Mapped onto Tailwind's default names so the familiar utilities land on the
+     kit's scale. Body is 15px at 1.6, labels 12-13px. Headings carry the kit's
+     tight tracking, which is what makes Figtree read as a display face
+     rather than a UI font. */
+  --text-xs: 12px;
+  --text-xs--line-height: 1.4;
+  --text-sm: 13px;
+  --text-sm--line-height: 1.5;
+  --text-base: 15px;
+  --text-base--line-height: 1.6;
+  --text-lg: 18px;
+  --text-lg--line-height: 1.6;
+  --text-xl: 26px;
+  --text-xl--line-height: 1.2;
+  --text-xl--letter-spacing: -0.01em;
+  --text-2xl: 34px;
+  --text-2xl--line-height: 1.1;
+  --text-2xl--letter-spacing: -0.02em;
+  --text-3xl: 58px;
+  --text-3xl--line-height: 1.05;
+  --text-3xl--letter-spacing: -0.03em;
+
+  /* ── Radius — soft, and stepped by role ───────────────────────────────
+     7px chips · 11px buttons · 12px inputs · 14px cards · 18px panels. The
+     bare `rounded` utility answers 11px because a button is the commonest
+     thing to round. */
+  --radius-DEFAULT: 11px;
+  --radius-xs: 7px;
+  --radius-sm: 9px;
+  --radius-md: 11px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 22px;
+  --radius-4xl: 26px;
+  /* The kit's pill: chips, status dots, anything whose shape says
+     'this is one small fact' rather than 'this is a control'. */
+  --radius-pill: 99px;
+
+  /* ── Shadows — light, not dark ────────────────────────────────────────
+     A dark shadow on a near-black page is nothing at all. Depth here comes
+     from a card being a step lighter than the ground and from a hairline of
+     light along its top edge, which is what the reference does.
+
+     THESE FOUR ARE THE DARK SET. The light theme overrides all four, because
+     the reasoning above inverts completely on paper: there a white inset is
+     invisible and a 0.4 black drop is a bruise. See the light block.
+
+     The last two FOLLOW `--color-ballpoint` rather than naming a colour.
+     They were `rgb(139 124 246 / …)` - the violet, written out twice - which
+     is why the palette sweep did not catch them and why the focus ring stayed
+     violet after everything around it went ash.
+
+     `color-mix` does NOT make them free, and the light block says why at
+     length: a custom property substitutes its `var()`s where it is DECLARED,
+     so these two follow the accent only for elements that inherit from the
+     root. A `.sheet-light` island deeper in the tree swaps the accent
+     underneath an already-resolved shadow. Both are therefore restated in
+     the light block, and if you add a third shadow that names the accent, it
+     must be restated there too. */
+  --shadow-sheet: -3px -3px 7px var(--neu-light), 3px 3px 8px var(--neu-dark);
+  --shadow-raised: -6px -6px 15px var(--neu-light), 6px 6px 17px var(--neu-dark);
+  /* Fields, and the one shape that goes the other way. A control you type
+     into is a dish, not a bump - that inversion is what tells you it takes
+     input before you read the label. */
+  --shadow-inset: inset -3px -3px 7px var(--neu-light),
+    inset 3px 3px 8px var(--neu-dark);
+  /* The primary keeps its ACCENT FILL and takes the neumorphic lights on top.
+     Full neumorphism would make it the surface colour, defined only by soft
+     shadow - which is exactly the case `.neu`'s comment says the style must
+     not be used for. A button that says "Send this to a client" has to be
+     findable by someone who cannot resolve a shadow, so the fill stays and
+     the style is applied to everything around it. */
+  --shadow-action: -3px -3px 7px var(--neu-light), 4px 4px 11px var(--neu-dark);
+  --shadow-ring: 0 0 0 4px
+    color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
+
+  /* ── Layout ───────────────────────────────────────────────────────────
+     `max-w-sheet` for the documents, `max-w-app` for the rest of the app's
+     chrome, `max-w-ledger` for the admin table, which needs the extra width
+     for six columns. */
+  --container-sheet: 1080px;
+  --container-ledger: 1180px;
+
+  /* The app's own chrome - lists, the queue, the home screen, the pad. Wider
+     than a sheet on purpose: `--container-sheet` is a READING measure for
+     prose on a printed page, and a five-across grid of cards is not prose.
+     Capping the app at the paper width left about 420px of empty page either
+     side on a 1920 screen and made the whole product read as a column.
+
+     Documents keep `--container-sheet`. That is the distinction the two names
+     carry, and it is the reason this is a new token rather than a bigger
+     number in the old one. */
+  --container-app: 1400px;
+
+  /* ── Motion — the kit's curves ────────────────────────────────────────── */
+  --ease-press: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BASE — the sheet of paper everything is printed on
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    /* Native controls, form widgets and the scrollbar follow. Without it a
+       date picker and a select still open white on a dark page. */
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+
+    /* The scrollbar, in the kit's own colours rather than the operating
+       system's.
+
+       On a quotation - a warm off-white sheet a studio prints and a client
+       reads - the platform default is a slab of Windows grey down the edge of
+       the page, and it is the only thing on screen that belongs to a different
+       design.
+
+       ONLY ONE OF THE TWO INHERITS. `scrollbar-color` does, so this line
+       reaches every scroller in the app; `scrollbar-width` does NOT, which the
+       first version of this rule got wrong - a nested card scroller came back
+       computing `auto` while its colour was already the kit's. It is set on
+       `*` below instead. Checked by reading the computed style of a nested
+       scroller rather than by looking at the page, because the difference is a
+       few pixels of width that nothing about a screenshot would have shown.
+
+       `thin`, not `none`: a scrollbar is how a reader knows there is more
+       document below and roughly how much. `.no-scrollbar` exists for the one
+       place where hiding it is right - the pad, where a bar appearing on one
+       step and not another reads as the card resizing - and this is not that
+       place. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule) transparent;
+  }
+
+  /* `scrollbar-width` is not an inherited property - see the note above - so
+     the thin bar has to be asked for on every element rather than once at the
+     root. `.no-scrollbar` still wins where it is used: it lives in
+     @layer utilities, and utilities beat base regardless of selector weight. */
+  * {
+    scrollbar-width: thin;
+  }
+
+  /* Older WebKit, where `scrollbar-color` is not understood at all. These
+     pseudo-elements are not inherited either, hence `*` again. Modern Chrome
+     ignores this whole block on any element carrying a standard
+     `scrollbar-color`, which by now is all of them - it is here for Safari and
+     for anything else still on the old path. */
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    /* Transparent rather than a colour, so the bar sits on whatever it is
+       scrolling - the canvas behind the page, the paper inside a card - and
+       does not draw a grey channel across a sheet the studio is about to
+       print. */
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-rule);
+    border-radius: var(--radius-pill);
+    /* Drawn inside its own track: a transparent border clipped to the padding
+       box insets the thumb without changing the width the browser reserves,
+       so the bar is a floating capsule rather than a full-height slab and the
+       hit area stays the full 10px. */
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-void);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* The standards path has no hover state for the thumb, so the resting colour
+     is the one that has to work on its own. `--color-rule` is the value every
+     border in this kit already uses, which is the right weight for a
+     scrollbar: present when looked for, silent otherwise. The `:hover` rule
+     above is a bonus on the browsers that still take it, never the thing
+     legibility depends on. */
+
+  /* The viewport itself, on every screen but the quotation. See `pinned` in
+     App.tsx for what this is actually stopping: a Headless UI dropdown renders
+     into a portal at the end of <body>, so it is a sibling of the pinned shell
+     rather than a child, and `overflow-hidden` on that shell cannot contain
+     it. An absolutely positioned sibling still grows the document.
+
+     On <html> AND <body>, because `overflow` on the root propagates to the
+     viewport only while the body has not declared its own - naming both is
+     what makes the rule independent of that. */
+  html[data-pinned],
+  html[data-pinned] body {
+    overflow: hidden;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-body);
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* At 360px a long unbroken token (a URL in a brief) must not widen the
+       page. Wrapping is always preferable to a horizontal scrollbar. */
+    overflow-wrap: break-word;
+  }
+
+  /* Ballpoint focus, on everything, always visible. Controls that carry their
+     own focus treatment (the wells below) opt out deliberately. */
+  :focus-visible {
+    outline: 2px solid var(--color-ballpoint);
+    outline-offset: 2px;
+    border-radius: var(--radius-DEFAULT);
+  }
+
+  ::selection {
+    background-color: var(--color-ballpoint);
+    color: var(--color-paper);
+  }
+
+  ::placeholder {
+    color: var(--color-faint);
+    opacity: 1;
+  }
+
+  a {
+    color: var(--color-ballpoint);
+    text-underline-offset: 3px;
+  }
+
+  a:hover {
+    color: var(--color-accent-deep);
+  }
+
+  /* Headings carry the kit's tight tracking, which is what makes Figtree read
+     as a display face rather than a UI font. */
+  h1,
+  h2,
+  h3 {
+    color: var(--color-ink);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  [disabled],
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* Images and canvases never overflow their column. */
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COMPONENTS — the handful of things utilities express badly
+
+     .display      Archivo, expanded, uppercase — preprinted form headers
+     .mono         DM Mono with tabular figures — every number, no exception
+     .well         an input well: duplicate stock, one bottom rule
+     .well-ruled   the same well with printed baselines (for the brief)
+     .thread       the progress bar across the top of a working card
+     .sheet        a result sheet
+     .stamp        the grand-total rubber stamp  (+ .stamp-currency/.stamp-figure)
+     .prose        rendered markdown
+
+   Everything here is single-class specificity, so any Tailwind utility wins.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The kit's orbit: three dots turning about a centre. Used where the wait is
+   one long call with nothing to report inside it - a percentage there would be
+   a number invented to fill a gap. */
+@keyframes ck-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* And the thread's own version of the same admission: a short segment
+   sweeping the track, which says "still working" without claiming ground. */
+@keyframes ck-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@keyframes ck-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@layer components {
+  /* NO AMBIENT GLOW. There was a two-source radial wash here - a key light
+     from the top centre and an offset fill - and it came out when the app
+     went neumorphic, because the two cannot both be true.
+
+     Neumorphism describes a form by lighting it from ONE fixed direction and
+     letting the surface it sits on be flat. A background gradient gives the
+     page its own second light from somewhere else, so every raised control
+     ends up lit from two directions at once - the shadows stop agreeing with
+     the ground and the whole effect reads as smudged rather than moulded.
+
+     The two are alternatives, not layers. If the soft UI is ever dropped,
+     this is worth restoring; while it stands, the flat surface IS the effect.
+     Recorded here rather than deleted silently so nobody re-adds it as a
+     missing polish step. */
+
+  /* ── The route announcer's landing point ─────────────────────────────
+     The client faces (`ClientForm`/`ClientWaiting`/`ClientQuotation`/
+     `ClientClosed`) move focus to their own `<h1>` on mount and on every
+     state transition - the standard SPA "announce the new page" pattern,
+     since nothing else tells a screen reader that `ClientForm` just
+     unmounted into `ClientWaiting`, or that the same `ClientQuotation`
+     instance just swapped from `sent` to `finalized`.
+     `:focus-visible` in the base layer is right to ring anything a person
+     can act on - a field, a button, a link - so a keyboard user always
+     knows where they are. A heading that only ever receives focus
+     programmatically is a different thing: there is nothing to act on and
+     nowhere for a visible ring to send a sighted user next, and it reads as
+     a stray outline around a sentence rather than as a control. `.stamp` in
+     this same layer already overrides the base layer's own defaults by
+     nothing more than being declared after it - components beats base
+     regardless of selector specificity - so this can undo the ring for
+     exactly these headings without touching `:focus-visible` for anything
+     that is actually interactive. */
+  .focus-landing:focus-visible {
+    outline: none;
+  }
+
+  /* ── The pad's question ──────────────────────────────────────────────
+     One question at a time, set large enough to be the only thing on the
+     screen worth reading. The Clarity Kit's flow pattern asks for this
+     size deliberately: at 18px a question reads as a field label and the
+     form reads as paperwork; at 26px it reads as somebody asking. */
+  .pad-question {
+    display: block;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 21px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+  }
+
+  @media (max-width: 640px) {
+    .pad-question {
+      font-size: 18px;
+    }
+  }
+
+  /* The brief is the one field worth real height. Sized to the panel rather
+     than to a constant, so it grows on a large screen and gives way on a
+     laptop instead of pushing the step into a scroll. */
+  .pad-brief {
+    min-height: clamp(96px, 22vh, 190px);
+  }
+
+  /* ── Signature air ───────────────────────────────────────────────────
+     A line the document leaves empty for a pen. The markdown carries it as
+     a literal `&nbsp;` because Python strips a real no-break space, so all
+     three renderers - print, PDF and this one - recognise the token rather
+     than the character. */
+  .sign-space {
+    display: block;
+    height: 26px;
+  }
+
+  /* ── The keycap ──────────────────────────────────────────────────────
+     A key you can press, drawn as the thing you press. Monospace on
+     purpose: it is a key, not a word, and it should not read as prose. */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    padding: 3px 6px;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-paper);
+    color: var(--color-faint);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  /* ── The chip ────────────────────────────────────────────────────────
+     One small fact - a state, a count, a mode - in a pill so it reads as a
+     label on the thing beside it rather than as a control. Three tones and
+     nothing else: neutral for facts, live for work in progress, alert for
+     something that stopped. A palette of chips is a legend nobody has. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-rule);
+    background-color: var(--color-duplicate);
+    /* A chip is 20px tall; the full raise reads as a smudge at that size, so
+       it takes the sheet lights rather than the raised pair. */
+    box-shadow: var(--shadow-sheet);
+    color: var(--color-void);
+    font-family: var(--font-label);
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .chip::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background-color: currentColor;
+    opacity: 0.55;
+  }
+
+  .chip--live {
+    border-color: color-mix(in oklab, var(--color-ballpoint) 35%, transparent);
+    background-color: var(--color-accent-soft);
+    color: var(--color-ballpoint);
+  }
+
+  /* The dot on a live chip breathes, so a page left open says whether
+     anything is still happening without being read. */
+  .chip--live::before {
+    opacity: 1;
+    animation: ck-pulse 1.6s var(--ease-press) infinite;
+  }
+
+  .chip--alert {
+    border-color: color-mix(in oklab, var(--color-alert) 30%, transparent);
+    background-color: color-mix(in oklab, var(--color-alert) 7%, var(--color-paper));
+    color: var(--color-alert);
+  }
+
+  .chip--alert::before {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chip--live::before {
+      animation: none;
+    }
+  }
+
+  /* A two-way switch, not a nav. Used where one screen answers the same
+     question for two different audiences.
+
+     The white stop is ONE element that slides, not a background painted onto
+     whichever tab is on. Cross-fading two backgrounds reads as a flash - both
+     stops are briefly half-lit and nothing appears to have moved - where a
+     single object travelling between two seats is the thing a switch actually
+     is. It also means the shadow moves with it instead of being raised and
+     dropped in place. */
+  .pill {
+    position: relative;
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-duplicate);
+    border: 1px solid var(--color-rule);
+  }
+
+  /* Placed from the seat it is sitting in, not from a fraction of the pill.
+     The obvious version - equal halves and `translateX(100%)` - does not
+     survive contact with the labels: "For You" and "For Client" are different
+     widths, and `flex: 1 1 0` will not equalise them because a flex item's
+     default `min-width: auto` refuses to shrink below its own text. Measured
+     6px of overhang on both seats. So `HomeScreen` reads the chosen tab's
+     `offsetLeft`/`offsetWidth` and writes them here, which is also what lets
+     the labels change - or be translated - without this file knowing. */
+  .pill__thumb {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 0;
+    width: var(--thumb-w, 0);
+    transform: translateX(var(--thumb-x, 0));
+    border-radius: var(--radius-pill);
+    background-color: var(--color-paper);
+    box-shadow: var(--shadow-sheet);
+    /* Under the labels. Without this the thumb paints over the text it is
+       supposed to sit behind. */
+    z-index: 0;
+  }
+
+  .pill__tab {
+    position: relative;
+    z-index: 1;
+    padding: 0.45rem 1.1rem;
+    border-radius: var(--radius-pill);
+    font-family: var(--font-label);
+    font-size: 13px;
+    color: var(--color-void);
+    white-space: nowrap;
+    cursor: pointer;
+    /* .15s ease, not --ease-press: that curve is reserved for the kit's four
+       keyframe moments and the thread's width. This is a plain colour swap,
+       the same kind .well and .action-primary already run on .15s ease. */
+    transition: color 0.15s ease;
+  }
+
+  .pill__tab--on {
+    color: var(--color-ink);
+  }
+
+  /* Movement is opt-in, the way DESIGN.md asks. With reduced motion the thumb
+     is still in the right seat on every render - it simply arrives there
+     without travelling, which is the outcome, not a degraded version of it. */
+  @media (prefers-reduced-motion: no-preference) {
+    .pill__thumb {
+      /* Width as well as position, because the two seats are not the same
+         size. Transform alone would slide a "For You"-sized thumb under
+         "For Client" and leave it short. */
+      transition:
+        transform 0.22s ease,
+        width 0.22s ease;
+    }
+  }
+
+  /* ── Heading type ─────────────────────────────────────────────────────
+     Figtree at 600 with tight tracking. Not uppercase: the kit sets
+     its headings in sentence case and saves capitals for the small labels. */
+  .display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Small tracked labels ─────────────────────────────────────────────
+     The kit's eyebrow: 12-13px, uppercase, 0.14em tracking, faint. Also the
+     class every table figure carries, because it brings tabular figures. */
+  .mono {
+    font-family: var(--font-label);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* ── Display figures ──────────────────────────────────────────────────
+     A number meant to be read as a statement rather than scanned in a column:
+     Figtree at 600 with tight -0.03em tracking, the treatment
+     it gives its own headline figures. */
+  .figure {
+    font-family: var(--font-figure);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* ── A printed page, inside a dark app ────────────────────────────────
+     Restores the paper palette for one subtree. Everything below it renders
+     exactly as it did before the app went dark, because the utilities never
+     changed - only the values the variables hold.
+
+     THREE places use it: `ClientShell`'s two roots and `DesignEditor`'s
+     preview sheet. The first two are one argument - this is what the client
+     receives, so it should look like what the client receives - and the third
+     is a picture of a printed page, which a dark preview would not preview.
+
+     It was four. The document body (`MarkdownView`) carried this too, on the
+     same "show what the client receives" reasoning, until the studio asked
+     for the on-screen document to follow the app instead. That file's own
+     comment records the trade; this line records that the count moved, because
+     a stale "four" is how the next reader concludes a call site went missing.
+
+     IT PAINTS ITS OWN PAPER as well as setting the variables, so a sheet
+     dropped into a dark card renders as paper on a mount rather than as dark
+     text on a dark ground. A utility on the same element still wins, which is
+     what lets `ClientShell` keep its own `bg-canvas`.
+
+     LIGHT IS OPT-IN, and that is a rule someone has to know: a new
+     document-ish screen defaults to dark and has to ask for this. That is the
+     right way round - a new screen matching the app it lives in is a smaller
+     mistake than a new studio screen arriving white - but it is a rule rather
+     than something the code will tell you.
+
+     TWO SELECTORS, ONE BLOCK, and that is deliberate. `html[data-theme=light]`
+     is the whole app in light mode (Task 6); `.sheet-light` is one printed
+     surface inside the dark app. They want the identical fifteen values, and
+     writing them twice is how the two drift - this branch has already shipped
+     that mistake twice with a raster allowlist. One block, two doors into it.
+
+     In light mode `.sheet-light` becomes a no-op that sets what is already
+     set, which is correct rather than wasteful: a document is paper in both
+     modes, so the class asserts the same thing whether or not the app agrees.
+     */
+  html[data-theme='light'],
+  .sheet-light {
+    /* WARM LIGHT — the dark block's values turned over, not a different
+       design. Paper is an off-white with a cream cast rather than `#ffffff`,
+       the neutrals carry the same red-and-yellow warmth, and the accent is
+       the same olive taken deep enough to sit on paper: `#55631f` at 6.48 on
+       a card, where the dark theme's `#a8b862` would measure 1.9 and be
+       unreadable.
+
+       Two palettes preceded this one and neither is a value to restore: the
+       original warm sand (`#f4f1ea` canvas, `#d7c49e` accent, `#343148`
+       indigo ink) and the cold monochrome ash (`#f6f6f7`, accent equal to a
+       `#16161a` ink). This is warmer than the ash and quieter than the sand.
+
+       The alert pair is the one place the warmth is NOT the point - a red
+       there has to read as a problem rather than as part of the family. */
+    --color-canvas: #faf7f2;
+    --color-paper: #fffdf9;
+    --color-duplicate: #f1ebe1;
+    --color-rule: #e1d9cc;
+    --color-hairline: #ece6dc;
+    --color-ink: #1c1815;
+    --color-body: #3e3830;
+    --color-void: #605850;
+    --color-faint: #776e63;
+    --color-ballpoint: #55631f;
+    --color-accent-deep: #414c13;
+    --color-accent-soft: #eef1de;
+
+    /* The two warm values in an otherwise grey block, and that is the point:
+       an alert says something is wrong, and in a monochrome palette there is
+       no other channel left to say it with. Greying these would make a
+       failure look like a caption. */
+    --color-alert: #a8342a;
+    --color-alert-soft: #fdf3f2;
+
+    /* NOT `--color-rule`, for the same reason the dark one is not: a hairline
+       and a findable input edge are different jobs and one value cannot be
+       quiet enough for both. An input edge is a control you have to locate,
+       so WCAG asks 3:1 of it, and it has to clear that against every ground
+       an input actually sits on - paper, canvas AND the duplicate fill that
+       wells use. `#8a8074` is the lightest warm grey that does: 3.81 on
+       paper, 3.63 on canvas, 3.27 on a well. Anything lighter passes on paper
+       and quietly fails inside a well.
+
+       Worth separating, since it is easy to misread as a regression: light
+       inputs were bordered at 1.46 long before the dark theme existed - the
+       same hex as `--color-rule`. That was a gap the contrast gate found the
+       first time anything measured it, not something this branch broke. */
+    --well-border: #8a8074;
+
+    /* The other half of the dark set, and every reason for those inverts
+       here. A white inset hairline on a white card is nothing; a `0 1px 2px
+       rgb(0 0 0 / 0.4)` drop, which merely separates a card from a near-black
+       page, lands on paper as a bruise. Light UI wants a much softer, wider,
+       cooler shadow and no highlight at all.
+
+       ALL FOUR ARE RESTATED, and the two `color-mix` ones are the reason this
+       comment exists. It is tempting to leave them out on the grounds that
+       they follow `--color-ballpoint` already - that is wrong, and measurably
+       so. A custom property has its `var()`s substituted at computed-value
+       time ON THE ELEMENT WHERE IT IS DECLARED; descendants inherit the
+       already-substituted result. `@theme` declares them on `:root`, so:
+
+         · `html[data-theme='light']` IS `:root` -> re-resolves, fine either
+           way;
+         · `.sheet-light` on a DESCENDANT -> does not. It swaps
+           `--color-ballpoint` beneath a shadow that was already resolved
+           above it.
+
+       Measured in a browser, before this block existed: inside `.sheet-light`
+       in a default (dark) install, `--color-ballpoint` computed to the LIGHT
+       accent while `--shadow-ring` still held a mix of the DARK one - a
+       near-white focus ring on white paper, on the CLIENT's intake form, the
+       one surface a stranger has to use. (The hexes of the day were `#16161a`
+       and `#f7f7f8`; the palette has moved twice since, and the failure is
+       about where a property is declared, not about which colours.)
+
+       Declared here, the substitution happens against the light accent. */
+    --shadow-sheet: -3px -3px 7px var(--neu-light), 3px 3px 8px var(--neu-dark);
+    --shadow-raised: -6px -6px 15px var(--neu-light), 6px 6px 17px var(--neu-dark);
+    --shadow-inset: inset -3px -3px 7px var(--neu-light),
+      inset 3px 3px 8px var(--neu-dark);
+    --shadow-action: -3px -3px 7px var(--neu-light), 4px 4px 11px var(--neu-dark);
+    --shadow-ring: 0 0 0 4px
+      color-mix(in oklab, var(--color-ballpoint) 22%, transparent);
+
+    /* The white highlight this theme used to carry was the most visible glow
+       in the app - a hard `#ffffff` halo up the top-left of every card on a
+       cream ground. Off, like the dark one. The shadow stays warm rather than
+       black: a neutral drop on a warm surface greys it. */
+    --neu-light: transparent;
+    --neu-dark: rgb(146 128 102 / 0.34);
+
+    /* The mark's light half. Pale sage tile, dark green triangle - the
+       inverse of the dark pair, and the same two colours either way round. */
+    --logo-tile: #e2eae4;
+    --logo-mark: #14392c;
+
+    color-scheme: light;
+  }
+
+  /* The painting half, and it is `.sheet-light` ONLY - deliberately not the
+     root. A sheet paints its own paper so that one dropped into a dark card
+     renders as paper on a mount rather than dark text on a dark ground. The
+     ROOT is not a sheet: in light mode `<html>` painting `--color-paper` puts
+     the card colour behind the whole document, which is the wrong one of the
+     two neutrals and shows wherever `body` does not cover - overscroll, and
+     the strip under a short page. The root gets `--color-canvas` from
+     `@layer base` like it does in dark mode.
+
+     Both selectors still share every VARIABLE above; only the paint is
+     split. */
+  .sheet-light {
+    background-color: var(--color-paper);
+    color: var(--color-body);
+  }
+
+  /* ── The input well ───────────────────────────────────────────────────
+     The kit's field: surface fill, 1px border, 12px radius. On focus the
+     border turns accent and a 4px tinted ring appears outside it. The ring is
+     a shadow, so nothing reflows. */
+  .well {
+    display: block;
+    width: 100%;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    padding-block: 0.7rem;
+    padding-inline: 0.9rem;
+    /* Not `--color-rule` - see that token's note. A divider and a field edge
+       are different jobs and only one value can be quiet.
+
+       THE BORDER STAYS under neumorphism, and it is the one place the style
+       does not get its way. Soft UI drops the border and lets an inset shadow
+       imply the field; WCAG asks 3:1 of a control's boundary and a shadow
+       does not reliably give it. So the field is a dish AND has an edge - the
+       shadow does the describing, the border does the guaranteeing. */
+    border: 1px solid var(--well-border);
+    box-shadow: var(--shadow-inset);
+    border-radius: var(--radius-lg);
+    appearance: none;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  /* The field warms towards the accent as the pointer crosses it, so a form
+     reads as a set of things you can touch before you touch one. It stops
+     short of the accent itself - that belongs to focus, which is a stronger
+     claim than "your pointer is here". */
+  /* Under neumorphism the pointer DEEPENS THE DISH rather than drawing an
+     outline on it. The border-colour warm this replaced was the right idea in
+     a bordered UI and the wrong one here: a hard edge appearing on hover is
+     exactly the thing soft UI is defined by not having. The resting border
+     stays - it is the 3:1 guarantee, not decoration. */
+  .well:hover:not(:focus):not(:disabled) {
+    box-shadow:
+      inset -4px -4px 9px var(--neu-light),
+      inset 4px 4px 10px var(--neu-dark);
+  }
+
+  .well:focus {
+    outline: none;
+    border-color: var(--color-ballpoint);
+    box-shadow: var(--shadow-ring);
+  }
+
+  .well:disabled {
+    color: var(--color-faint);
+    background-color: var(--color-duplicate);
+    opacity: 1;
+  }
+
+  /* Forced-colours users lose the tinted ring entirely, so hand the outline
+     back to them. */
+  @media (forced-colors: active) {
+    .well:focus {
+      outline: 2px solid Highlight;
+      outline-offset: 1px;
+    }
+  }
+
+  /* A native select keeps its own arrow only on some platforms; draw one. */
+  select.well {
+    padding-inline-end: 2rem;
+    /* The colour here is URL-encoded (`%23` is `#`), which is why the
+       project's hardcoded-colour sweeps never saw it. Kept in step with the
+       DARK `--color-void` by hand - `%239B9BA4`, 6.49 on a card; there is no
+       way to put a custom property inside a data-URI. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23A89F92' stroke-width='1.6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.8rem center;
+    background-size: 10px 6px;
+  }
+
+  /* The same arrow, stroked for a light ground, and the duplicated path is a
+     known cost rather than an oversight.
+
+     A data-URI cannot read a custom property, so the stroke above is baked to
+     the DARK `--color-void`, and on white that measures ~2.45 against the 3:1
+     a control you have to find is held to. It was 2.41 on the old sand paper,
+     so this is a long-standing light-mode bug rather than anything the ash
+     palette introduced; it is fixed here because light mode is now a shipping
+     theme rather than a document island.
+
+     Why not one rule with a mask: `mask-image` masks the WHOLE element, so an
+     arrow-shaped mask on a `select` takes its text with it. Why not a
+     wrapper with `::after`: a replaced element needs a real extra span at
+     every call site, which is a bigger change than a duplicated path.
+
+     So: two copies, and they must move together. `%2356565F` is the LIGHT
+     `--color-void` (7.26 on paper); the copy above is the dark one (6.49).
+     Change one, change both. */
+  html[data-theme='light'] select.well,
+  .sheet-light select.well {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23605850' stroke-width='1.6'/%3E%3C/svg%3E");
+  }
+
+  /* ── The brief field ──────────────────────────────────────────────────
+     The one question the whole product hangs on, so it gets height and room to
+     breathe rather than printed ruling - this direction has no pad to imitate. */
+  .well-ruled {
+    font-size: var(--text-lg);
+    line-height: 1.6;
+    padding-block: 0.9rem;
+    resize: vertical;
+  }
+
+  /* ── The primary action ───────────────────────────────────────────────── */
+  /* ── Buttons ──────────────────────────────────────────────────────────
+     Both actions are the same control at the same size. They differ in fill
+     and nothing else: the primary is pine, the quiet one is paper with a
+     hairline. Emphasis comes from colour, which is free, rather than from
+     height or width, which shift every button beside them - a 248px primary
+     next to a 90px Back read as two unrelated controls that happened to land
+     in the same row.
+
+     One shared height, one shared minimum width, one border on both (the
+     primary's is transparent) so the box models match to the pixel. */
+  .action-primary,
+  .action-quiet {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding-block: 0.5rem;
+    padding-inline: 1.15rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.2;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .action-primary {
+    /* Only the primary carries a minimum width. Shared, it would inflate the
+       Remove button on every rate-card row into something the size of a
+       decision; on the primary it stops "Save" from becoming a stub. */
+    min-width: 7rem;
+    background-color: var(--color-ballpoint);
+    color: var(--color-canvas);
+    box-shadow: var(--shadow-action);
+    transition:
+      background-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .action-primary:hover:not(:disabled) {
+    background-color: var(--color-accent-deep);
+  }
+
+  /* ── Pressed ──────────────────────────────────────────────────────────
+     A button that does not move under the finger leaves you wondering whether
+     the click landed. One pixel down and the shadow off is the whole gesture -
+     it reads as the surface taking the press rather than as an animation. Kept
+     out of the reduced-motion guard on purpose: a transform that resolves
+     instantly is a state, not motion. */
+  .action-primary:active:not(:disabled) {
+    transform: translateY(1px);
+    box-shadow: none;
+  }
+
+  .action-quiet:active:not(:disabled) {
+    transform: translateY(1px);
+    background-color: var(--color-duplicate);
+  }
+
+  .action-primary:disabled {
+    background-color: var(--color-duplicate);
+    color: var(--color-faint);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  /* ── The secondary action ─────────────────────────────────────────────
+     A quiet outlined control: download, print, remove, delete. */
+  .action-quiet {
+    background-color: var(--color-paper);
+    box-shadow: var(--shadow-sheet);
+    color: var(--color-body);
+    border-color: var(--color-rule);
+    transition:
+      border-color 0.15s ease,
+      color 0.15s ease;
+  }
+
+  /* No outline on hover. The colour change carries it, and the lights pull in
+     slightly so the pad reads as being pressed towards you. */
+  .action-quiet:hover:not(:disabled) {
+    box-shadow:
+      -2px -2px 5px var(--neu-light),
+      2px 2px 6px var(--neu-dark);
+    color: var(--color-ballpoint);
+    text-decoration: none;
+  }
+
+  /* A disabled quiet button used to look exactly like a live one and still lit
+     up on hover, which is a control promising something it will not do. Remove
+     on the last payment row and Prepare before there is a brief are both this
+     state. */
+  .action-quiet:disabled {
+    color: var(--color-faint);
+    border-color: var(--color-hairline);
+    cursor: not-allowed;
+  }
+
+  /* ── A row under the pointer ──────────────────────────────────────────
+     Long lists are scanned across, not down, and a line of text with nothing
+     holding it loses the eye halfway. The tint is barely there by design: it
+     answers the pointer without turning the table into a set of buttons. */
+  .row-touch {
+    transition: background-color 0.12s ease;
+  }
+
+  .row-touch:hover {
+    background-color: color-mix(in oklab, var(--color-duplicate) 55%, transparent);
+  }
+
+  /* ── The progress thread ──────────────────────────────────────────────
+     The kit's own device: a 2px accent bar across the top of the card that
+     widens as the work proceeds. It replaces a spinner because it says how far
+     along the work is, not merely that it is happening. */
+  .thread {
+    height: 2px;
+    background-color: var(--color-hairline);
+    overflow: hidden;
+  }
+
+  /* ── Orbit ───────────────────────────────────────────────────────────
+     Three dots turning, for a wait with no inside. PRISM reports progress
+     from steps that actually finished, which is right - and it means a
+     single ninety-second model call sits at one number the whole way. A
+     frozen 8% reads as broken; this reads as working, and claims nothing.
+     One leading dot at full weight and two trailing it, exactly as the kit
+     draws it. */
+  .orbit {
+    position: relative;
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    animation: ck-orbit 2.4s linear infinite;
+  }
+
+  .orbit span {
+    position: absolute;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-ballpoint);
+  }
+
+  .orbit span:nth-child(1) {
+    top: 0;
+    left: 50%;
+    margin-left: -2.5px;
+    width: 5px;
+    height: 5px;
+  }
+
+  .orbit span:nth-child(2) {
+    bottom: 1px;
+    left: 1px;
+    width: 4px;
+    height: 4px;
+    opacity: 0.55;
+  }
+
+  .orbit span:nth-child(3) {
+    bottom: 1px;
+    right: 1px;
+    width: 4px;
+    height: 4px;
+    opacity: 0.3;
+  }
+
+  /* The same honesty in the thread: a segment sweeping, not a fill. */
+  .thread--waiting::after {
+    content: "";
+    display: block;
+    width: 25%;
+    height: 100%;
+    background-color: var(--color-ballpoint);
+    animation: ck-sweep 1.4s var(--ease-press) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .orbit,
+    .thread--waiting::after {
+      animation: none;
+    }
+
+    .thread--waiting::after {
+      width: 100%;
+      opacity: 0.4;
+    }
+  }
+
+  .thread > span {
+    display: block;
+    height: 2px;
+    border-radius: 99px;
+    background-color: var(--color-ballpoint);
+    transition: width 0.5s var(--ease-press);
+  }
+
+  /* ── A result sheet ───────────────────────────────────────────────────
+     Paper by default; add `bg-duplicate` for the developer's copy. */
+  .sheet {
+    position: relative;
+    width: 100%;
+    max-width: var(--container-sheet);
+    margin-inline: auto;
+    background-color: var(--color-paper);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-sheet);
+    overflow: hidden;
+  }
+
+  /* ── The total ────────────────────────────────────────────────────────
+     The one place a figure is allowed to be loud. A calm accent-tinted panel
+     with the number set as a display figure — the kit's own treatment for a
+     number that is the answer rather than a data point. No rotation, no stamp: the
+     old carbon-pad conceit does not belong in this direction.
+
+     The resting state is the settled state, so a reduced-motion visitor sees a
+     finished panel and never a mid-animation frame. */
+  .stamp {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    padding-block: 1.1rem 1.2rem;
+    padding-inline: 1.5rem;
+    min-width: 248px;
+    /* `.stamp-figure` below is deliberately `white-space: nowrap` - a number
+       broken mid-digit reads worse than almost anything else on the page -
+       but that means an eight-figure total has nowhere to go on a narrow
+       card. `max-width: 100%` stops the stamp itself from forcing the page
+       wider than its viewport the way an unconstrained `inline-flex` box
+       would; `overflow-x: auto` gives the rare total that still doesn't fit
+       its own scrollbar instead, the same "wide content scrolls in its own
+       container" idiom the narrative's tables already use. */
+    max-width: 100%;
+    overflow-x: auto;
+    color: var(--color-ballpoint);
+    background-color: var(--color-accent-soft);
+    border: 1px solid color-mix(in srgb, var(--color-ballpoint) 22%, transparent);
+    border-radius: var(--radius-xl);
+  }
+
+  .stamp-currency {
+    font-family: var(--font-label);
+    font-weight: 500;
+    font-size: var(--text-xs);
+    line-height: 1;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ballpoint);
+    opacity: 0.75;
+  }
+
+  .stamp-figure {
+    font-family: var(--font-figure);
+    font-weight: 600;
+    font-size: 34px;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    white-space: nowrap;
+    color: var(--color-ink);
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     PROSE — rendered markdown
+     Headings in Archivo uppercase, body in Source Serif 4, ruled tables,
+     every figure in DM Mono.
+     ══════════════════════════════════════════════════════════════════════ */
+  .prose {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    color: var(--color-ink);
+    overflow-wrap: break-word;
+
+    & > :first-child {
+      margin-block-start: 0;
+    }
+
+    & > :last-child {
+      margin-block-end: 0;
+    }
+
+    /* -- headings ---------------------------------------------------- */
+    & :is(h1, h2, h3, h4, h5, h6) {
+      font-family: var(--font-display);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--color-ink);
+      text-wrap: balance;
+    }
+
+    & h1 {
+      font-size: var(--text-xl);
+      line-height: 1.15;
+      margin-block: 0 0.8rem;
+    }
+
+    & h2 {
+      font-size: var(--text-lg);
+      line-height: 1.25;
+      margin-block: 2.25rem 0.7rem;
+      padding-block-end: 0.35rem;
+      border-block-end: 1px solid var(--color-rule);
+    }
+
+    & h3 {
+      font-size: var(--text-base);
+      line-height: 1.3;
+      letter-spacing: 0.02em;
+      margin-block: 1.6rem 0.45rem;
+    }
+
+    & :is(h4, h5, h6) {
+      font-size: var(--text-sm);
+      line-height: 1.35;
+      letter-spacing: 0.1em;
+      color: var(--color-void);
+      margin-block: 1.3rem 0.35rem;
+    }
+
+    /* -- flow -------------------------------------------------------- */
+    & p {
+      margin-block: 0 0.9rem;
+    }
+
+    & :is(ul, ol) {
+      margin-block: 0 0.9rem;
+      padding-inline-start: 1.4rem;
+    }
+
+    & ul {
+      list-style: square;
+    }
+
+    & ol {
+      list-style: decimal;
+    }
+
+    & li {
+      margin-block: 0.22rem;
+    }
+
+    & li::marker {
+      color: var(--color-void);
+      font-family: var(--font-label);
+      font-size: var(--text-sm);
+    }
+
+    & :is(ul, ol) :is(ul, ol) {
+      margin-block: 0.22rem 0.4rem;
+    }
+
+    /* Acceptance criteria arrive as GFM task items. They get a ruled box in
+       place of the square marker - the same box a paper checklist would use. */
+    & li.task {
+      list-style: none;
+      display: flex;
+      gap: 0.6rem;
+      align-items: flex-start;
+      margin-inline-start: -1.4rem;
+    }
+
+    /* An acceptance criterion is something an engineer ticks off, so it gets a
+       real box. The border is --color-void rather than --color-rule: a rule is
+       for dividing a surface it barely contrasts with, and at 1px on the
+       duplicate stock it was invisible. Sized to 15px and given the kit's small
+       radius so it reads as a control rather than a speck. */
+    & .task-box {
+      flex: none;
+      inline-size: 15px;
+      block-size: 15px;
+      margin-block-start: 0.24em;
+      border: 1.5px solid var(--color-void);
+      border-radius: 4px;
+      background-color: var(--color-paper);
+    }
+
+    & .task-box[data-done='true'] {
+      border-color: var(--color-ballpoint);
+      background-color: var(--color-ballpoint);
+      /* THIS TICK HAS TO INVERT WITH THE THEME, and it did not always. The
+         box fills with `--color-ballpoint`, and the olive accent is LIGHT in
+         dark mode (`#a8b862`) and DARK in light mode (`#55631f`) - so a single
+         baked stroke cannot sit on both. It was `%23FFFDFA`, near-white, which
+         was right when the fill was a mid-tone violet (3.28); against the
+         deep olive it would be 2.7, and against the ash accent that briefly
+         replaced the violet it measured 1.05. An invisible tick on a filled
+         box reads as unchecked - the worst kind of wrong, because the control
+         still looks fine.
+
+         So the stroke follows the theme, opposite to everything else in this
+         file: DARK here, light in the override below. `%2312100E` is the dark
+         canvas on the light olive (8.77); the override is white on the deep
+         olive (6.48).
+
+         URL-encoded (`%23` is `#`) like the arrow above, which is why colour
+         sweeps miss it and why the contrast gate cannot measure it. If
+         `--color-ballpoint` moves in either theme, re-measure BOTH by hand. */
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.3l2.4 2.4L9.6 4' fill='none' stroke='%2312100E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: 11px 11px;
+    }
+
+    /* The light half of the pair above. `&` is `.prose`, so these resolve to
+       `html[data-theme='light'] .prose ...` and `.sheet-light .prose ...` -
+       the second is what a client's quotation matches, since `ClientShell`
+       carries `sheet-light` on its root and the document renders inside it. */
+    html[data-theme='light'] & .task-box[data-done='true'],
+    .sheet-light & .task-box[data-done='true'] {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.3l2.4 2.4L9.6 4' fill='none' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+
+    & strong {
+      font-weight: 600;
+    }
+
+    & a {
+      color: var(--color-ballpoint);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    & hr {
+      border: 0;
+      border-block-start: 1px solid var(--color-rule);
+      margin-block: 1.75rem;
+    }
+
+    & blockquote {
+      margin-block: 0 1rem;
+      padding-inline-start: 0.9rem;
+      border-inline-start: 2px solid var(--color-ballpoint);
+      color: var(--color-void);
+    }
+
+    /* -- code -------------------------------------------------------- */
+    & code {
+      font-family: var(--font-label);
+      font-size: 0.92em;
+      background-color: var(--color-duplicate);
+      border-radius: var(--radius-DEFAULT);
+      padding: 0.1em 0.32em;
+    }
+
+    & pre {
+      font-family: var(--font-label);
+      font-size: var(--text-sm);
+      line-height: 1.55;
+      background-color: var(--color-duplicate);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-DEFAULT);
+      padding: 0.85rem 1rem;
+      margin-block: 0 1rem;
+      overflow-x: auto;
+    }
+
+    & pre code {
+      background: none;
+      border: 0;
+      padding: 0;
+      font-size: inherit;
+    }
+
+    /* -- tables: the heart of the client sheet ------------------------ */
+    & table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-block: 0 1.35rem;
+      font-size: var(--text-sm);
+    }
+
+    /* A short label in the first column of a two-column block - "Quotation
+       ref.", "Date of issue" - must not wrap just because the value beside it
+       is long. Only bold first cells are pinned: the Investment table's long
+       descriptions are not bold and still wrap as they should. */
+    & td:first-child > strong,
+    & th:first-child > strong {
+      white-space: nowrap;
+    }
+
+    & thead th {
+      font-family: var(--font-label);
+      font-weight: 500;
+      font-size: var(--text-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--color-void);
+      text-align: start;
+      white-space: nowrap;
+      padding: 0.5rem 0.6rem;
+      border-block-end: 2px solid var(--color-ink);
+    }
+
+    & tbody td {
+      padding: 0.55rem 0.6rem;
+      vertical-align: top;
+      border-block-end: 1px solid var(--color-rule);
+    }
+
+    & tbody tr:last-child td {
+      border-block-end: 0;
+    }
+
+    /* A heavier rule above the total row. Markdown has no <tfoot>, so the
+       total arrives as the last row and is bold — collapse resolves the 2px
+       ink border over the 1px rule above it, no double line. */
+    & tbody tr:last-child:has(strong) > td {
+      border-block-start: 2px solid var(--color-ink);
+      font-weight: 600;
+    }
+
+    & tfoot td {
+      padding: 0.6rem;
+      font-weight: 600;
+      border-block-start: 2px solid var(--color-ink);
+    }
+
+    /* Every number cell in DM Mono, tabular, right-aligned. Markdown's
+       right-aligned columns are the money columns; `.num` is the manual
+       escape hatch for cells built in JSX rather than parsed from markdown. */
+    & :is(td, th)[align="right"],
+    & :is(td, th)[style*="right"],
+    & :is(td, th).num {
+      font-family: var(--font-label);
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    & :is(td, th)[align="center"] {
+      text-align: center;
+    }
+
+    /* Down at 360px a six-column rate table cannot fit. Let the table itself
+       scroll rather than the page. */
+    @media (max-width: 40rem) {
+      & table {
+        display: block;
+        width: max-content;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     MOTION — six moments, and the count is the point.
+     Reduce is the safe default: every rule below is inside the
+     no-preference guard, and every resting state above is already correct.
+
+     It was four, deliberately. The studio asked for the app to feel alive, so
+     two were added - a staggered arrival for lists, and a lift on cards that
+     open something. Both reuse the existing keyframe and the existing curve.
+
+     The number is written in this heading so that adding a seventh is a
+     decision somebody has to make on purpose rather than a thing that happens
+     one component at a time. Motion in a tool is a budget, not a feature: it
+     is what tells you the difference between the app working and the app
+     being slow, and every additional moving thing spends a little of that
+     signal.
+     ══════════════════════════════════════════════════════════════════════ */
+  @media (prefers-reduced-motion: no-preference) {
+
+    /* ck-rise — results arriving, 60ms apart. */
+    .sheet {
+      animation: ck-rise 320ms var(--ease-press) both;
+      animation-delay: var(--sheet-delay, 0ms);
+    }
+
+    .sheet ~ .sheet {
+      --sheet-delay: 60ms;
+    }
+
+    /* ck-toast — the total landing. Once, on result render. */
+    .stamp {
+      animation: ck-toast 320ms var(--ease-press) both;
+    }
+
+    /* The same rise, borrowed for the message stack rather than given its own
+       keyframe: a toast arrives the way a total does, from just below where it
+       ends up. No new moment of motion is spent on it. */
+    .toast {
+      animation: ck-toast 320ms var(--ease-press) both;
+    }
+
+    /* ck-shimmer — a sheen travelling along a bar that is actually working.
+       It says "running", which is true, and claims no ground: the fill's width
+       still only moves when a step genuinely finishes. Without it a bar that
+       sits at 33% for forty seconds is indistinguishable from one that has
+       stalled. */
+    .bar-live {
+      background-image: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in oklab, var(--color-paper) 28%, transparent) 45%,
+        transparent 90%
+      );
+      background-size: 220px 100%;
+      background-repeat: no-repeat;
+      animation: ck-shimmer 1.6s linear infinite;
+    }
+
+    /* ck-rise again, shorter — a step of the pad arriving. The panel is keyed
+       on the step id, so React remounts it and the animation runs once per
+       move. Half the duration of a result sheet: this is a step in a form
+       somebody is working through, not an answer worth announcing. */
+    .step-panel {
+      animation: ck-rise 200ms var(--ease-press) both;
+    }
+
+    /* ── Two more moments, added on purpose ──────────────────────────────
+       The budget above was four and the restraint was the point, so this
+       says what was bought and what it cost.
+
+       Both reuse `ck-rise` and `--ease-press`. No new keyframe, no new curve:
+       the app should look like one hand made it, and a second easing curve is
+       how a set of animations starts feeling like a pile of animations. */
+
+    /* `.rise-in` — the same arrival as a result sheet, but for a LIST, with
+       each item a beat behind the one before it. `.sheet ~ .sheet` above does
+       this for exactly two elements by way of a sibling selector; a grid of
+       six cards needs an index, so the component passes one as `--i`.
+
+       The delay is CLAMPED at 240ms. Without the clamp a twenty-row list
+       makes its last row wait 900ms, which stops reading as choreography and
+       starts reading as the app being slow - the opposite of what motion is
+       here to say. Past the sixth item everything lands together, and nobody
+       has ever noticed.
+
+       `backwards`, NOT `both`, and this one is a correctness fix rather than a
+       preference. The other rules in this block animate elements that are
+       nothing but the animation; this one lands on cards and rows that also
+       have a resting style, a hover style and sometimes an opacity of their
+       own - and a filled-FORWARDS animation keeps applying its last keyframe
+       for the life of the element, above every ordinary declaration in the
+       cascade. With `both`, `opacity: 1` and `translateY(0)` were pinned
+       permanently: a closed request row lost its `opacity-60` the instant its
+       arrival finished, and `.lift:hover` below could not move a card that
+       had already risen. Measured in Chromium, not reasoned about - the hover
+       transform read `matrix(1, 0, 0, 1, 0, 0)` before and after.
+
+       `backwards` fills only the delay, which is the half the stagger needs:
+       a row waiting its turn is hidden, and once it has landed it is an
+       ordinary element again. The `to` keyframe is the resting state anyway,
+       so nothing moves at the hand-off. */
+    .rise-in {
+      animation: ck-rise 300ms var(--ease-press) backwards;
+      animation-delay: min(calc(var(--i, 0) * 45ms), 240ms);
+    }
+
+    /* `.lift` — a card that can be opened says so when the pointer is on it.
+       TRANSFORM ONLY, and that is not a style preference: these sit in fixed
+       -height one-screen shells, and a hover that changed margin or height
+       would reflow the grid under the pointer and, on a shell that fits
+       exactly, could push the last row out of view. A transform is painted,
+       not laid out, so nothing below it moves.
+
+       Held inside the no-preference guard along with its own transition: with
+       reduce set, a `:hover` transform with no transition is a 2px jump under
+       the cursor, which is worse than no effect at all.
+
+       `border-color` joins the list, and it is not a third thing this class
+       does - it is the same 180ms, on the same curve, for the border a card
+       already changes on hover. Tailwind's `transition-*` utilities cannot be
+       used alongside this rule to cover it: utilities sit in a LATER cascade
+       layer than components, so `transition-[border-color,…]` on the element
+       would replace this whole declaration and leave the transform snapping.
+       One class owns the timing of the hover, or none of it does. */
+    .lift {
+      transition:
+        transform 180ms var(--ease-press),
+        box-shadow 180ms var(--ease-press),
+        border-color 180ms var(--ease-press);
+    }
+
+    .lift:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-raised);
+    }
+
+    /* The press still wins over the hover: a card you are clicking should go
+       down, not stay up. Same curve, and it reads as one gesture. */
+    .lift:active {
+      transform: translateY(0) scale(0.997);
+    }
+  }
+}
+
+@layer components {
+  /* ── `.neu` — neumorphism, on trial on one control ───────────────────
+     A shape lit from the top left and shadowed to the bottom right, in its
+     own surface colour, so it looks pressed out of the page. Pressing it
+     turns both shadows inward and it looks pressed back in - that inversion
+     is the entire idea, and it is why this only belongs on things you
+     actually press.
+
+     THE BACKGROUND MUST MATCH ITS PARENT EXACTLY or the illusion collapses
+     into a grey lozenge. The header is `bg-paper/60` over the canvas, so
+     this is that same blend computed rather than `--color-paper` guessed -
+     get this wrong by two percent and it reads as a slightly-off rectangle.
+     A `.neu` on any other surface needs its own background; that is the main
+     reason this is not simply sprinkled around.
+
+     WHAT IS WRONG WITH IT, stated because the style is fashionable and the
+     problem is not obvious: neumorphism has no border and no fill contrast -
+     the control is the same colour as the page and is defined only by soft
+     shadow. WCAG asks 3:1 of a control's visual boundary, and a soft shadow
+     does not reliably provide it. So:
+
+       · the ICON inside keeps its own contrast (`text-void`, 6.49/7.26), and
+         is what actually identifies this as a button;
+       · `:focus-visible` keeps the standard ring rather than an inset - a
+         keyboard user must never depend on the shadow;
+       · it stays on controls whose position already says what they are.
+
+     Do not put `.neu` on a primary action. A button that says "Send this to
+     a client" has to be findable by someone who cannot resolve a 4px
+     shadow. */
+  .neu {
+    background-color: color-mix(in oklab, var(--color-paper) 60%, var(--color-canvas));
+    box-shadow:
+      -4px -4px 9px var(--neu-light),
+      4px 4px 10px var(--neu-dark);
+    transition: box-shadow 180ms var(--ease-press);
+  }
+
+  /* Both lights turn inward: the same form, seen from inside. Slightly
+     tighter than the raised state because a real dish is shallower than the
+     bump it came from. */
+  .neu:active {
+    box-shadow:
+      inset -3px -3px 7px var(--neu-light),
+      inset 3px 3px 8px var(--neu-dark);
+  }
+
+  /* The ring wins outright. `box-shadow` is one property, so a focus ring
+     expressed as a shadow would REPLACE the neumorphism rather than sit with
+     it - and losing the focus ring is the one failure this style must not
+     have. Listed last so it takes precedence, and it keeps the raised form
+     alongside it. */
+  .neu:focus-visible {
+    outline: none;
+    box-shadow:
+      var(--shadow-ring),
+      -4px -4px 9px var(--neu-light),
+      4px 4px 10px var(--neu-dark);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   UTILITIES — one correction
+
+   Every *named* radius step (`rounded-sm`, `rounded-md`, …) reads from the
+   `--radius-*` tokens above and is therefore already 2px. The **bare** forms
+   are the exception: Tailwind v4 hardcodes `rounded`, `rounded-t`, `rounded-l`
+   and friends to 0.25rem, and no theme variable — `--radius-DEFAULT` included —
+   can reach them. Verified against tailwindcss 4.3.3, which compiles
+   `.rounded { border-radius: 0.25rem }` regardless of the theme.
+
+   So they are pinned here. Same layer as Tailwind's own utilities and later in
+   document order, which is what makes these win. Radius is 2px everywhere,
+   whichever spelling gets reached for.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@layer utilities {
+  /* Scrolls, but shows nothing for it.
+     Used on the pad, where the card is pinned to the viewport and a bar that
+     appeared on one step and not another would read as the card resizing. The
+     content is still reachable by wheel, trackpad, arrow keys and Tab — this
+     hides the indicator, not the overflow. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rounded {
+    border-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-t {
+    border-top-left-radius: var(--radius-DEFAULT);
+    border-top-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-r {
+    border-top-right-radius: var(--radius-DEFAULT);
+    border-bottom-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-b {
+    border-bottom-right-radius: var(--radius-DEFAULT);
+    border-bottom-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-l {
+    border-top-left-radius: var(--radius-DEFAULT);
+    border-bottom-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-s {
+    border-start-start-radius: var(--radius-DEFAULT);
+    border-end-start-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-e {
+    border-start-end-radius: var(--radius-DEFAULT);
+    border-end-end-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-tl {
+    border-top-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-tr {
+    border-top-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-br {
+    border-bottom-right-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-bl {
+    border-bottom-left-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-ss {
+    border-start-start-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-se {
+    border-start-end-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-ee {
+    border-end-end-radius: var(--radius-DEFAULT);
+  }
+
+  .rounded-es {
+    border-end-start-radius: var(--radius-DEFAULT);
+  }
+}
+
+/* Keyframes live outside the layers — @layer has no effect on them, and
+   top level keeps the names unambiguous. */
+@keyframes ck-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ck-toast {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ck-shimmer {
+  from {
+    background-position: -300px 0;
+  }
+  to {
+    background-position: 300px 0;
+  }
+}
+
+@keyframes ck-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+```
+
+## Semantic component tokens
+
+Path: `frontend/src/components/tokens.ts`
+
+```ts
+/**
+ * Shared class strings for the Clarity Kit direction (docs/DESIGN.md).
+ *
+ * The design system lives in src/index.css: the kit's palette, its two
+ * typefaces, its stepped radii, its four shadows, and the hand-written
+ * component classes below. This file only names them, so there is exactly one
+ * definition of "a field" or "an eyebrow" in the client.
+ *
+ * Written as complete literals so the Tailwind v4 scanner can see every class.
+ */
+
+// Figtree 600 with tight tracking. Sentence case — the kit saves
+// capitals for the small labels below.
+export const DISPLAY = 'display'
+
+// The kit's eyebrow: 12px, uppercase, 0.14em tracking, faint.
+export const MONO_LABEL =
+  'font-label text-[12px] font-medium uppercase tracking-[0.14em] text-faint'
+
+// A figure meant to be read as a statement rather than scanned in a column:
+// Figtree at 600 with the kit's tight -0.03em tracking, the treatment it
+// gives its own headline numbers. Tabular, so it still aligns if it ever lands
+// in a column.
+export const FIGURE = 'figure text-ink'
+
+/**
+ * The kit's field: surface fill, 1px border, 12px radius, and on focus an
+ * accent border plus a 4px tinted ring. `.well` owns the focus treatment — do
+ * not override its border, padding or radius from here.
+ */
+export const WELL = 'well'
+
+/**
+ * The brief: the one question the whole product hangs on, so it is set larger
+ * than the other fields and given room. `.well-ruled` pins its own font size
+ * and line height.
+ */
+export const WELL_TEXTAREA = 'well well-ruled min-h-[184px]'
+
+// The primary action: solid accent, soft green shadow, 11px radius. Same height
+// and minimum width as `ACTION` - the fill is the whole difference, because a
+// button that is also wider and taller than the one beside it stops reading as
+// the same kind of control.
+export const ACTION_PRIMARY = 'action-primary'
+
+// Secondary action: download, print, remove, delete. Outlined, never filled.
+export const ACTION = 'action-quiet'
+
+// A card: surface on canvas, hairline border, 14px radius, the kit's soft
+// shadow. Section headers sit above a 1px rule inside it.
+export const CARD = 'rounded-xl border border-rule bg-paper shadow-sheet'
+```
+
+## Theme state utility
+
+Path: `frontend/src/lib/theme.ts`
+
+```ts
+/**
+ * Which palette the studio is in, and remembering it.
+ *
+ * LIGHT IS THE DEFAULT. It was dark, on the reasoning that the app was
+ * designed dark and an install with no stored preference should open the way
+ * the screenshots do. The studio asked for the opposite, so an install that
+ * has never touched this now opens light.
+ *
+ * `data-theme='light'` STILL MEANS LIGHT, which is worth stating because the
+ * obvious way to make light the default is to invert the attribute and let
+ * absence mean light. That is not what happened here. `index.css` carries the
+ * dark values in `@theme` and selects `html[data-theme='light']` to swap them
+ * - and the very same block is what `.sheet-light` uses to paint a client's
+ * page and a design preview inside a dark app. Inverting the attribute would
+ * mean inverting that block too, which is a re-write of the palette rather
+ * than a change of default.
+ *
+ * So the default moved and the vocabulary did not: the attribute is now
+ * PRESENT unless the studio has explicitly chosen dark. The consequence is
+ * that the default state is no longer the absence of a choice - it is written
+ * onto <html> by the script in index.html before first paint, and if that
+ * script never runs the app falls back to dark. That is the trade, and it is
+ * the reason the script is in <head> rather than at the end of <body>.
+ *
+ * Nothing else in the app knows a theme exists, which is the property that
+ * made the re-skin a palette rather than 54 files.
+ */
+
+export type Theme = 'dark' | 'light'
+
+const KEY = 'prism.theme'
+
+/** The stored choice, or light. Never throws: a browser with storage disabled
+ *  - Safari's private mode, a locked-down profile - must still render an app,
+ *  and it gets the default like any other first visit. */
+export function readTheme(): Theme {
+  try {
+    return window.localStorage.getItem(KEY) === 'dark' ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
+/** Apply and remember.
+ *
+ *  Both branches are explicit now. While dark was the default this removed the
+ *  attribute rather than setting it, so the CSS needed one selector instead of
+ *  two; with light as the default the attribute has to be written for the
+ *  common case anyway, and `removeAttribute` for dark keeps the dark palette
+ *  as the one `@theme` states directly. */
+export function applyTheme(theme: Theme): void {
+  const root = document.documentElement
+  if (theme === 'light') root.setAttribute('data-theme', 'light')
+  else root.removeAttribute('data-theme')
+  try {
+    window.localStorage.setItem(KEY, theme)
+  } catch {
+    // A studio that cannot store its preference still gets to use it for this
+    // session. Refusing to switch because the choice cannot be remembered
+    // would be the worse failure.
+  }
+}
+
+export function toggleTheme(): Theme {
+  // The DOM, not storage. `applyTheme` sets the attribute outside its
+  // try/catch, so it is correct even when the write that follows it fails -
+  // and on a browser where writes never persist, asking storage what the
+  // current theme is returns the pre-failure answer for ever and this button
+  // stops doing anything after one press. The module already promises to
+  // survive that case; reading storage here is what broke the promise.
+  const current: Theme =
+    document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+  const next: Theme = current === 'light' ? 'dark' : 'light'
+  applyTheme(next)
+  return next
+}
+```
+
