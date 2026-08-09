@@ -82,7 +82,7 @@ export default function ProposalList() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex w-full flex-wrap items-center gap-x-5 gap-y-2 sm:w-auto">
             <label htmlFor="proposal_search" className="sr-only">
               Find a proposal
             </label>
@@ -92,7 +92,7 @@ export default function ProposalList() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Project, client or reference"
-              className={`${WELL} w-[260px] py-2`}
+              className={`${WELL} w-full py-2 sm:w-[260px]`}
             />
           </div>
         </div>
@@ -130,7 +130,7 @@ export default function ProposalList() {
                 style={{ '--i': index } as CSSProperties}
                 className="row-touch rise-in flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
               >
-                <div className="min-w-[16rem] flex-1">
+                <div className="min-w-0 flex-1 basis-full sm:min-w-[16rem] sm:basis-auto">
                   <a
                     href={`#/p/${row.id}`}
                     className="font-body text-[15px] text-ink no-underline hover:text-ballpoint"

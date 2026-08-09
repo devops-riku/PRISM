@@ -16,14 +16,17 @@ import { CARD, DISPLAY } from './tokens'
  */
 export default function TeamScreen() {
   return (
-    <section aria-labelledby="team-title" className={`${CARD} shrink-0`}>
+    <section
+      aria-labelledby="team-title"
+      className={`${CARD} flex min-h-0 flex-1 flex-col overflow-hidden`}
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-4 border-b border-rule px-5 py-3 sm:px-6">
         <h2 id="team-title" className={`${DISPLAY} text-[20px]`}>
           Teams
         </h2>
       </div>
 
-      <div className="px-5 py-5 sm:px-6">
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
         <TeamPanel />
       </div>
     </section>

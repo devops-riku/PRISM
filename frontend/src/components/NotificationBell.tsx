@@ -71,7 +71,7 @@ export default function NotificationBell() {
               aria-label={
                 unread ? `Notifications, ${unread} unread` : 'Notifications, nothing new'
               }
-              className="relative flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-void transition-[background-color,border-color,color] duration-150 hover:bg-paper hover:text-ballpoint data-[open]:border-rule data-[open]:bg-paper"
+              className="relative flex h-10 w-10 items-center justify-center rounded-md border border-transparent text-void transition-[background-color,border-color,color] duration-150 hover:bg-paper hover:text-ballpoint data-[open]:border-rule data-[open]:bg-paper sm:h-9 sm:w-9"
             >
               <svg
                 aria-hidden="true"
@@ -102,7 +102,7 @@ export default function NotificationBell() {
             <PopoverPanel
               anchor="bottom end"
               modal={false}
-              className="z-50 w-[22rem] rounded-[18px] border border-rule bg-paper shadow-raised [--anchor-gap:8px] focus:outline-none"
+              className="z-50 w-[min(22rem,calc(100vw-1rem))] rounded-[18px] border border-rule bg-paper shadow-raised [--anchor-gap:8px] focus:outline-none"
             >
               <div className="flex items-baseline justify-between gap-4 border-b border-hairline px-4 py-3">
                 <p className={MONO_LABEL}>Notifications</p>

@@ -85,7 +85,7 @@ export default function ProposalStudio() {
           <h2 id="build-proposal" className={`${DISPLAY} text-[18px]`}>
             Build a proposal
           </h2>
-          <div className="flex items-center gap-4">
+          <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap sm:gap-4">
             {/* The way back to what has been built, from the screen that builds
                 it. The list is its own page now, and this is the one place
                 somebody would look for it without going home first. */}
@@ -101,7 +101,7 @@ export default function ProposalStudio() {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Find a quotation"
               aria-label="Find a quotation to build from"
-              className={`${WELL} w-[240px] py-2`}
+              className={`${WELL} w-full py-2 sm:w-[240px]`}
             />
           </div>
         </div>

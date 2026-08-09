@@ -118,8 +118,10 @@ type CardProps = {
 function Card({ title, blurb, children, footer }: CardProps) {
   return (
     <div className="no-scrollbar max-h-dvh w-full max-w-[24rem] overflow-y-auto">
-      {/* p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx). */}
-      <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
+      {/* Phones need the extra 16px of field width, especially for the six
+          one-time-code targets. The card returns to the single-card family's
+          roomier padding once there is enough viewport to spend. */}
+      <div className="rounded-[18px] border border-rule bg-paper p-5 shadow-raised sm:p-8">
         {/* The mark, not a letter in a box. The `P` tile predated there being
             a logo; now that there is one, the sign-in card is the first place
             anybody sees the product and should show it. */}
@@ -214,7 +216,7 @@ function Primary({ children, ...rest }: PrimaryProps) {
   return (
     <button
       type="submit"
-      className="mt-4 w-full rounded-[11px] bg-ballpoint px-4 py-2.5 font-label text-[13px] uppercase tracking-[0.1em] text-paper shadow-action transition-[transform,background-color] duration-150 ease-press hover:bg-accent-deep active:scale-[0.99] disabled:opacity-45 disabled:shadow-none motion-reduce:transform-none"
+      className="mt-4 min-h-11 w-full rounded-[11px] bg-ballpoint px-4 py-2.5 font-label text-[13px] uppercase tracking-[0.1em] text-paper shadow-action transition-[transform,background-color] duration-150 ease-press hover:bg-accent-deep active:scale-[0.99] disabled:opacity-45 disabled:shadow-none motion-reduce:transform-none sm:min-h-0"
       {...rest}
     >
       {children}
@@ -228,7 +230,7 @@ function Quiet({ children, ...rest }: QuietProps) {
   return (
     <button
       type="button"
-      className="font-body text-[13.5px] text-ballpoint underline underline-offset-[3px] hover:text-accent-deep"
+      className="inline-flex min-h-11 items-center font-body text-[13.5px] text-ballpoint underline underline-offset-[3px] hover:text-accent-deep sm:min-h-0"
       {...rest}
     >
       {children}
@@ -293,10 +295,10 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
   }
 
   return (
-    /* Every pixel of gap comes straight off the width of each box, and the
-       boxes stay square - so the gap is part of how big they end up. `gap-2`
-       fits six comfortably; eight needed `gap-1.5`. */
-    <div className="flex gap-2">
+    /* Every pixel of gap comes straight off the width of each box. Phones use
+       the tighter gap to preserve the targets; the roomier row returns at
+       `sm`. */
+    <div className="flex gap-1 sm:gap-2">
       {digits.map((digit, index) => (
         <input
           key={index}
@@ -332,7 +334,7 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
              other field here measures 3.6-3.8.
              The inset shadow matches them to the rest too - a thing you type
              into is a dish. */
-          className="aspect-square w-full min-w-0 rounded-[11px] border border-[color:var(--well-border)] bg-duplicate text-center font-label text-[18px] tabular-nums text-ink shadow-[var(--shadow-inset)] focus:border-ballpoint focus:outline-none focus:ring-4 focus:ring-ballpoint/12"
+          className="aspect-square min-h-11 w-full min-w-0 rounded-[11px] border border-[color:var(--well-border)] bg-duplicate text-center font-label text-[18px] tabular-nums text-ink shadow-[var(--shadow-inset)] focus:border-ballpoint focus:outline-none focus:ring-4 focus:ring-ballpoint/12 sm:min-h-0"
         />
       ))}
     </div>
@@ -446,7 +448,7 @@ export default function AuthScreen() {
         <span className="font-label text-[11px] uppercase tracking-[0.14em] text-faint">or</span>
         <span className="h-px flex-1 bg-hairline" />
       </div>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-col gap-2 min-[360px]:flex-row">
         {PROVIDERS.map((provider) => (
           <button
             key={provider.id}
@@ -461,7 +463,7 @@ export default function AuthScreen() {
             aria-label={
               SSO_READY ? provider.label : `${provider.label} — not available yet`
             }
-            className="flex flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-paper"
+            className="flex min-h-11 w-full flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-paper sm:min-h-0"
           >
             {provider.mark}
             {provider.short}
@@ -507,7 +509,7 @@ export default function AuthScreen() {
             </Primary>
           </form>
 
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4 flex flex-col items-start gap-1 min-[360px]:flex-row min-[360px]:items-center min-[360px]:justify-between min-[360px]:gap-3">
             <Quiet
               onClick={() =>
                 run(() => sendEmailCode(email).then(() => notice('Sent. Check your inbox.')))

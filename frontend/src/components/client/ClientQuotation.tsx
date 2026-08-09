@@ -178,8 +178,9 @@ export default function ClientQuotation({
         : 'Here is your quotation'
 
   return (
-    // p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx).
-    <div className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8">
+    // A narrower phone spends less of its width on the card edge; the shared
+    // desktop padding returns at `sm`.
+    <div className="min-w-0 rounded-[18px] border border-rule bg-paper p-5 shadow-raised sm:p-8">
       <p className={MONO_LABEL}>{studio}</p>
       <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <h1

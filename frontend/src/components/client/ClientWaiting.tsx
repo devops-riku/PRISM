@@ -42,10 +42,11 @@ export default function ClientWaiting({ view }: { view: ClientWaitingView }) {
   }, [])
 
   return (
-    // p-7 sm:p-8, shared across the single-card family (see AuthGate.tsx).
+    // A narrower phone spends less of its width on the card edge; the shared
+    // desktop padding returns at `sm`.
     <div
       role="status"
-      className="rounded-[18px] border border-rule bg-paper p-7 shadow-raised sm:p-8"
+      className="min-w-0 rounded-[18px] border border-rule bg-paper p-5 shadow-raised sm:p-8"
     >
       <p className={MONO_LABEL}>{studio}</p>
       <h1
@@ -64,7 +65,9 @@ export default function ClientWaiting({ view }: { view: ClientWaitingView }) {
         </div>
         <div className="flex items-baseline justify-between gap-4 py-2.5">
           <dt className="text-void">From</dt>
-          <dd className="text-ink">{view.email || '—'}</dd>
+          <dd className="min-w-0 text-right text-ink [overflow-wrap:anywhere]">
+            {view.email || '—'}
+          </dd>
         </div>
         <div className="flex items-baseline justify-between gap-4 py-2.5">
           <dt className="text-void">What you wrote</dt>

@@ -97,29 +97,31 @@ export default function AppHeader({
           no longer lends it a top margin the way it used to, so this is the
           whole of the bar's height now, not half of it. */}
       <div
-        className={`mx-auto flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6 sm:py-4 ${width === 'sheet' ? 'max-w-sheet' : 'max-w-app'}`}
+        className={`mx-auto flex w-full items-center justify-between gap-2 px-4 py-2 sm:gap-4 sm:px-6 sm:py-4 ${width === 'sheet' ? 'max-w-sheet' : 'max-w-app'}`}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <a
             href="#/"
-            className={`${DISPLAY} text-[15px] tracking-[-0.01em] text-ink no-underline hover:text-ballpoint`}
+            className={`${DISPLAY} shrink-0 text-[15px] tracking-[-0.01em] text-ink no-underline hover:text-ballpoint`}
           >
             PRISM
           </a>
-          <WorkspaceMenu />
+          <div className="hidden min-w-0 sm:block">
+            <WorkspaceMenu />
+          </div>
           {screenName ? (
-            <>
+            <div className="hidden min-w-0 items-center gap-3 lg:flex">
               <span aria-hidden="true" className="font-label text-[12px] text-faint">
                 /
               </span>
-              <p className="font-label text-[12px] uppercase tracking-[0.14em] text-faint">
+              <p className="truncate font-label text-[12px] uppercase tracking-[0.14em] text-faint">
                 {screenName}
               </p>
-            </>
+            </div>
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           {/* One field that reaches everything. It sits beside the profile rather
               than in the middle: it is a way through the app, not the subject of
               the page. */}
@@ -140,7 +142,7 @@ export default function AppHeader({
                is a reasonable first subject: it is a toggle, so the pressed
                inversion means something, and its job is already given away by
                the icon rather than by the shape around it. */
-            className="neu rounded-[10px] p-2 text-void transition-colors hover:text-ink"
+            className="neu flex h-10 w-10 items-center justify-center rounded-[10px] text-void transition-colors hover:text-ink sm:h-auto sm:w-auto sm:p-2"
           >
             <svg
               aria-hidden="true"
@@ -165,18 +167,18 @@ export default function AppHeader({
           <Menu>
             <MenuButton
               aria-label={`${studio} — menu`}
-              className="flex items-center gap-2 rounded-md border border-transparent py-1 pl-1 pr-2 transition-[background-color,border-color] duration-150 hover:bg-paper data-[open]:border-rule data-[open]:bg-paper"
+              className="flex h-10 items-center gap-1 rounded-md border border-transparent p-1 transition-[background-color,border-color] duration-150 hover:bg-paper data-[open]:border-rule data-[open]:bg-paper sm:gap-2 sm:pr-2"
             >
               <span className="flex h-7 w-7 items-center justify-center rounded-md bg-ballpoint font-label text-[11px] font-medium tracking-[0.06em] text-paper">
                 {initialsFor(studio)}
               </span>
-              <span className="hidden max-w-[16ch] truncate font-body text-[13px] text-body sm:block">
+              <span className="hidden max-w-[16ch] truncate font-body text-[13px] text-body xl:block">
                 {studio}
               </span>
               <svg
                 aria-hidden="true"
                 viewBox="0 0 12 8"
-                className="h-2 w-3 flex-none text-faint"
+                className="hidden h-2 w-3 flex-none text-faint sm:block"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="1.5"
@@ -242,7 +244,7 @@ export default function AppHeader({
               }}
               aria-label="Close and go back"
               title="Back"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rule bg-paper text-void no-underline transition-[color,border-color,transform] duration-150 hover:text-ballpoint active:scale-95 motion-reduce:transform-none"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-rule bg-paper text-void no-underline transition-[color,border-color,transform] duration-150 hover:text-ballpoint active:scale-95 motion-reduce:transform-none sm:h-8 sm:w-8"
             >
               <svg
                 aria-hidden="true"

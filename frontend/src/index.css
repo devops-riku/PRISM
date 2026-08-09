@@ -1039,6 +1039,16 @@
     cursor: pointer;
   }
 
+  /* A phone is operated with a fingertip, not a pointer. Keep the compact
+     desktop control height, but give both shared actions a 44px target on
+     narrow screens. */
+  @media (max-width: 640px) {
+    .action-primary,
+    .action-quiet {
+      min-height: 2.75rem;
+    }
+  }
+
   .action-primary {
     /* Only the primary carries a minimum width. Shared, it would inflate the
        Remove button on every rate-card row into something the size of a
@@ -1237,7 +1247,11 @@
     gap: 0.35rem;
     padding-block: 1.1rem 1.2rem;
     padding-inline: 1.5rem;
-    min-width: 248px;
+    /* `max-width: 100%` cannot overrule a larger `min-width`; CSS resolves
+       that conflict in favour of the minimum. Express the floor itself as a
+       function of the available width so a 320px phone gets a local scroller
+       rather than a page-wide overflow. */
+    min-width: min(248px, 100%);
     /* `.stamp-figure` below is deliberately `white-space: nowrap` - a number
        broken mid-digit reads worse than almost anything else on the page -
        but that means an eight-figure total has nowhere to go on a narrow
@@ -2192,10 +2206,47 @@
     .landing-backdrop-spectrum {
       opacity: 0.35;
     }
+
+    /* The two document cards stack at this breakpoint, so the desktop fork
+       would point at two empty quarter-width positions. Keep only the central
+       stem until the cards return to two columns. */
+    .landing-scope-branch {
+      height: 4rem;
+    }
+
+    .landing-scope-branch::after {
+      display: none;
+    }
   }
 }
 
 @layer utilities {
+  /* Compact phones should see the complete cause-and-effect diagram without
+     spending the whole first viewport on its 420:320 SVG. This is in the
+     utilities layer so it can deliberately override the element's spacing
+     utilities while leaving ordinary portrait phones and desktop untouched. */
+  @media (max-width: 767px) and (max-height: 700px) {
+    .landing-hero {
+      justify-content: flex-start;
+      padding-top: 5rem;
+      padding-bottom: 1.5rem;
+    }
+
+    .landing-hero-copy {
+      margin-bottom: 1rem;
+    }
+
+    .landing-hero-copy > p {
+      margin-top: 1.25rem;
+      font-size: 1rem;
+    }
+
+    .landing-mobile-diagram {
+      max-width: 220px;
+      padding-block: 0;
+    }
+  }
+
   /* Scrolls, but shows nothing for it.
      Used on the pad, where the card is pinned to the viewport and a bar that
      appeared on one step and not another would read as the card resizing. The

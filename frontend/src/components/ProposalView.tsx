@@ -108,7 +108,7 @@ export default function ProposalView({ documentId }: ProposalViewProps) {
           remembering this file exists. */}
       <section className={`${CARD} mx-auto w-full max-w-sheet shrink-0 px-5 py-4 sm:px-6`}>
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-          <div className="min-w-[18rem]">
+          <div className="min-w-0 flex-1 basis-full sm:min-w-[18rem] sm:basis-auto">
             <h2 className={`${DISPLAY} text-[20px]`}>
               {document.title || document.project_name || 'Proposal'}
             </h2>

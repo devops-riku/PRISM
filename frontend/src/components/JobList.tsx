@@ -266,7 +266,7 @@ export default function JobList() {
             className="row-touch rise-in border-b border-hairline px-5 py-3 last:border-b-0 sm:px-6"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
-              <div className="min-w-[16rem] flex-1">
+              <div className="min-w-0 flex-1 basis-full sm:min-w-[16rem] sm:basis-auto">
                 <h3 className="font-body text-[15px] text-ink">{job.title}</h3>
                 <p className="mt-2 flex flex-wrap items-center gap-2">
                   <span className={job.state === 'failed' ? 'chip chip--alert' : 'chip'}>

@@ -112,7 +112,7 @@ export default function QuotationList({ onOpen }: QuotationListProps) {
               were superseded, or are three revisions of one job produces a
               figure that means nothing - and a number that large beside a
               search box reads like a pipeline it is not. */}
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex w-full flex-wrap items-center gap-x-5 gap-y-2 sm:w-auto">
             <label htmlFor="quotation_search" className="sr-only">
               Find a quotation
             </label>
@@ -122,7 +122,7 @@ export default function QuotationList({ onOpen }: QuotationListProps) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Project, client or reference"
-              className={`${WELL} w-[260px] py-2`}
+              className={`${WELL} w-full py-2 sm:w-[260px]`}
             />
           </div>
         </div>

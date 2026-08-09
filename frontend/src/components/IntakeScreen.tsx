@@ -263,7 +263,7 @@ export default function IntakeScreen({ defaults }: IntakeScreenProps) {
                     readOnly
                     value={issued.link}
                     onFocus={(event) => event.currentTarget.select()}
-                    className={`${WELL} min-w-[18rem] flex-1 font-label text-[13px]`}
+                    className={`${WELL} min-w-0 flex-1 basis-full font-label text-[13px] sm:min-w-[18rem] sm:basis-auto`}
                   />
                   <button type="button" className={ACTION} onClick={() => copy(issued.link)}>
                     Copy link

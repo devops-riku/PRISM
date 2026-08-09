@@ -60,7 +60,7 @@ export default function WorkspaceMenu() {
         className="flex items-center gap-2 rounded-md border border-transparent px-2 py-1 transition-[background-color,border-color] duration-150 hover:bg-paper data-[open]:border-rule data-[open]:bg-paper"
       >
         <span className="h-1.5 w-1.5 flex-none rounded-full bg-ballpoint" aria-hidden="true" />
-        <span className="max-w-[18ch] truncate font-label text-[12px] uppercase tracking-[0.12em] text-void">
+        <span className="max-w-[12ch] truncate font-label text-[12px] uppercase tracking-[0.12em] text-void lg:max-w-[18ch]">
           {active ? active.name : 'Workspace'}
         </span>
         <svg

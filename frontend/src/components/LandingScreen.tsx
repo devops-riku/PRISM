@@ -262,7 +262,7 @@ function DesktopDiagram() {
 
 function MobileDiagram() {
   return (
-    <div className="landing-fade-up landing-stagger-2 relative mx-auto block w-full max-w-[280px] py-2 sm:max-w-[320px] md:hidden">
+    <div className="landing-mobile-diagram landing-fade-up landing-stagger-2 relative mx-auto block w-full max-w-[280px] py-2 sm:max-w-[320px] md:hidden">
       <svg
         className="h-auto w-full overflow-visible"
         viewBox="0 0 320 420"
@@ -493,7 +493,7 @@ export default function LandingScreen() {
         <section className="landing-hero relative isolate flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 pb-8 pt-24 md:px-14 md:pb-10">
           <HeroBackdrop />
           <div className="relative z-[1] mx-auto w-full max-w-app">
-            <div className="mb-8 text-center md:mb-12">
+            <div className="landing-hero-copy mb-8 text-center md:mb-12">
               <h1
                 className={`${DISPLAY} landing-fade-up text-[clamp(2.25rem,6vw,4rem)] leading-[1.05] tracking-[-0.04em] text-ink`}
               >

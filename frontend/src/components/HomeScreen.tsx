@@ -204,7 +204,7 @@ export default function HomeScreen() {
   const figure = (value: number | null) => (value === null ? '—' : counted)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center py-6">
+    <div className="flex min-h-full flex-1 flex-col items-center justify-start py-3 sm:justify-center sm:py-6">
       <div className="w-full max-w-[62rem]">
         <div className="text-center">
           {/* The name in full, and only here. The header keeps the acronym,
@@ -220,7 +220,7 @@ export default function HomeScreen() {
           </p>
         </div>
 
-        <div className="mt-10 mb-6 flex justify-center">
+        <div className="mb-5 mt-7 flex justify-center sm:mb-6 sm:mt-10">
           <div
             ref={pill}
             className="pill"
@@ -273,7 +273,7 @@ export default function HomeScreen() {
         <div key={side} id="home-panel" role="tabpanel" aria-labelledby={`home-tab-${side}`}>
           <nav
             aria-label="Where to go"
-            className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
+            className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5"
           >
             {destinations.filter((place) => isAdmin || place.href !== '#/settings').map(
               (place, index) => (
@@ -301,7 +301,7 @@ export default function HomeScreen() {
                 // `.lift:hover`'s own shadow. `shadow-sheet` below is a
                 // utility and would outrank the component rule at rest; a
                 // hover utility is the only thing that can beat it back.
-                className="group rise-in lift flex aspect-square flex-col items-center justify-center rounded-xl border border-rule bg-paper px-4 py-5 text-center no-underline shadow-sheet hover:shadow-raised"
+                className="group rise-in lift flex min-h-[10.5rem] flex-col items-center justify-center rounded-xl border border-rule bg-paper px-3 py-4 text-center no-underline shadow-sheet hover:shadow-raised sm:aspect-square sm:min-h-0 sm:px-4 sm:py-5"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent-soft text-ballpoint">
                   <svg

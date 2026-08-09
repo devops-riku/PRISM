@@ -178,7 +178,7 @@ export default function CommandBar() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="hidden items-center gap-3 rounded-[13px] border border-rule bg-duplicate py-1.5 pl-3 pr-2 text-left transition-colors duration-150 hover:bg-paper sm:flex"
+        className="hidden items-center gap-3 rounded-[13px] border border-rule bg-duplicate py-1.5 pl-3 pr-2 text-left transition-colors duration-150 hover:bg-paper lg:flex"
         aria-label="Quick navigation: quotations, proposals and screens"
       >
         <span aria-hidden="true" className="text-[13px] text-ballpoint">
@@ -193,7 +193,7 @@ export default function CommandBar() {
 
       <Dialog open={open} onClose={() => setOpen(false)} className="relative z-[60]">
         <div className="fixed inset-0 bg-ink/25 backdrop-blur-[2px]" aria-hidden="true" />
-        <div className="fixed inset-0 flex items-start justify-center px-4 pt-[12vh]">
+        <div className="fixed inset-0 flex items-start justify-center px-2 pt-[8vh] sm:px-4 sm:pt-[12vh]">
           <DialogPanel className="w-full max-w-[34rem] overflow-hidden rounded-[18px] border border-rule bg-paper shadow-raised">
             <div className="flex items-center gap-3 border-b border-hairline px-4 py-3">
               <span aria-hidden="true" className="text-[15px] text-ballpoint">
@@ -239,7 +239,7 @@ export default function CommandBar() {
                       to its braces, so a label added later overflows visibly
                       instead of silently wrapping and misaligning every row
                       after it. */}
-                  <span className="w-[84px] shrink-0 whitespace-nowrap font-label text-[11px] uppercase tracking-[0.12em] text-faint">
+                  <span className="w-[64px] shrink-0 whitespace-nowrap font-label text-[10px] uppercase tracking-[0.08em] text-faint sm:w-[84px] sm:text-[11px] sm:tracking-[0.12em]">
                     {item.kind}
                   </span>
                   <span className="min-w-0 flex-1">
@@ -253,7 +253,7 @@ export default function CommandBar() {
                     ) : null}
                   </span>
                   {item.aside ? (
-                    <span className="shrink-0 font-label text-[12.5px] tabular-nums text-void">
+                    <span className="hidden shrink-0 font-label text-[12.5px] tabular-nums text-void sm:block">
                       {item.aside}
                     </span>
                   ) : null}

@@ -145,7 +145,7 @@ export default function TeamPanel() {
             key={member.email}
             className="row-touch flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-hairline px-4 py-3 last:border-b-0"
           >
-            <div className="flex min-w-[15rem] flex-1 items-center gap-3">
+            <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:min-w-[15rem] sm:basis-auto">
               <span className="flex h-9 w-9 flex-none items-center justify-center rounded-[11px] bg-accent-soft font-label text-[12px] font-medium text-ballpoint">
                 {initials(member.email)}
               </span>
@@ -209,7 +209,7 @@ export default function TeamPanel() {
                 key={entry.link}
                 className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2 border-b border-hairline px-4 py-2.5 last:border-b-0"
               >
-                <div className="min-w-[14rem] flex-1">
+                <div className="min-w-0 flex-1 basis-full sm:min-w-[14rem] sm:basis-auto">
                   <p className="truncate font-body text-[14px] text-ink">{entry.email}</p>
                   <p className={`${MONO_LABEL} mt-0.5`}>
                     {entry.role} · expires {entry.expires_at.slice(0, 10)}
@@ -250,7 +250,7 @@ export default function TeamPanel() {
 
       {admin ? (
         <form onSubmit={send} className="mt-5 flex flex-wrap items-end gap-3">
-          <div className="min-w-[16rem] flex-1">
+          <div className="min-w-0 flex-1 basis-full sm:min-w-[16rem] sm:basis-auto">
             <label htmlFor="invite_email" className={MONO_LABEL}>
               Invite someone
             </label>
@@ -263,7 +263,7 @@ export default function TeamPanel() {
               className={`${WELL} mt-2`}
             />
           </div>
-          <div className="w-[190px]">
+          <div className="w-full sm:w-[190px]">
             <label htmlFor="invite_role" className={MONO_LABEL}>
               As
             </label>
@@ -275,7 +275,11 @@ export default function TeamPanel() {
               options={ROLES}
             />
           </div>
-          <button type="submit" disabled={busy || !email.trim()} className={ACTION_PRIMARY}>
+          <button
+            type="submit"
+            disabled={busy || !email.trim()}
+            className={`${ACTION_PRIMARY} w-full justify-center sm:w-auto`}
+          >
             {busy ? 'Sending' : 'Send invitation'}
           </button>
         </form>

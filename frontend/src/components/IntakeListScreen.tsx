@@ -365,9 +365,13 @@ function IssuedLink({ intakeId, link, expiresAt, onDone }: IssuedLinkProps) {
           readOnly
           value={link}
           onFocus={(event) => event.currentTarget.select()}
-          className={`${WELL} min-w-[16rem] flex-1 font-label text-[13px]`}
+          className={`${WELL} min-w-0 flex-1 basis-full font-label text-[13px] sm:min-w-[16rem] sm:basis-auto`}
         />
-        <button type="button" className={ACTION} onClick={copy}>
+        <button
+          type="button"
+          className={`${ACTION} w-full justify-center sm:w-auto`}
+          onClick={copy}
+        >
           Copy link
         </button>
       </div>
@@ -660,7 +664,7 @@ function IntakeRow({
         muted ? 'opacity-60' : ''
       }`}
     >
-      <div className="min-w-[16rem] flex-1">
+      <div className="min-w-0 flex-1 basis-full sm:min-w-[16rem] sm:basis-auto">
         <p className="font-body text-[15px] text-ink">{row.client_email || 'No email on file'}</p>
         {scopeLine ? (
           <p className="mt-1 max-w-[52ch] truncate font-body text-[13.5px] text-void">

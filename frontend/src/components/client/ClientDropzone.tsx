@@ -554,7 +554,7 @@ export default function ClientDropzone({ id, onChange, disabled = false }: Clien
           {items.map((item) => (
             <li
               key={item.key}
-              className="flex items-baseline justify-between gap-3 font-body text-[13px] leading-[1.6]"
+              className="flex items-center justify-between gap-3 font-body text-[13px] leading-[1.6]"
             >
               <span className="min-w-0 flex-1 truncate text-ink" title={item.file.name}>
                 {item.file.name}
@@ -566,7 +566,7 @@ export default function ClientDropzone({ id, onChange, disabled = false }: Clien
                 type="button"
                 disabled={disabled}
                 onClick={() => remove(item.key)}
-                className="shrink-0 rounded-lg px-1 font-body text-[13px] text-void underline decoration-hairline underline-offset-2 transition-colors duration-[150ms] ease-out hover:text-alert motion-reduce:transition-none disabled:cursor-not-allowed"
+                className="min-h-11 shrink-0 rounded-lg px-2 font-body text-[13px] text-void underline decoration-hairline underline-offset-2 transition-colors duration-[150ms] ease-out hover:text-alert motion-reduce:transition-none disabled:cursor-not-allowed sm:min-h-0 sm:px-1"
               >
                 Remove<span className="sr-only"> {item.file.name}</span>
               </button>

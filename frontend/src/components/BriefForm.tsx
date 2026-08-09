@@ -500,7 +500,7 @@ export default function BriefForm({
   return (
     <form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col">
       <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,204px)_minmax(0,1fr)]">
-        <div className="no-scrollbar min-h-0 overflow-y-auto border-b border-rule bg-duplicate/40 px-3 py-4 sm:border-b-0 sm:border-r sm:px-3">
+        <div className="no-scrollbar min-h-0 overflow-x-auto border-b border-rule bg-duplicate/40 px-3 py-2 sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4">
           <StepRail steps={steps} current={step} onGo={setStep} disabled={pending} />
         </div>
 
@@ -860,7 +860,7 @@ export default function BriefForm({
               {termsMode === 'custom' ? (
                 <div className="mt-3">
                   <table className="w-full border-collapse text-[15px]">
-                    <thead>
+                    <thead className="hidden sm:table-header-group">
                       <tr>
                         {['Share', 'Becomes payable when', ''].map((head, index) => (
                           <th
@@ -875,8 +875,14 @@ export default function BriefForm({
                     </thead>
                     <tbody>
                       {rows.map((row, index) => (
-                        <tr key={index} className="border-b border-hairline last:border-b-0">
-                          <td className="w-[120px] py-2 pr-3">
+                        <tr
+                          key={index}
+                          className="block border-b border-hairline py-3 last:border-b-0 sm:table-row sm:py-0"
+                        >
+                          <td className="block w-full py-1 sm:table-cell sm:w-[120px] sm:py-2 sm:pr-3">
+                            <span className="mb-1 block font-label text-[11px] uppercase tracking-[0.12em] text-faint sm:hidden">
+                              Share
+                            </span>
                             <input
                               aria-label={`Share for payment ${index + 1}`}
                               inputMode="decimal"
@@ -890,7 +896,10 @@ export default function BriefForm({
                               className={`${WELL} text-right tabular-nums`}
                             />
                           </td>
-                          <td className="py-2 pr-3">
+                          <td className="block w-full py-1 sm:table-cell sm:py-2 sm:pr-3">
+                            <span className="mb-1 block font-label text-[11px] uppercase tracking-[0.12em] text-faint sm:hidden">
+                              Becomes payable when
+                            </span>
                             <input
                               aria-label={`Trigger for payment ${index + 1}`}
                               value={row.trigger}
@@ -900,12 +909,12 @@ export default function BriefForm({
                               className={WELL}
                             />
                           </td>
-                          <td className="w-[110px] py-2 text-right">
+                          <td className="flex w-full justify-end py-1 sm:table-cell sm:w-[110px] sm:py-2 sm:text-right">
                             <button
                               type="button"
                               disabled={pending || rows.length <= 1}
                               onClick={() => setRows(rows.filter((_, i) => i !== index))}
-                              className={ACTION}
+                              className={`${ACTION} w-full justify-center sm:w-auto`}
                             >
                               Remove
                             </button>

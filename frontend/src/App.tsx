@@ -902,7 +902,7 @@ export default function App() {
     return (
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
         {workspaceCount === 0 ? null : nav}
-        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
+        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-3 sm:px-6 sm:py-8">
           <WorkspacesScreen onChanged={(found: Workspace[]) => setWorkspaceCount(found.length)} />
         </main>
       </div>
@@ -925,7 +925,7 @@ export default function App() {
     return (
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
         {nav}
-        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
+        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-3 sm:px-6 sm:py-8">
           {route === 'quotations' ? <QuotationList /> : null}
           {route === 'jobs' ? <JobList /> : null}
           {route === 'proposals' ? <ProposalStudio /> : null}
@@ -1050,7 +1050,7 @@ export default function App() {
     return (
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
         {nav}
-        <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
+        <main className="no-scrollbar mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col overflow-y-auto px-4 py-3 sm:px-6 sm:py-8">
           <HomeScreen />
         </main>
       </div>
@@ -1066,7 +1066,7 @@ export default function App() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-canvas font-body text-body">
       {nav}
-      <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
+      <main className="mx-auto flex w-full min-h-0 max-w-app flex-1 flex-col px-4 py-3 sm:px-6 sm:py-8">
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-rule bg-paper shadow-sheet">
           <QuotationHeader
             title="New PAD Quotation"

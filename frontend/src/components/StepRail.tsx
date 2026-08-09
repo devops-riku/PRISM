@@ -33,15 +33,18 @@ export default function StepRail({ steps, current, onGo, disabled }: StepRailPro
   const answered = steps.filter((step) => step.answer).length
 
   return (
-    <nav aria-label="Sections of the quotation" className="flex flex-col gap-0.5">
-      <p className="px-3 pb-1.5 font-label text-[11px] uppercase tracking-[0.14em] text-faint">
+    <nav
+      aria-label="Sections of the quotation"
+      className="no-scrollbar flex gap-2 overflow-x-auto sm:flex-col sm:gap-0.5 sm:overflow-visible"
+    >
+      <p className="hidden px-3 pb-1.5 font-label text-[11px] uppercase tracking-[0.14em] text-faint sm:block">
         So far
       </p>
       {/* The empty state is worth one line, not three: seven steps have to fit
           the card beside a panel, and a rail that scrolls is a rail whose last
           entry - the one that finishes the flow - nobody can see. */}
       {answered === 0 ? (
-        <p className="px-3 pb-2 font-body text-[12px] leading-[1.5] text-faint">
+        <p className="hidden px-3 pb-2 font-body text-[12px] leading-[1.5] text-faint sm:block">
           Nothing yet. What you tell us shows up here.
         </p>
       ) : null}
@@ -54,21 +57,21 @@ export default function StepRail({ steps, current, onGo, disabled }: StepRailPro
             disabled={disabled}
             aria-current={active ? 'step' : undefined}
             onClick={() => onGo(index)}
-            className={`group block w-full rounded-r-md border-l-2 py-1.5 pl-3 pr-2 text-left transition-[background-color,border-color] duration-150 ${
+            className={`group block min-h-10 shrink-0 rounded-md border px-3 py-2 text-left transition-[background-color,border-color] duration-150 sm:min-h-0 sm:w-full sm:rounded-l-none sm:rounded-r-md sm:border-0 sm:border-l-2 sm:py-1.5 sm:pl-3 sm:pr-2 ${
               active
-                ? 'border-l-ballpoint bg-paper'
-                : 'border-l-hairline hover:bg-paper/70 disabled:hover:bg-transparent'
+                ? 'border-ballpoint bg-paper sm:border-l-ballpoint'
+                : 'border-rule hover:bg-paper/70 disabled:hover:bg-transparent sm:border-l-hairline'
             }`}
           >
             <span
-              className={`block truncate font-body text-[13.5px] leading-[1.35] ${
+              className={`block whitespace-nowrap font-body text-[13px] leading-[1.35] sm:truncate sm:text-[13.5px] ${
                 active ? 'font-medium text-ink' : 'text-body'
               }`}
             >
               {step.label}
             </span>
             <span
-              className={`block truncate font-body text-[12px] leading-[1.35] ${
+              className={`hidden truncate font-body text-[12px] leading-[1.35] sm:block ${
                 step.answer ? 'text-void' : 'text-faint'
               }`}
             >
