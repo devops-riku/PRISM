@@ -1,16 +1,20 @@
 import PrismMark from './PrismMark'
 import { useEffect, useRef, useState } from 'react'
 import type { ComponentPropsWithoutRef, ReactNode } from 'react'
-import type { Provider, Session } from '@supabase/supabase-js'
+import type { AuthStep, CodePurpose } from '../lib/auth'
 import {
+  authConfig,
+  resendCode,
   sendEmailCode,
-  sendResetLink,
   signInWithPassword,
   signInWithProvider,
   signUpWithPassword,
+  startReset,
+  takePendingStep,
   verifyEmailCode,
 } from '../lib/auth'
 import { describeAuthError } from '../lib/authErrors'
+import type { AuthProvider, PasswordRules } from '../types'
 import { takeOAuthReturn } from '../lib/oauthReturn'
 import { useToasts } from '../lib/useToasts'
 import Toaster from './Toaster'
@@ -36,43 +40,28 @@ import { DISPLAY, MONO_LABEL, WELL } from './tokens'
  * wrong" leaves somebody retyping a password that was never the problem.
  */
 
-/** One way in that is not a password. `id` is Supabase's own name for it. */
-type ProviderChoice = {
-  id: Provider
-  label: string
+/** How a provider kind is drawn: its name on the button, and its mark. */
+type ProviderLook = {
   short: string
   mark: ReactNode
 }
 
 /**
- * Whether the OAuth providers are offered at all.
+ * Which providers get a button: exactly the ones the server says work.
  *
- * `true` now. It was `false` while neither Google nor Facebook was configured
- * on the Supabase project, with the buttons on screen but dead - the honest
- * middle between hiding them (a studio who signed up expecting Google sees no
- * trace of it and assumes it was dropped) and offering a live button that
- * fails.
+ * `/api/auth/config` lists the providers that are switched on in Zitadel, and
+ * a provider is only switched on once its credentials are in — an OAuth app
+ * registered with Google or Meta, its client id and secret pasted into the
+ * Zitadel console under the PRISM organization. So no credentials means no
+ * entry, means no button, and each provider appears by itself the moment it is
+ * set up: there is no flag here to flip and nothing to redeploy.
  *
- * WHAT THIS FLAG DOES NOT DO, and it matters: it does not turn the providers
- * on. That is a setting on the Supabase project, not in this repository - each
- * provider needs an OAuth app registered with Google or Meta, its client id and
- * secret pasted into Supabase, and this app's origin listed as a redirect URL.
- * With this `true` and that undone, the buttons work and Supabase refuses them.
- * That refusal is now legible rather than misleading: `authErrors.ts` matches
- * "provider is not enabled" ahead of its shared error code, so the screen says
- * the method is not switched on instead of "check the details and try again",
- * which would send somebody hunting for a typo that does not exist.
- *
- * ONE FLAG, not a per-provider pair, because they were blocked on the same
- * thing. If exactly one of the two is ever configured, this needs to become a
- * pair rather than being left `true` with one button that always fails.
+ * That replaced an `SSO_READY` flag that drew both buttons whether or not
+ * either could work, and one flag for two providers that would never be
+ * configured on the same day.
  */
-const SSO_READY = true
-
-const PROVIDERS: ProviderChoice[] = [
-  {
-    id: 'google',
-    label: 'Continue with Google',
+const LOOKS: Record<string, ProviderLook> = {
+  google: {
     short: 'Google',
     mark: (
       <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" aria-hidden="true">
@@ -92,9 +81,7 @@ const PROVIDERS: ProviderChoice[] = [
       </svg>
     ),
   },
-  {
-    id: 'facebook',
-    label: 'Continue with Facebook',
+  facebook: {
     short: 'Facebook',
     mark: (
       <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" aria-hidden="true">
@@ -105,7 +92,40 @@ const PROVIDERS: ProviderChoice[] = [
       </svg>
     ),
   },
-]
+}
+
+/** The rules as one line under a new password, or '' when there are none. */
+function rulesHint(rules: PasswordRules | null): string {
+  if (!rules) return ''
+  const parts = [
+    rules.upper && rules.lower ? 'upper and lower case' : rules.upper ? 'an uppercase letter' : rules.lower ? 'a lowercase letter' : '',
+    rules.number ? 'a number' : '',
+    rules.symbol ? 'a symbol' : '',
+  ].filter(Boolean)
+  const tail = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0] || ''
+  return `At least ${rules.min_length} characters${tail ? `, with ${tail}` : ''}.`
+}
+
+/** What the code screen says, by why the code was sent. */
+const CODE_COPY: Record<CodePurpose, { title: string; blurb: (email: string) => string }> = {
+  code: { title: 'One more step', blurb: (email) => `We sent a code to ${email}. Paste works too.` },
+  signup: {
+    title: 'Confirm your email',
+    blurb: (email) => `We sent a code to ${email}. It confirms the address, then your account is ready.`,
+  },
+  reset: {
+    title: 'Choose a new password',
+    blurb: (email) => `If ${email} has an account, a code is on its way. Type it with your new password.`,
+  },
+  confirm: {
+    title: 'Confirm your email first',
+    blurb: (email) => `${email} hasn’t been confirmed yet, so we sent it a code.`,
+  },
+  provider: {
+    title: 'Confirm your email',
+    blurb: (email) => `Your account didn’t confirm ${email}, so we sent it a code.`,
+  },
+}
 
 type CardProps = {
   title: ReactNode
@@ -247,24 +267,27 @@ type CodeRowProps = {
 /**
  * How long a sign-in code is.
  *
- * SUPABASE DECIDES THIS, not us: Authentication - Providers - Email - "Email
- * OTP Length", which GoTrue allows anywhere from 6 to 10. There is no API
- * that reports the setting, so the client cannot discover it.
+ * ZITADEL DECIDES THIS, not us: Default Settings - Secret Generators, "Email
+ * verification" and "One-time password by email". Both are set to six digits
+ * on zitadel.neptune.ph; out of the box Zitadel sends six letters-and-digits
+ * for one and eight digits for the other, which these boxes cannot hold - the
+ * boxes take digits only. There is no public API that reports the setting, so
+ * the client cannot discover it.
  *
  * TWO NUMBERS RATHER THAN ONE, so a mismatch is survivable instead of fatal.
- * It was a single hard-coded 6 in six places, against a project set to 8: the
+ * It was a single hard-coded 6 in six places, against a service set to 8: the
  * screen drew six boxes that could not hold the code, and the submit guard
  * unlocked at six characters, so pressing Confirm sent the first six digits
- * of an eight-digit code. Supabase rejected that as "Token has expired or is
- * invalid", which is how a fresh code reported itself as expired.
+ * of an eight-digit code - which is how a fresh code reported itself as
+ * wrong.
  *
- * `CODE_BOXES` is how many boxes are drawn and must match the dashboard.
- * `CODE_MIN` is GoTrue's floor, and the submit guard uses it rather than the
- * box count on purpose: a code SHORTER than the row still submits, so a
- * dashboard change from 6 to 8 shows as "the last two boxes stay empty"
- * rather than as a Confirm button that never lights. The reverse - a longer
- * code than there are boxes - is the one that cannot be survived, which is
- * why the box count is the number that has to be kept in step.
+ * `CODE_BOXES` is how many boxes are drawn and must match the generators.
+ * `CODE_MIN` is the floor, and the submit guard uses it rather than the box
+ * count on purpose: a code SHORTER than the row still submits, so a generator
+ * change from 8 to 6 shows as "the last two boxes stay empty" rather than as a
+ * Confirm button that never lights. The reverse - a longer code than there are
+ * boxes - is the one that cannot be survived, which is why the box count is
+ * the number that has to be kept in step.
  */
 const CODE_BOXES = 6
 const CODE_MIN = 6
@@ -345,20 +368,47 @@ function CodeRow({ value, onChange, disabled }: CodeRowProps) {
 type AuthView = 'in' | 'code' | 'reset' | 'up'
 
 export default function AuthScreen() {
-  const [view, setView] = useState<AuthView>('in')
-  const [email, setEmail] = useState('')
+  // A Google or Facebook return can land here mid-errand: the provider did
+  // not prove the email, so a code went to it and the card opens on that.
+  const [resumed] = useState(() => takePendingStep())
+  const [view, setView] = useState<AuthView>(resumed?.step === 'code' ? 'code' : 'in')
+  const [email, setEmail] = useState(resumed?.step === 'code' ? resumed.email : '')
   const [password, setPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
   const [code, setCode] = useState('')
+  const [flow, setFlow] = useState(resumed?.step === 'code' ? resumed.flow : '')
+  const [purpose, setPurpose] = useState<CodePurpose>(
+    resumed?.step === 'code' ? resumed.purpose : 'code',
+  )
+  const [providers, setProviders] = useState<AuthProvider[]>([])
+  const [rules, setRules] = useState<PasswordRules | null>(null)
   const [busy, setBusy] = useState(false)
   const { toasts, show, dismiss, clear } = useToasts()
+
+  // Which ways in exist, and what a new password must contain. Cached by
+  // `authConfig`, which the gate has already read, so this costs no request.
+  useEffect(() => {
+    let live = true
+    authConfig()
+      .then((found) => {
+        if (!live) return
+        setProviders(found.providers || [])
+        setRules(found.password_rules)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
 
   /**
    * Move to another card, dropping the messages the last one raised.
    *
-   * "That email already has an account" is help on the sign-up card and noise
-   * on the sign-in card it sent you to. Done here rather than in an effect on
-   * `view` on purpose: the send-a-code flow changes the view AND raises a note
-   * in the same tick, and an effect would clear the note it just asked for.
+   * "That email and password don't match" is help on the sign-in card and
+   * noise on the reset card it sent you to. Done here rather than in an effect
+   * on `view` on purpose: the send-a-code flow changes the view AND raises a
+   * note in the same tick, and an effect would clear the note it just asked
+   * for.
    */
   const go = (next: AuthView) => {
     clear()
@@ -374,7 +424,7 @@ export default function AuthScreen() {
    * A provider sign-in leaves this page entirely, so its failure cannot arrive
    * as a rejected promise the way every other error on this screen does - it
    * comes back as parameters on a fresh page load, which `lib/oauthReturn.ts`
-   * captured before the Supabase client could consume them.
+   * captured at boot and cleaned off the URL.
    *
    * No `duration`, unlike `notice`: this one does not time out. Somebody who
    * pressed a button, watched a redirect, and landed back where they started
@@ -393,36 +443,24 @@ export default function AuthScreen() {
   }, [])
 
   /**
-   * What to say once an account has been made.
+   * Where a way in left things. Signed in needs nothing: the gate is listening
+   * and opens the app behind this card. A code means the code card, for this
+   * flow, with a note — nothing else on screen changes at that moment, and
+   * without one the button simply stops spinning on a form that appears to
+   * have done nothing.
    *
-   * With "Confirm email" on, Supabase returns a user and **no session**: the
-   * account exists but nobody is signed in until the link is clicked. Nothing
-   * on screen changes at that moment, so without this the button simply stops
-   * spinning and the person is left looking at a form that appears to have done
-   * nothing.
-   *
-   * Signing up an address that already has an account returns the same
-   * shape — no session, and a user carrying no identities. That is Supabase
-   * refusing to confirm whether the address is registered, and this says the
-   * same thing back rather than helpfully leaking it.
-   *
-   * With confirmation off a session comes straight back, the app opens behind
-   * this card, and a toast would be talking about a screen nobody is on.
+   * `setView` rather than `go`, because `go` clears the toasts and the toast
+   * is the entire instruction.
    */
-  const afterSignUp = (result: { session: Session | null }) => {
-    if (result.session) return
-    // Straight to the sign-in card: the account exists, and the next thing this
-    // person does — after the trip to their inbox — is sign in to it. Leaving
-    // them on a filled-in sign-up form invites them to submit it a second time.
-    //
-    // `setView` rather than `go`, because `go` clears the toasts and the toast
-    // is the entire instruction.
-    setView('in')
-    notice(
-      'Check your email to confirm the account.',
-      'The link finishes signing you up, then sign in here.',
-      12000,
-    )
+  const after = (step: AuthStep) => {
+    if (step.step !== 'code') return
+    setFlow(step.flow)
+    setPurpose(step.purpose)
+    setEmail(step.email || email)
+    setCode('')
+    setNewPassword('')
+    setView('code')
+    notice('Sent. Check your inbox.', 'The code is good for ten minutes.', 8000)
   }
 
   const run = (work: () => unknown) => {
@@ -430,18 +468,22 @@ export default function AuthScreen() {
     Promise.resolve()
       .then(work)
       .catch((failure: unknown) => {
-        // Supabase's own wording is written for whoever integrated it. This
-        // turns the ones PRISM recognises into something the person at the
-        // keyboard can act on, and passes anything else through unchanged.
         const problem = describeAuthError(failure)
         show({ tone: 'alert', message: problem.message, hint: problem.hint })
+        // A flow the server no longer holds cannot be finished from this
+        // card; the next useful thing is the card that starts a new one.
+        const said = (failure as { code?: string } | null)?.code
+        if (said === 'SIGN_IN_EXPIRED' || said === 'TOO_MANY_TRIES') {
+          setView(purpose === 'reset' ? 'reset' : 'in')
+        }
       })
       .finally(() => setBusy(false))
   }
 
-  const sso = (provider: Provider) => run(() => signInWithProvider(provider))
+  const sso = (provider: string) => run(() => signInWithProvider(provider))
 
-  const providerRow = (
+  const shown = providers.filter((provider) => provider.id)
+  const providerRow = shown.length ? (
     <>
       <div className="mt-4 flex items-center gap-3">
         <span className="h-px flex-1 bg-hairline" />
@@ -449,40 +491,27 @@ export default function AuthScreen() {
         <span className="h-px flex-1 bg-hairline" />
       </div>
       <div className="mt-3 flex flex-col gap-2 min-[360px]:flex-row">
-        {PROVIDERS.map((provider) => (
-          <button
-            key={provider.id}
-            type="button"
-            disabled={busy || !SSO_READY}
-            onClick={() => sso(provider.id)}
-            /* The title says WHY, not what. On a disabled control the label is
-               already visible and "Continue with Google" describes something
-               that will not happen - the only useful thing a tooltip can add
-               here is the reason it is dead. */
-            title={SSO_READY ? provider.label : `${provider.short} sign-in is not available yet`}
-            aria-label={
-              SSO_READY ? provider.label : `${provider.label} — not available yet`
-            }
-            className="flex min-h-11 w-full flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-paper sm:min-h-0"
-          >
-            {provider.mark}
-            {provider.short}
-          </button>
-        ))}
+        {shown.map((provider) => {
+          const look = LOOKS[provider.kind]
+          const short = look?.short || provider.name || 'Single sign-on'
+          return (
+            <button
+              key={provider.id}
+              type="button"
+              disabled={busy}
+              onClick={() => sso(provider.id)}
+              title={`Continue with ${short}`}
+              aria-label={`Continue with ${short}`}
+              className="flex min-h-11 w-full flex-1 items-center justify-center gap-2 rounded-[11px] border border-rule bg-paper px-3 py-2.5 font-body text-[13px] text-body transition-colors duration-150 hover:bg-duplicate disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-paper sm:min-h-0"
+            >
+              {look?.mark || null}
+              {short}
+            </button>
+          )
+        })}
       </div>
-      {/* Said on screen, not only in a tooltip. A greyed control with no
-          reason next to it reads as "broken" or as "you are not allowed",
-          and a title attribute is invisible to anyone on a touch screen -
-          which is most people who will ever see this. One line, and it goes
-          away by itself when the flag flips. */}
-      {SSO_READY ? null : (
-        <p className="mt-2 text-center font-body text-[12.5px] leading-[1.5] text-faint">
-          Google and Facebook sign-in are not connected yet — use your email
-          above.
-        </p>
-      )}
     </>
-  )
+  ) : null
 
   /**
    * Which card is on screen. A function rather than three early returns,
@@ -492,32 +521,48 @@ export default function AuthScreen() {
    */
   const card = () => {
     if (view === 'code') {
+      const copy = CODE_COPY[purpose] || CODE_COPY.code
+      const resetting = purpose === 'reset'
+      const typed = code.replace(/\s/g, '')
       return (
-        <Card
-          title="One more step"
-          blurb={`We sent a code to ${email || 'your email'}. Paste works too.`}
-        >
+        <Card title={copy.title} blurb={copy.blurb(email || 'your email')}>
           <form
             onSubmit={(event) => {
               event.preventDefault()
-              run(() => verifyEmailCode(email, code.replace(/\s/g, '')))
+              run(() => verifyEmailCode(flow, typed, resetting ? newPassword : ''))
             }}
           >
             <CodeRow value={code} onChange={setCode} disabled={busy} />
-            <Primary disabled={busy || code.replace(/\s/g, '').length < CODE_MIN}>
-              {busy ? 'Checking' : 'Confirm'}
+            {resetting ? (
+              <div className="mt-3">
+                <PasswordField
+                  id="reset_password"
+                  label="New password"
+                  autoComplete="new-password"
+                  required
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  placeholder="••••••••"
+                />
+                {rulesHint(rules) ? (
+                  <p className="mt-1.5 font-body text-[12.5px] leading-[1.5] text-faint">{rulesHint(rules)}</p>
+                ) : null}
+              </div>
+            ) : null}
+            <Primary disabled={busy || typed.length < CODE_MIN || (resetting && !newPassword)}>
+              {busy ? 'Checking' : resetting ? 'Set password' : 'Confirm'}
             </Primary>
           </form>
 
           <div className="mt-4 flex flex-col items-start gap-1 min-[360px]:flex-row min-[360px]:items-center min-[360px]:justify-between min-[360px]:gap-3">
             <Quiet
               onClick={() =>
-                run(() => sendEmailCode(email).then(() => notice('Sent. Check your inbox.')))
+                run(() => resendCode(flow).then(() => notice('Sent. Earlier codes stop working.')))
               }
             >
               Send another
             </Quiet>
-            <Quiet onClick={() => go('in')}>Use a password instead</Quiet>
+            <Quiet onClick={() => go('in')}>{resetting ? 'Back to sign in' : 'Use a password instead'}</Quiet>
           </div>
         </Card>
       )
@@ -527,15 +572,13 @@ export default function AuthScreen() {
       return (
         <Card
           title="Let’s get you back in"
-          blurb="Tell us the email you used and we’ll send a reset link. It’s good for an hour."
+          blurb="Tell us the email you used and we’ll send a code. You’ll choose the new password with it."
           footer={<Quiet onClick={() => go('in')}>Back to sign in</Quiet>}
         >
           <form
             onSubmit={(event) => {
               event.preventDefault()
-              run(() =>
-                sendResetLink(email).then(() => notice('Sent. The link works for one hour.')),
-              )
+              run(() => startReset(email).then(after))
             }}
           >
             <Field
@@ -548,7 +591,7 @@ export default function AuthScreen() {
               onChange={(event) => setEmail(event.target.value)}
               placeholder="you@studio.com"
             />
-            <Primary disabled={busy || !email.trim()}>{busy ? 'Sending' : 'Send the link'}</Primary>
+            <Primary disabled={busy || !email.trim()}>{busy ? 'Sending' : 'Send the code'}</Primary>
           </form>
         </Card>
       )
@@ -580,9 +623,9 @@ export default function AuthScreen() {
           onSubmit={(event) => {
             event.preventDefault()
             run(() =>
-              making
-                ? signUpWithPassword(email, password).then(afterSignUp)
-                : signInWithPassword(email, password),
+              (making ? signUpWithPassword(email, password) : signInWithPassword(email, password)).then(
+                after,
+              ),
             )
           }}
         >
@@ -602,14 +645,17 @@ export default function AuthScreen() {
               label="Password"
               autoComplete={making ? 'new-password' : 'current-password'}
               required
-              minLength={6}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="••••••••"
             />
             {/* Under the field rather than beside its label: you reach for this
                 after typing a password that did not work, not before. */}
-            {making ? null : (
+            {making ? (
+              rulesHint(rules) ? (
+                <p className="mt-1.5 font-body text-[12.5px] leading-[1.5] text-faint">{rulesHint(rules)}</p>
+              ) : null
+            ) : (
               <div className="mt-1.5 text-right">
                 <button
                   type="button"
@@ -622,7 +668,11 @@ export default function AuthScreen() {
             )}
           </div>
 
-          <Primary disabled={busy || !email.trim() || password.length < 6}>
+          <Primary
+            disabled={
+              busy || !email.trim() || !password || (making && password.length < (rules?.min_length || 8))
+            }
+          >
             {busy ? 'One moment' : making ? 'Create account' : 'Sign in'}
           </Primary>
         </form>
@@ -630,14 +680,7 @@ export default function AuthScreen() {
         <button
           type="button"
           disabled={busy || !email.trim()}
-          onClick={() =>
-            run(() =>
-              sendEmailCode(email).then(() => {
-                setView('code')
-                notice('Sent. Good for a few minutes.')
-              }),
-            )
-          }
+          onClick={() => run(() => sendEmailCode(email).then(after))}
           className="mt-2.5 w-full rounded-[11px] border border-transparent px-4 py-1.5 font-body text-[13px] text-void transition-colors duration-150 hover:bg-duplicate disabled:opacity-45"
         >
           Or email me a sign-in code

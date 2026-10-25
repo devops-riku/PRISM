@@ -43,11 +43,15 @@ services:
       PORT: 8000
       APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:?Set APP_HOST in docker/.env}}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${APP_HOST:?Set APP_HOST in docker/.env}}
+      # Zitadel's edge on the private link, instead of a round trip out through
+      # Cloudflare. The public ZITADEL_URL is still sent as the Host.
+      ZITADEL_INTERNAL_URL: ${ZITADEL_INTERNAL_URL:-http://neptune-zitadel-edge}
     volumes:
       - generated_data:/app/generated
     networks:
       - traefik-proxy
       - data
+      - zitadel-link
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,6 +113,11 @@ networks:
   data:
     name: ${COMPOSE_PROJECT_NAME:-prism-neptune}_data
     internal: true
+  # Made by the Zitadel stack's README setup (`docker network create
+  # neptune-zitadel-link`); only Zitadel's edge and PRISM's API are on it.
+  zitadel-link:
+    external: true
+    name: neptune-zitadel-link
 
 volumes:
   postgres_data:

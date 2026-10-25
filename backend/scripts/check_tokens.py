@@ -35,13 +35,15 @@ os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # via `TestClient` to get a genuine `ProposalBundle` - exactly how
 # `check_intake_gate.py` builds one. Shared config reads these three once at
 # import time via `load_dotenv(..., override=False)`, so a real backend/.env
-# (this repo's has a Supabase project configured) would otherwise win and turn
+# (this repo's has a Zitadel instance configured) would otherwise win and turn
 # on token verification, 401-ing every request below before a single route
 # ran. Set before the first `app.*` import - `workspaces` already imports the
 # shared config, so that import is what triggers the dotenv read.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 

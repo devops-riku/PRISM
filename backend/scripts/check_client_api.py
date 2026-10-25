@@ -1,8 +1,8 @@
 """`/api/client/{token}` - the first unauthenticated surface in this codebase,
 GET (Task 3) and its three writes (Task 4: `/submit`, `/revise`, `/finalize`).
 
-Runs with real auth ON throughout, not merely available: `SUPABASE_JWT_SECRET`
-is set on `config` directly, right after import, exactly the way
+Runs with real auth ON throughout, not merely available: `AUTH_TOKEN_SECRET`
+(with a placeholder Zitadel pair) is set on `config` directly, right after import, exactly the way
 `check_intakes_api.py` turns HS256 verification on for its own permission-model
 section - `app.auth` reads that module attribute live on every call, so
 assigning it after import is what actually takes. This matters more here than
@@ -41,7 +41,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -54,14 +53,15 @@ os.environ["DATABASE_URL"] = ""
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # Blanked first, same fix as every other API-level check script: the shared config
 # reads these once at import time via `load_dotenv(..., override=False)`, and
-# a real `backend/.env` (this repo's names an actual Supabase project) would
+# a real `backend/.env` (this repo's names a real Zitadel instance) would
 # otherwise win. Turned back on deliberately, below, once `config` exists to
 # assign onto.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 
-import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pypdf import PdfReader  # noqa: E402
 
@@ -139,18 +139,18 @@ TEST_JWT_SECRET = "check-client-api-test-secret-do-not-reuse-32byte"
 #: fails a long way from whatever actually broke.
 GOOD_SCOPE = "A booking site for a two-branch dental clinic in Makati."
 GOOD_BUDGET = "around 300k"
-config.SUPABASE_JWT_SECRET = TEST_JWT_SECRET
+config.AUTH_TOKEN_SECRET = TEST_JWT_SECRET
+# The Zitadel pair only has to be present for verification to count as fully
+# configured; nothing in this file signs anybody in, so neither is ever called.
+config.ZITADEL_URL = "https://zitadel.invalid"
+config.ZITADEL_TOKEN = "check-only-not-a-token"
 ok("real auth is actually on before anything else runs", auth_module.required())
 
 
 def _token(sub: str, email: str) -> str:
-    """A signed HS256 access token shaped like the ones Supabase issues -
-    just `sub` and `email`, which is all `auth.User` reads."""
-    return jwt.encode(
-        {"sub": sub, "email": email, "aud": "authenticated", "exp": int(time.time()) + 3600},
-        TEST_JWT_SECRET,
-        algorithm="HS256",
-    )
+    """A real PRISM access token, issued by `auth.issue` exactly as a sign-in
+    does - signed with the test secret, naming `sub` and `email`."""
+    return auth_module.issue(sub, email)["access_token"]
 
 
 workspaces.ensure_ready()

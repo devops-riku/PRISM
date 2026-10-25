@@ -46,6 +46,7 @@ from app.features.platform.presentation import routes as platform_routes
 from app.features.quotations.presentation import routes as quotation_routes
 from app.features.team.infrastructure import auth
 from app.features.team.presentation import routes as team_routes
+from app.features.team.presentation import signin_routes
 from app.features.workspaces.infrastructure import repository as workspaces
 from app.shared.infrastructure import config
 from app.shared.infrastructure import database
@@ -88,12 +89,19 @@ middleware.install(app)
 
 @app.on_event("startup")
 async def _say_whether_anybody_has_to_sign_in() -> None:
-    if auth.required():
+    if auth.ready():
         logger.info("Sign-in required: access tokens are verified on every call.")
+    elif auth.required():
+        logger.error(
+            "Sign-in is half-configured, so every call is refused until %s %s set in "
+            "backend/.env.",
+            ", ".join(auth.missing()),
+            "is" if len(auth.missing()) == 1 else "are",
+        )
     else:
         logger.warning(
             "No sign-in configured: this API answers anyone who can reach it. Set "
-            "SUPABASE_URL (and SUPABASE_ANON_KEY) in backend/.env to require one."
+            "ZITADEL_URL, ZITADEL_TOKEN and AUTH_TOKEN_SECRET in backend/.env to require one."
         )
 
 
@@ -133,6 +141,7 @@ app.include_router(document_routes.router)
 app.include_router(intake_routes.router)
 app.include_router(client_routes.router)
 app.include_router(team_routes.router)
+app.include_router(signin_routes.router)
 app.include_router(platform_routes.router)
 
 

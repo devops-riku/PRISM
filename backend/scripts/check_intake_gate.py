@@ -51,13 +51,15 @@ os.environ["DATABASE_URL"] = ""
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # The shared config reads these once at import time via `load_dotenv(..., override=False)`,
-# so a real backend/.env (this repo's has a Supabase project configured) would
+# so a real backend/.env (this repo's has a Zitadel instance configured) would
 # otherwise win and turn on token verification - every request below is
 # headerless, so the gate would 401 all of them before a single route ran.
 # See scripts/check_kind_api.py and scripts/check_intakes_api.py for the same fix.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 # And the same for Spaces, for a second reason: this file's own `.env` has live
 # DigitalOcean credentials, `intakefiles.configured()` reads them live, and the
 # client-files section at the bottom of this script stores and reads real bytes.

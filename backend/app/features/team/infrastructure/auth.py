@@ -4,50 +4,51 @@ PRISM had no accounts. The workspace switch decided which book you were reading;
 it decided nothing about whether you were allowed to read it, and that was
 written down plainly wherever it mattered. This module is what changes that.
 
-Sign-in is Supabase's job. The browser talks to Supabase, gets a signed access
-token, and sends it on every API call. This module's whole job is to check the
-signature and the expiry before a handler runs - because a token the server does
-not verify is a claim, not a credential, and an app that trusts one has a login
-screen rather than a login.
+Zitadel keeps the people and confirms who somebody is (see `zitadel.py` and
+`app.features.team.application.signin`). Once it has, this module issues
+PRISM's own tokens, and on every API call it checks one: the signature and the
+expiry, before a handler runs - because a token the server does not verify is a
+claim, not a credential, and an app that trusts one has a login screen rather
+than a login.
 
-Two ways to verify, both standard, chosen by what is configured:
+Two tokens, both HS256 with `AUTH_TOKEN_SECRET`:
 
-  * `SUPABASE_JWT_SECRET` - the legacy shared secret, verified as HS256. One
-    value, no network call.
-  * `SUPABASE_URL` - the project's published keys (JWKS), verified as RS256 or
-    ES256. Fetched once and cached; a key rotation is picked up on the next
-    unknown `kid`.
+  * **access** - an hour. Sent on every call; checked here without a network
+    call.
+  * **refresh** - thirty days. Traded at `/api/auth/refresh` for a new pair,
+    and only while Zitadel still knows the person, so deleting or deactivating
+    somebody in the console ends their sign-in within the hour.
 
-**Unconfigured means open.** With neither value set, every request is let
-through and a warning is logged at start-up. That is deliberate and it is the
-honest default for a tool somebody runs on their own machine: turning the API
-off the moment auth code lands would break a working install that never asked
-for accounts. `/api/auth/config` reports which state the server is in, so the
-client can say so rather than guess.
+**Unconfigured means open.** With none of `ZITADEL_URL`, `ZITADEL_TOKEN` and
+`AUTH_TOKEN_SECRET` set, every request is let through and a warning is logged
+at start-up. That is deliberate and it is the honest default for a tool
+somebody runs on their own machine: turning the API off the moment auth code
+lands would break a working install that never asked for accounts.
+`/api/auth/config` reports which state the server is in, so the client can say
+so rather than guess.
+
+**Half-configured means closed.** Any one of the three set turns verification
+on. A server with a Zitadel URL and no token secret refuses every call and
+says which setting is missing, rather than quietly answering everybody.
 """
 
 from __future__ import annotations
 
-import logging
-import threading
+import secrets
 import time
-import urllib.error
-import urllib.request
 from typing import Any
 
 import jwt
-from jwt import PyJWKClient
 
 from app.shared.infrastructure import config
 
-logger = logging.getLogger("prism.auth")
-
-__all__ = ["User", "verify", "required", "describe", "AuthError"]
+__all__ = ["User", "verify", "verify_refresh", "issue", "required", "ready", "missing", "AuthError"]
 
 #: Paths that answer without a token. Health is how you find out the API is up -
 #: needing a session to ask would make a monitoring check a login problem. The
 #: auth config endpoint has to be readable before sign-in, since it is what tells
-#: the client whether to ask for one.
+#: the client whether to ask for one, and the sign-in endpoints are how somebody
+#: without a token gets one.
 #:
 #: This is not the whole open surface. Two more are shaped as a path *prefix*
 #: rather than one exact path - `GET /api/invites/<token>`, and since Stage 2
@@ -61,117 +62,151 @@ OPEN_PATHS = frozenset(
     {
         "/api/health",
         "/api/auth/config",
+        "/api/auth/sign-in",
+        "/api/auth/sign-up",
+        "/api/auth/code",
+        "/api/auth/code/resend",
+        "/api/auth/code/verify",
+        "/api/auth/reset",
+        "/api/auth/refresh",
+        "/api/auth/provider",
+        "/api/auth/provider/finish",
         "/docs",
         "/redoc",
         "/openapi.json",
     }
 )
 
-_lock = threading.Lock()
-_jwks: PyJWKClient | None = None
-_jwks_failed_at: float = 0.0
-#: How long to wait before trying the key set again after a failure. Supabase
-#: being briefly unreachable should not turn into a request per call.
-_JWKS_RETRY_SECONDS = 30.0
+ACCESS_SECONDS = 3600
+REFRESH_SECONDS = 30 * 24 * 3600
+_ISSUER = "prism"
+_ALGORITHM = "HS256"
 
 
 class AuthError(Exception):
-    """The token is missing, malformed, expired or not signed by this project."""
+    """The token is missing, malformed, expired or not signed by this server."""
 
 
 class User:
-    """Who the token says is asking. Read-only, and only what is needed."""
+    """Who the token says is asking. Read-only, and only what is needed.
 
-    __slots__ = ("id", "email", "role")
+    `id` is the person's Zitadel id; `provider` is how they signed in
+    (`email`, `google`, `facebook`).
+    """
+
+    __slots__ = ("id", "email", "provider")
 
     def __init__(self, claims: dict[str, Any]) -> None:
         self.id = str(claims.get("sub", "") or "")
-        self.email = str(claims.get("email", "") or "")
-        self.role = str(claims.get("role", "") or "")
+        self.email = str(claims.get("email", "") or "").lower()
+        self.provider = str(claims.get("prv", "") or "email")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging convenience
         return f"User({self.email or self.id!r})"
 
 
-def required() -> bool:
-    """True when this install verifies tokens at all."""
-    return bool(config.SUPABASE_JWT_SECRET.strip() or config.SUPABASE_URL.strip())
-
-
-def describe() -> dict[str, Any]:
-    """What the client needs to know before it shows a sign-in screen."""
+def _settings() -> dict[str, str]:
     return {
-        "required": required(),
-        "url": config.SUPABASE_URL.strip(),
-        # Never the secret, and never the service key. The anon key is meant to
-        # be public - it is in the browser bundle either way - and returning it
-        # here means the client is configured by the server rather than by two
-        # files that can disagree.
-        "anon_key": config.SUPABASE_ANON_KEY.strip(),
+        "ZITADEL_URL": config.ZITADEL_URL.strip(),
+        "ZITADEL_TOKEN": config.ZITADEL_TOKEN.strip(),
+        "AUTH_TOKEN_SECRET": config.AUTH_TOKEN_SECRET.strip(),
     }
 
 
-def _jwks_client() -> PyJWKClient | None:
-    """The project's published signing keys, fetched once."""
-    global _jwks, _jwks_failed_at
-
-    url = config.SUPABASE_URL.strip().rstrip("/")
-    if not url:
-        return None
-
-    with _lock:
-        if _jwks is not None:
-            return _jwks
-        if time.monotonic() - _jwks_failed_at < _JWKS_RETRY_SECONDS:
-            return None
-        try:
-            _jwks = PyJWKClient(f"{url}/auth/v1/.well-known/jwks.json", cache_keys=True)
-            # Force one fetch now so a broken URL is a start-up problem rather
-            # than a mysterious 401 on the first real request.
-            _jwks.fetch_data()
-        except (urllib.error.URLError, ValueError, Exception) as exc:  # noqa: BLE001
-            _jwks = None
-            _jwks_failed_at = time.monotonic()
-            logger.warning("Could not read the Supabase key set from %s: %s", url, exc)
-            return None
-        return _jwks
+def required() -> bool:
+    """True when this install verifies tokens at all - any sign-in setting is set."""
+    return any(_settings().values())
 
 
-def verify(token: str) -> User:
-    """The user this token proves, or `AuthError`.
+def missing() -> list[str]:
+    """The sign-in settings still empty, once any of them is set."""
+    found = _settings()
+    return [name for name, value in found.items() if not value] if any(found.values()) else []
 
-    Signature and expiry are both checked. Audience is checked against
-    Supabase's own value, which is `authenticated` for a signed-in user.
-    """
+
+def ready() -> bool:
+    """True when sign-in works end to end: required, and nothing missing."""
+    return required() and not missing()
+
+
+def _secret() -> str:
+    secret = config.AUTH_TOKEN_SECRET.strip()
+    if not secret:
+        raise AuthError(
+            "Sign-in is misconfigured on this server: AUTH_TOKEN_SECRET is not set."
+        )
+    return secret
+
+
+def _encode(user_id: str, email: str, provider: str, kind: str, seconds: int) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": _ISSUER,
+            "aud": _ISSUER,
+            "sub": user_id,
+            "email": (email or "").lower(),
+            "prv": provider or "email",
+            "typ": kind,
+            "iat": now,
+            "exp": now + seconds,
+            "jti": secrets.token_urlsafe(12),
+        },
+        _secret(),
+        algorithm=_ALGORITHM,
+    )
+
+
+def issue(user_id: str, email: str, provider: str = "email") -> dict[str, Any]:
+    """A fresh access and refresh token for somebody Zitadel has just confirmed."""
+    return {
+        "access_token": _encode(user_id, email, provider, "access", ACCESS_SECONDS),
+        "refresh_token": _encode(user_id, email, provider, "refresh", REFRESH_SECONDS),
+        "token_type": "bearer",
+        "expires_in": ACCESS_SECONDS,
+        "user": {"id": user_id, "email": (email or "").lower(), "provider": provider or "email"},
+    }
+
+
+def _decode(token: str, kind: str) -> dict[str, Any]:
     raw = (token or "").strip()
     if raw.lower().startswith("bearer "):
         raw = raw[7:].strip()
     if not raw:
         raise AuthError("No access token was sent.")
-
-    secret = config.SUPABASE_JWT_SECRET.strip()
-    options = {"verify_aud": False}
-
     try:
-        if secret:
-            claims = jwt.decode(raw, secret, algorithms=["HS256"], options=options)
-        else:
-            client = _jwks_client()
-            if client is None:
-                raise AuthError(
-                    "This server cannot check sign-ins right now: the Supabase key set "
-                    "could not be read."
-                )
-            key = client.get_signing_key_from_jwt(raw)
-            claims = jwt.decode(
-                raw, key.key, algorithms=["RS256", "ES256", "EdDSA"], options=options
-            )
+        claims = jwt.decode(
+            raw,
+            _secret(),
+            algorithms=[_ALGORITHM],
+            audience=_ISSUER,
+            issuer=_ISSUER,
+            options={"require": ["exp", "sub", "typ"]},
+        )
     except jwt.ExpiredSignatureError as exc:
         raise AuthError("That session has expired. Sign in again.") from exc
     except jwt.InvalidTokenError as exc:
         raise AuthError("That sign-in could not be verified.") from exc
-
-    user = User(claims)
-    if not user.id:
+    if claims.get("typ") != kind:
+        # A refresh token sent as an access token, or the reverse. Both are
+        # signed by this server; only one of them is for this.
+        raise AuthError("That sign-in could not be verified.")
+    if not str(claims.get("sub", "") or ""):
         raise AuthError("That token names nobody.")
-    return user
+    return claims
+
+
+def verify(token: str) -> User:
+    """The user this access token proves, or `AuthError`."""
+    if missing():
+        raise AuthError(
+            "Sign-in is misconfigured on this server: "
+            + ", ".join(missing())
+            + " not set."
+        )
+    return User(_decode(token, "access"))
+
+
+def verify_refresh(token: str) -> dict[str, Any]:
+    """The claims of a refresh token, or `AuthError`."""
+    return _decode(token, "refresh")

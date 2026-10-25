@@ -388,7 +388,7 @@ PRISM-/
 
 Stack: FastAPI, uvicorn, `google-genai`, Pydantic, SQLAlchemy, SQLite/PostgreSQL,
 and Alembic on the backend; Vite, React 18 and Tailwind CSS v4 on the frontend.
-Authentication is optional through Supabase; PDF rendering uses ReportLab.
+Authentication is optional, through Zitadel behind PRISM's own sign-in screen; PDF rendering uses ReportLab.
 
 See `backend/ARCHITECTURE.md` for feature boundaries, DDD layer rules, and
 canonical import conventions.

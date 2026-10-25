@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.features.jobs.application import service as jobs
 from app.features.notifications.infrastructure import inbox
+from app.features.team.application import signin
 from app.features.team.infrastructure import auth, mailer, members
 from app.features.workspaces.application import settings
 from app.features.workspaces.infrastructure import repository as workspaces
@@ -196,27 +197,47 @@ async def delete_workspace(request: Request, workspace_id: str) -> Response:
     return Response(status_code=204)
 
 
+class AuthProvider(BaseModel):
+    """A way in that is not a password, switched on in Zitadel."""
+
+    id: str
+    name: str = ""
+    kind: str = Field(default="other", description="google, facebook or other.")
+
+
+class PasswordRules(BaseModel):
+    min_length: int = 8
+    upper: bool = True
+    lower: bool = True
+    number: bool = True
+    symbol: bool = True
+
+
 class AuthConfig(BaseModel):
     """What the client needs before it can show a sign-in screen."""
 
     required: bool = Field(
         description="False means this install has no accounts and answers everyone."
     )
-    url: str = Field(default="", description="The Supabase project URL, or empty.")
-    anon_key: str = Field(
-        default="",
-        description="The publishable key. Public by design; the secret is never sent.",
+    ready: bool = Field(
+        default=False,
+        description="True when sign-in works. Required but not ready: half-configured, every call refused.",
     )
+    providers: List[AuthProvider] = Field(
+        default_factory=list,
+        description="Only the providers that work. None configured means no buttons.",
+    )
+    password_rules: PasswordRules | None = None
 
 
 @router.get("/api/auth/config", response_model=AuthConfig, tags=["accounts"])
 async def auth_config() -> AuthConfig:
-    """Whether anybody has to sign in here, and which project to sign in to.
+    """Whether anybody has to sign in here, and which ways in exist.
 
     Answered without a token, because it is what tells a client whether to ask
-    for one. It carries the publishable key and never the secret.
+    for one. It names providers and password rules, and never a credential.
     """
-    return AuthConfig(**auth.describe())
+    return AuthConfig(**(await signin.config_payload()))
 
 
 @router.get("/api/auth/me", tags=["accounts"])

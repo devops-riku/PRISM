@@ -62,11 +62,13 @@ os.environ["DATABASE_URL"] = ""
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # Blanked for the same reason every other check script blanks them: shared config
 # reads these once at import time via `load_dotenv(..., override=False)`, and
-# this repo's real `backend/.env` names an actual Supabase project. Nothing in
+# this repo's real `backend/.env` names a real Zitadel instance. Nothing in
 # this file sends a request today, but Task 2's sections will.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 # And all five Spaces settings, for a sharper reason than the three above, and
 # one that is no longer hypothetical: `backend/.env` on this machine holds real
 # DigitalOcean credentials for a real bucket. The local backend is only under

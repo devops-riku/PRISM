@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { User } from '@supabase/supabase-js'
+import type { User } from '../lib/auth'
 import { currentUser, onSession, signInRequired, signOut } from '../lib/auth'
 import { fetchSettings } from '../lib/api'
 import { initialsFor } from './AppHeader'
@@ -10,7 +10,7 @@ import { ACTION, DISPLAY, MONO_LABEL } from './tokens'
  * You, as this install knows you.
  *
  * Deliberately thin. PRISM keeps nothing about a person: the account lives in
- * Supabase, and what a studio charges lives in Settings. So this page states
+ * Zitadel, and what a studio charges lives in Settings. So this page states
  * what is true — which account is signed in, how it signed in, and when — and
  * points at the two screens that own everything else. A profile page that
  * invents fields to look substantial is a form nobody asked to fill in.
@@ -54,9 +54,9 @@ export default function ProfileScreen() {
   }, [])
 
   const email = user?.email || ''
-  const provider = user?.app_metadata?.provider || ''
-  const lastSeen = user?.last_sign_in_at
-    ? new Date(user.last_sign_in_at).toLocaleString()
+  const provider = user?.provider || ''
+  const lastSeen = user?.signed_in_at
+    ? new Date(user.signed_in_at).toLocaleString()
     : ''
 
   return (

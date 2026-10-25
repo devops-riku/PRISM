@@ -210,7 +210,7 @@ outside SQL under the workspace asset directory or DigitalOcean Spaces.
 - PDF downloads are rendered server-side with ReportLab; printable HTML keeps
   the browser print stylesheet path as well. No headless browser is required.
 - SQLite is the zero-configuration local database; PostgreSQL is the production
-  database. Supabase authentication remains optional. Frontend state uses plain
+  database. Zitadel authentication remains optional. Frontend state uses plain
   `useState`.
 
 ---

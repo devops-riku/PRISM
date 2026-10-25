@@ -48,10 +48,12 @@ os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # Blanked before the shared config reads the environment, exactly as every other
 # API-level check script does: `config` loads `backend/.env` once at import via
 # `load_dotenv(..., override=False)`, and this repo's real one names an actual
-# Supabase project.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+# Zitadel instance.
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 # And all five Spaces settings, for the sharper reason `check_intakefiles.py`
 # spells out at its own top: `backend/.env` on this machine holds real
 # DigitalOcean credentials for a real bucket, and this file drives a route whose

@@ -49,7 +49,7 @@ for stream in (sys.stdout, sys.stderr):
         pass
 
 # Set before shared config is imported, because it reads the environment once at
-# import time. A real variable wins over backend/.env, so blanking the Supabase
+# import time. A real variable wins over backend/.env, so blanking the sign-in
 # settings is what lets this call the API without a token, and GENERATED_DIR
 # keeps every file this writes out of the studio's own generated/ folder.
 SCRATCH = Path(mkdtemp(prefix="prism-kind-check-"))
@@ -60,9 +60,11 @@ os.environ["DATABASE_URL"] = ""
 # the network, cost money, and fail on a machine with no key. `app/main.py`
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 

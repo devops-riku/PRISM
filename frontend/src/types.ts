@@ -661,7 +661,7 @@ export type Workspace = {
 /**
  * One person on a workspace, as the team screen sees them - `main.MemberView`.
  *
- * The stored member carries a Supabase id as well; it is never sent, so it is
+ * The stored member carries a Zitadel id as well; it is never sent, so it is
  * not here. `you` is the server's answer to "is this row me", computed against
  * the token rather than left for the client to guess.
  */
@@ -1188,14 +1188,33 @@ export type Currency = {
   symbol: string
 }
 
+/** A way in that is not a password, switched on in Zitadel. */
+export type AuthProvider = {
+  /** Zitadel's id for it — what `/api/auth/provider` is sent. */
+  id: string
+  name: string
+  /** Decides the button's mark. */
+  kind: 'google' | 'facebook' | 'other' | string
+}
+
+/** Zitadel's password complexity settings, for the sign-up hint. */
+export type PasswordRules = {
+  min_length: number
+  upper: boolean
+  lower: boolean
+  number: boolean
+  symbol: boolean
+}
+
 /** What the client needs before it can show a sign-in screen. `/api/auth/config`. */
 export type AuthConfig = {
   /** False means this install has no accounts and answers everyone. */
   required: boolean
-  /** The Supabase project URL, or empty. */
-  url: string
-  /** The publishable key. Public by design; the secret is never sent. */
-  anon_key: string
+  /** Required but not ready: the server is half-configured and refuses every call. */
+  ready: boolean
+  /** Only the providers that work. None configured means no buttons. */
+  providers: AuthProvider[]
+  password_rules: PasswordRules | null
 }
 
 /**

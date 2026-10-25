@@ -1,0 +1,7 @@
+# Local additions on top of the upstream compose file, which stays a verbatim copy of
+# zitadel/zitadel deploy/compose so upgrades are a plain diff. Compose loads this file automatically.
+services:
+  zitadel-api:
+    environment:
+      # Upstream does not forward this, so a value in .env alone would be ignored.
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD:?Set ZITADEL_ADMIN_PASSWORD in .env}

@@ -29,8 +29,8 @@ REMOVED_NAMES = {
     "reference.py", "schemas.py", "settings.py", "storage.py", "template.py",
     "tokens.py", "workspaces.py",
 }
-HTTP_OPERATION_HASH = "aee4dbf61b3b5c778c73ac70f3f92b645100acbf6abf3ef2526996bc38c13916"
-OPENAPI_HASH = "80d59b548f8c5c49eaab2a5c9ef0d28cd9778844f5b8cf5c5b78057c7845718c"
+HTTP_OPERATION_HASH = "a846b108194861e44748d635f715c8c5ea35e7e95e45b626f71b5fc8abe5978f"
+OPENAPI_HASH = "eb4042c578d05564ee43c49a7455e0bd4d4610403a9a07d9ebfc0a92f819d75c"
 
 
 def imports(path: Path) -> list[str]:
@@ -105,8 +105,8 @@ def assert_http_contract() -> None:
         if method.lower() in methods
     )
     operation_blob = json.dumps(operations, separators=(",", ":")).encode()
-    assert len(schema.get("paths", {})) == 42
-    assert len(operations) == 52
+    assert len(schema.get("paths", {})) == 51
+    assert len(operations) == 61
     assert hashlib.sha256(operation_blob).hexdigest() == HTTP_OPERATION_HASH
 
     schema_blob = json.dumps(

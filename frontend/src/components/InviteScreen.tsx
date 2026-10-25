@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { User } from '@supabase/supabase-js'
+import type { User } from '../lib/auth'
 import { acceptInvite, fetchInvite, setCurrentWorkspace } from '../lib/api'
 import { currentUser, onSession, signOut } from '../lib/auth'
 import { ACTION, ACTION_PRIMARY, DISPLAY, MONO_LABEL } from './tokens'

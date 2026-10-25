@@ -99,7 +99,7 @@ class Member(BaseModel):
     """One person on a workspace."""
 
     email: str = Field(default="", description="What they signed in as. The identity that counts.")
-    user_id: str = Field(default="", description="Their Supabase id, once they have signed in.")
+    user_id: str = Field(default="", description="Their Zitadel id, once they have signed in.")
     role: str = Field(default=MEMBER, description="admin | member")
     added_at: str = ""
 
@@ -204,11 +204,18 @@ def claim(email: str, user_id: str = "") -> Member | None:
 
 
 def remember_id(email: str, user_id: str) -> None:
-    """Record the Supabase id against an invited email, once they sign in.
+    """Record the sign-in id against a member's email, once they sign in.
 
     An invitation names an email because that is all the inviter knows. The id
     is what survives a change of address, so it is written down the first time
     the two are seen together.
+
+    A DIFFERENT id under the same email is replaced, not kept. That is what a
+    change of identity provider looks like - every member signed in through
+    Supabase carries a Supabase id, and signs in through Zitadel with another -
+    and keeping the old one would leave notifications addressed to a person
+    who no longer exists, since `inbox.key_for` prefers the stored id. It grants
+    nothing new: `_match` already lets the email in.
     """
     if not (email and user_id):
         return
@@ -216,7 +223,7 @@ def remember_id(email: str, user_id: str) -> None:
         roster = load()
         changed = False
         for member in roster.members:
-            if member.email.lower() == email.lower() and not member.user_id:
+            if member.email.lower() == email.lower() and member.user_id != user_id:
                 member.user_id = user_id
                 changed = True
         if changed:

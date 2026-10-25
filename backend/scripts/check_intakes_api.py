@@ -22,13 +22,15 @@ os.environ["DATABASE_URL"] = ""
 # reads the flag at call time, so this line is the whole of the opt-out.
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # Shared config reads these once at import time via `load_dotenv(..., override=False)`,
-# so a real backend/.env (this repo's has a Supabase project configured) would
+# so a real backend/.env (this repo's has a Zitadel instance configured) would
 # otherwise win and turn on token verification - every request below is
 # headerless, so the gate would 401 all of them before a single route ran.
 # See scripts/check_kind_api.py for the same fix.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 # Blanked for the same reason and with more at stake: `POST /api/intakes/{id}/send`
 # emails the client when this install has mail configured, and this repo's real
 # backend/.env has a live Resend key. Left alone, the sends below would leave the
@@ -695,7 +697,7 @@ ok(
 
 # --- The permission model - the thing this task actually adds --------------
 #
-# Every request above ran with SUPABASE_JWT_SECRET blank, which makes
+# Every request above ran with AUTH_TOKEN_SECRET blank, which makes
 # `auth.required()` False - and the first line of `_require_admin` is
 # `if not auth.required(): return`. None of the assertions above, including
 # the ones on the admin-gated create and close routes, exercise the admin
@@ -703,32 +705,30 @@ ok(
 # calls in main.py were deleted. That is the gap a member/admin split exists
 # to close, so it needs its own section with auth actually turned on.
 #
-# Shared config's Supabase settings are plain module attributes that
-# `app.auth` reads live on every call (`config.SUPABASE_JWT_SECRET.strip()`),
+# Shared config's sign-in settings are plain module attributes that
+# `app.auth` reads live on every call (`config.AUTH_TOKEN_SECRET.strip()`),
 # not values captured once when `app.auth` was imported - so setting the
 # attribute directly, after `app.main` has already imported everything,
 # is enough to turn HS256 verification on for the rest of this process.
-# No second interpreter and no real Supabase project needed.
-import time  # noqa: E402
+# No second interpreter and no real Zitadel instance needed.
 
-import jwt  # noqa: E402
 
 from app.features.team.infrastructure import auth as auth_module  # noqa: E402
 from app.features.team.infrastructure import members  # noqa: E402
 
 TEST_JWT_SECRET = "check-intakes-api-test-secret-do-not-reuse-32bytes"
-config.SUPABASE_JWT_SECRET = TEST_JWT_SECRET
-ok("flipping SUPABASE_JWT_SECRET turns auth.required() on", auth_module.required())
+config.AUTH_TOKEN_SECRET = TEST_JWT_SECRET
+# The Zitadel pair only has to be present for verification to count as fully
+# configured; nothing in this file signs anybody in, so neither is ever called.
+config.ZITADEL_URL = "https://zitadel.invalid"
+config.ZITADEL_TOKEN = "check-only-not-a-token"
+ok("flipping AUTH_TOKEN_SECRET turns auth.required() on", auth_module.ready())
 
 
 def _token(sub: str, email: str) -> str:
-    """A signed HS256 access token shaped like the ones Supabase issues -
-    just `sub` and `email`, which is all `auth.User` reads."""
-    return jwt.encode(
-        {"sub": sub, "email": email, "aud": "authenticated", "exp": int(time.time()) + 3600},
-        TEST_JWT_SECRET,
-        algorithm="HS256",
-    )
+    """A real PRISM access token, issued by `auth.issue` exactly as a sign-in
+    does - signed with the test secret, naming `sub` and `email`."""
+    return auth_module.issue(sub, email)["access_token"]
 
 
 # A fresh workspace with a real two-person roster: an admin and a member,

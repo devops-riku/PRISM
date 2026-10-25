@@ -1,22 +1,25 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { User } from '@supabase/supabase-js'
-import { currentUser, onSession, signInRequired, startSession, supabase } from '../lib/auth'
+import type { User } from '../lib/auth'
+import { authConfig, currentUser, finishProviderReturn, onSession, startSession } from '../lib/auth'
+import { describeAuthError } from '../lib/authErrors'
+import { rememberOAuthFailure, takeProviderReceipt } from '../lib/oauthReturn'
 import AuthScreen from './AuthScreen'
 
 /**
  * Nothing is shown until the question "who is this?" has an answer — on the
  * installs that ask it.
  *
- * An install with no Supabase project configured has no accounts, the API
- * answers everyone, and this renders the app untouched. Putting a sign-in
- * screen in front of an API that would answer a stranger anyway is theatre, and
- * the one thing an auth screen must never be is decorative.
+ * An install with no sign-in configured has no accounts, the API answers
+ * everyone, and this renders the app untouched. Putting a sign-in screen in
+ * front of an API that would answer a stranger anyway is theatre, and the one
+ * thing an auth screen must never be is decorative.
  *
- * Where accounts do exist, the gate holds until Supabase has restored whatever
- * session the browser was keeping. That wait is deliberately silent for the
- * first moment: a sign-in card that flashes up and vanishes because a session
- * was there all along reads as having been signed out.
+ * Where accounts do exist, the gate holds until the session this browser kept
+ * has been restored (and refreshed, if it was about to run out), and until a
+ * Google or Facebook return has been finished. That wait is deliberately
+ * silent for the first moment: a sign-in card that flashes up and vanishes
+ * because a session was there all along reads as having been signed out.
  */
 
 /** The four answers to "who is this?", including not knowing yet. */
@@ -31,20 +34,25 @@ export default function AuthGate({ children }: AuthGateProps) {
   useEffect(() => {
     let live = true
 
-    signInRequired()
-      .then(async (required) => {
+    authConfig()
+      .then(async (found) => {
         if (!live) return
-        if (!required) {
+        if (!found.required) {
           setState('open')
           return
         }
-        const client = await supabase()
-        if (!live) return
-        if (!client) {
-          // The server says sign-in is required but gave no project to sign in
-          // to. Saying so beats an endless spinner.
+        if (!found.ready) {
+          // The server requires a sign-in but cannot perform one. Saying so
+          // beats an endless spinner, or a form whose every button fails.
           setState('misconfigured')
           return
+        }
+        const receipt = takeProviderReceipt()
+        if (receipt) {
+          await finishProviderReturn(receipt.id, receipt.token).catch((failure: unknown) => {
+            const problem = describeAuthError(failure)
+            rememberOAuthFailure({ code: 'PROVIDER_FAILED', message: problem.message })
+          })
         }
         await startSession()
         if (!live) return
@@ -81,9 +89,10 @@ export default function AuthGate({ children }: AuthGateProps) {
             Sign-in not finished
           </p>
           <p className="mt-2 font-body text-[15px] leading-[1.6] text-void">
-            This API requires a sign-in but did not name an account service to sign in to. Set{' '}
-            <code className="font-label text-[13px] text-ink">SUPABASE_URL</code> and{' '}
-            <code className="font-label text-[13px] text-ink">SUPABASE_ANON_KEY</code> in{' '}
+            This API requires a sign-in but is missing part of its setup. Set{' '}
+            <code className="font-label text-[13px] text-ink">ZITADEL_URL</code>,{' '}
+            <code className="font-label text-[13px] text-ink">ZITADEL_TOKEN</code> and{' '}
+            <code className="font-label text-[13px] text-ink">AUTH_TOKEN_SECRET</code> in{' '}
             <code className="font-label text-[13px] text-ink">backend/.env</code> and restart it.
           </p>
         </div>

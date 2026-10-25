@@ -99,21 +99,35 @@ MISSING_KEY_MESSAGE: str = (
 
 # --- Accounts ----------------------------------------------------------------
 
-#: Sign-in is Supabase's. The browser gets a token from them; this server checks
-#: it. All three are optional: with none of them set the API answers everyone,
-#: which is what PRISM did before accounts existed and is still the right
-#: default for a tool running on one machine. See app/auth.py.
-SUPABASE_URL: str = _env_str("SUPABASE_URL", "")
+#: Sign-in: Zitadel keeps the people, PRISM's own screen asks for the password
+#: or the code, and this server issues its own tokens. All of these are
+#: optional together: with none of them set the API answers everyone, which is
+#: what PRISM did before accounts existed and is still the right default for a
+#: tool running on one machine. Setting only some of them is not "off" - the
+#: API then refuses every call until the rest are set. See
+#: app/features/team/infrastructure/auth.py.
+#:
+#: The instance as the browser and Zitadel itself name it, e.g.
+#: https://zitadel.neptune.ph. It is also the Host every call carries.
+ZITADEL_URL: str = _env_str("ZITADEL_URL", "")
 
-#: The publishable key. It is meant to be public - it ships in the browser
-#: bundle - and is served to the client so one file configures both halves.
-SUPABASE_ANON_KEY: str = _env_str("SUPABASE_ANON_KEY", "")
+#: Another address for the same instance, reached from this server only (the
+#: private Docker network on Neptune). Empty means ZITADEL_URL is called.
+ZITADEL_INTERNAL_URL: str = _env_str("ZITADEL_INTERNAL_URL", "")
 
-#: The legacy shared secret, if the project still uses one. Present means tokens
-#: are verified as HS256 without a network call; absent means the project's
-#: published keys are fetched from SUPABASE_URL instead. Never leaves this
-#: process.
-SUPABASE_JWT_SECRET: str = _env_str("SUPABASE_JWT_SECRET", "")
+#: A personal access token for PRISM's service account (instance role
+#: IAM_LOGIN_CLIENT). It can start a sign-in for anybody: as secret as a
+#: database password. Never leaves this process.
+ZITADEL_TOKEN: str = _env_str("ZITADEL_TOKEN", "")
+
+#: The organization PRISM's people live in. New accounts are made there and
+#: every lookup is limited to it, so an instance shared with other apps never
+#: answers with somebody else's user.
+ZITADEL_ORG_ID: str = _env_str("ZITADEL_ORG_ID", "")
+
+#: Signs PRISM's own access and refresh tokens (HS256). At least 32 random
+#: characters. Changing it signs everybody out.
+AUTH_TOKEN_SECRET: str = _env_str("AUTH_TOKEN_SECRET", "")
 
 
 #: Sending the one email PRISM sends: a workspace invitation, through Resend.

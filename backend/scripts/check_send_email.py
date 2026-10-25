@@ -26,9 +26,11 @@ os.environ["DATABASE_URL"] = ""
 os.environ["CHECK_BRIEF_IS_REAL"] = "0"
 # See check_intakes_api.py for why these three are blanked: a real backend/.env
 # would turn on token verification and 401 every headerless request below.
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_ANON_KEY"] = ""
-os.environ["SUPABASE_JWT_SECRET"] = ""
+os.environ["ZITADEL_URL"] = ""
+os.environ["ZITADEL_INTERNAL_URL"] = ""
+os.environ["ZITADEL_TOKEN"] = ""
+os.environ["ZITADEL_ORG_ID"] = ""
+os.environ["AUTH_TOKEN_SECRET"] = ""
 # Configured by default so the sending path is the one under test. Individual
 # checks below blank `config.RESEND_*` at runtime instead of re-importing -
 # `mailer.configured()` reads both attributes on every call, which is what
