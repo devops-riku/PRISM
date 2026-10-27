@@ -52,9 +52,9 @@ from app.features.quotations.domain.models import (
 )
 from app.features.intakes.infrastructure import files as intakefiles
 from app.features.quotations.infrastructure import repository as storage
-from app.features.quotations.infrastructure.gemini import (
-    GeminiConfigError,
-    GeminiResponseError,
+from app.features.quotations.infrastructure.claude import (
+    ModelConfigError,
+    ModelResponseError,
     check_brief_is_real,
     generate_estimate,
     revise_estimate,
@@ -80,8 +80,8 @@ router = APIRouter()
 class BriefNotRealError(RuntimeError):
     """The model was asked whether the brief describes work and said it does not.
 
-    Its own type rather than a `GeminiResponseError`, because the two are told
-    apart by what the reader should DO. A `GeminiResponseError` means the model
+    Its own type rather than a `ModelResponseError`, because the two are told
+    apart by what the reader should DO. A `ModelResponseError` means the model
     could not be reached or would not answer, and the fix is to press Generate
     again in a minute. This means the model answered perfectly well and the
     answer was no, and pressing Generate again will produce the same refusal
@@ -1189,7 +1189,7 @@ async def create_proposal(
             # synchronously." The rejectable part is the floor, and it IS
             # synchronous. This is not rejectable without a network call, and
             # `POST /api/proposals` makes none today - adding one would mean a
-            # Gemini outage stopped a studio from STARTING a quotation rather
+            # model outage stopped a studio from STARTING a quotation rather
             # than failing a job they can retry, on a blocking call in an
             # `async def` handler, which is the shape that parks the event loop
             # for every other request this worker holds.
@@ -1360,12 +1360,12 @@ async def create_proposal(
             deps.logger.info("Brief refused before pricing: %s", exc)
             jobs.fail(job.id, str(exc))
             stamp(intakes.QUOTE_FAILED, error=str(exc))
-        except GeminiConfigError as exc:
+        except ModelConfigError as exc:
             deps.logger.error("Generation blocked by configuration: %s", exc)
             jobs.fail(job.id, str(exc))
             stamp(intakes.QUOTE_FAILED, error=str(exc))
-        except GeminiResponseError as exc:
-            deps.logger.error("Unusable Gemini response: %s | snippet=%s", exc, exc.snippet)
+        except ModelResponseError as exc:
+            deps.logger.error("Unusable model response: %s | snippet=%s", exc, exc.snippet)
             jobs.fail(job.id, str(exc))
             stamp(intakes.QUOTE_FAILED, error=str(exc))
             inbox.notify(
@@ -1446,7 +1446,7 @@ def _finalise(
 
     Split out of the endpoint when generation moved to the background: the HTTP
     handler now returns a job before any of this runs, so everything that used
-    to live after the Gemini call had to become something the worker can call.
+    to live after the model call had to become something the worker can call.
 
     Tiers are finalised from the top down, and that order is the point. Every
     other pass - the rate card, the payment terms, the contingency, the target -
@@ -1715,11 +1715,11 @@ async def revise_proposal(
                     "href": f"#/q/{bundle.id}",
                 },
             )
-        except GeminiConfigError as exc:
+        except ModelConfigError as exc:
             deps.logger.error("Revision blocked by configuration: %s", exc)
             jobs.fail(job.id, str(exc))
-        except GeminiResponseError as exc:
-            deps.logger.error("Unusable Gemini revision: %s | snippet=%s", exc, exc.snippet)
+        except ModelResponseError as exc:
+            deps.logger.error("Unusable model revision: %s | snippet=%s", exc, exc.snippet)
             jobs.fail(job.id, str(exc))
             # Worth saying plainly: the original is deliberately untouched, so
             # silence would leave somebody believing a revised version exists

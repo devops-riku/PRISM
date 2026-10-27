@@ -45,7 +45,7 @@ for stream in (sys.stdout, sys.stderr):
 from app.features.quotations.application import prompts  # noqa: E402
 from app.features.quotations.domain import kinds  # noqa: E402
 from app.features.quotations.domain.models import ProposalRequest  # noqa: E402
-from app.features.quotations.infrastructure.gemini import _build_contents  # noqa: E402
+from app.features.quotations.infrastructure.claude import _build_contents  # noqa: E402
 
 
 #: Taken from the quotation prompt module before the kind branch was added.

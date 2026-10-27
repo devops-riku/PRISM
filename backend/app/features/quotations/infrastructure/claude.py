@@ -1,32 +1,39 @@
-"""The single Gemini call.
+"""The single model call, made to Claude through the Anthropic SDK.
 
-Package is `google-genai`. There is no `genai.configure()` and no
-`GenerativeModel`; the call shape below is the verified one from
-docs/CONTRACT.md section 3 - `client.models.generate_content(...)` with the
-schema in `config` and the images in `contents`.
+Package is `anthropic`. The client is built lazily inside this module rather
+than at import time: a missing key has to surface as a clean 503, and
+`/api/health` has to answer while it is missing.
 
-One deliberate departure from the snippet in the contract: the client is built
-lazily inside this module rather than at import time. The snippet's
-`genai.Client(api_key=os.environ["GEMINI_API_KEY"])` at module scope would raise
-`KeyError` on import when no key is configured, and the contract also requires
-that a missing key surface as a clean 503. The API *shape* is unchanged; only
-the moment of construction moved.
+Two shapes of call, chosen by schema size rather than by taste:
+
+  * `BriefCheck` and `ProposalNarrative` are small enough for structured
+    outputs, so the API itself guarantees the JSON matches the model.
+  * `Estimate` is not. Its schema compiles to a grammar the API refuses as too
+    large, so the schema goes in the system prompt instead and the reply is
+    validated here. Every field on `Estimate` has a default, which is what
+    makes that safe: a partial object still validates, and a reply that is not
+    an object at all is a clear 502.
+
+Retries are the SDK's - it retries connection errors, 408, 409, 429 and 5xx
+with backoff before any of that reaches this module.
 """
 
 from __future__ import annotations
 
+import base64
 import functools
+import io
 import json
 import logging
 import re
 import threading
+import time
 from typing import Any, Sequence
 
+import anthropic
 import anyio
 import anyio.to_thread  # explicit: `anyio.to_thread` is a submodule, not re-exported
-
-from google import genai
-from google.genai import types
+from PIL import Image
 
 from app.features.quotations.application.prompts import (
     PROPOSAL_SYSTEM_INSTRUCTION,
@@ -41,23 +48,38 @@ from app.features.quotations.domain.costing import gross_for_target
 from app.features.quotations.domain.models import BriefCheck, Estimate, ProposalNarrative, ProposalRequest
 from app.shared.infrastructure import config
 
-logger = logging.getLogger("prism.gemini")
+logger = logging.getLogger("prism.claude")
 
 _SNIPPET_LIMIT = 600
-_TRANSIENT_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
-_AUTH_STATUS = {401, 403}
+
+#: Room for the thinking and the whole JSON object. An estimate with a full
+#: developer spec runs to tens of thousands of tokens, and running out of room
+#: mid-object is a failed generation, so this is generous and always streamed.
+_ESTIMATE_MAX_TOKENS = 64_000
+_PROPOSAL_MAX_TOKENS = 32_000
+_BRIEF_CHECK_MAX_TOKENS = 4_000
+
+#: Server-side refusal fallback: if a safety classifier declines the request on
+#: the configured model, the API re-runs it on a model chosen by refusal
+#: category, inside the same call.
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+#: An advisory ceiling on one estimate's thinking plus writing - see
+#: `_stream_estimate`. Roughly three times the JSON itself.
+_TASK_BUDGET_BETA = "task-budgets-2026-03-13"
+_ESTIMATE_TASK_BUDGET = 32_000
 
 
-class GeminiError(RuntimeError):
+class ModelError(RuntimeError):
     """Base class for every failure of the generation step."""
 
 
-class GeminiConfigError(GeminiError):
+class ModelConfigError(ModelError):
     """The key is missing or rejected. Surfaces as 503 - the operator must act."""
 
 
-class GeminiResponseError(GeminiError):
-    """Gemini answered, but not with a usable Estimate. Surfaces as 502."""
+class ModelResponseError(ModelError):
+    """The model answered, but not with a usable Estimate. Surfaces as 502."""
 
     def __init__(self, message: str, snippet: str = "") -> None:
         super().__init__(message)
@@ -66,97 +88,36 @@ class GeminiResponseError(GeminiError):
 
 # --- Client ------------------------------------------------------------------
 
-_client: genai.Client | None = None
+_client: anthropic.Anthropic | None = None
 _client_lock = threading.Lock()
 
 
-def _get_client() -> genai.Client:
+def _get_client() -> anthropic.Anthropic:
     """Build the client once, on first use, never at import time."""
     global _client
-    api_key = config.GEMINI_API_KEY.strip()
+    api_key = config.ANTHROPIC_API_KEY.strip()
     if not api_key:
-        raise GeminiConfigError(config.MISSING_KEY_MESSAGE)
+        raise ModelConfigError(config.MISSING_KEY_MESSAGE)
 
     if _client is None:
         with _client_lock:
             if _client is None:
                 try:
-                    _client = genai.Client(api_key=api_key)
+                    _client = anthropic.Anthropic(api_key=api_key, max_retries=3)
                 except Exception as exc:  # malformed key, bad transport options
-                    raise GeminiConfigError(
-                        "Could not initialise the Gemini client "
-                        f"({exc.__class__.__name__}). Check GEMINI_API_KEY in backend/.env "
+                    raise ModelConfigError(
+                        "Could not initialise the Anthropic client "
+                        f"({exc.__class__.__name__}). Check ANTHROPIC_API_KEY in backend/.env "
                         "and restart the API."
                     ) from exc
     return _client
 
 
-# --- Error classification ----------------------------------------------------
-
-
-def _status_code(exc: BaseException) -> int | None:
-    """Best-effort HTTP status for an SDK exception, without betting on a class name."""
-    for attr in ("code", "status_code"):
-        value = getattr(exc, attr, None)
-        if isinstance(value, int):
-            return value
-    response = getattr(exc, "response", None)
-    value = getattr(response, "status_code", None)
-    if isinstance(value, int):
-        return value
-    return None
+# --- Errors ------------------------------------------------------------------
 
 
 def _describe(exc: BaseException) -> str:
     return f"{exc.__class__.__name__}: {exc}".lower()
-
-
-def _is_auth_failure(exc: BaseException) -> bool:
-    code = _status_code(exc)
-    if code in _AUTH_STATUS:
-        return True
-    text = _describe(exc)
-    return any(
-        marker in text
-        for marker in (
-            "api key not valid",
-            "api_key_invalid",
-            "invalid api key",
-            "unauthenticated",
-            "permission_denied",
-            "permission denied",
-            "missing credentials",
-        )
-    )
-
-
-def _is_transient(exc: BaseException) -> bool:
-    """429 / 5xx / timeouts / dropped connections. A 4xx that is not 429 is not transient."""
-    if _is_auth_failure(exc):
-        return False
-    code = _status_code(exc)
-    if code is not None:
-        return code in _TRANSIENT_STATUS
-    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-        return True
-    text = _describe(exc)
-    return any(
-        marker in text
-        for marker in (
-            "timeout",
-            "timed out",
-            "deadline",
-            "temporarily",
-            "unavailable",
-            "overloaded",
-            "resource_exhausted",
-            "rate limit",
-            "too many requests",
-            "connection reset",
-            "connection aborted",
-            "server error",
-        )
-    )
 
 
 def _snippet(text: str, limit: int = _SNIPPET_LIMIT) -> str:
@@ -168,21 +129,165 @@ def _snippet(text: str, limit: int = _SNIPPET_LIMIT) -> str:
     return collapsed[:limit] + " ... [truncated]"
 
 
-def _blocked_reason(response: Any) -> str:
-    """Extract a human reason when the model returned no text (safety block, token cap)."""
-    reasons: list[str] = []
-    feedback = getattr(response, "prompt_feedback", None)
-    block_reason = getattr(feedback, "block_reason", None)
-    if block_reason:
-        reasons.append(f"prompt blocked ({getattr(block_reason, 'name', block_reason)})")
-    for candidate in getattr(response, "candidates", None) or []:
-        finish = getattr(candidate, "finish_reason", None)
-        if finish and str(getattr(finish, "name", finish)).upper() not in {"STOP", "FINISH_REASON_STOP"}:
-            reasons.append(f"generation stopped early ({getattr(finish, 'name', finish)})")
-    return "; ".join(dict.fromkeys(reasons))
+def _translate(exc: Exception, what: str) -> ModelError:
+    """One SDK exception, as the error class the routes know how to answer.
+
+    Most specific first. By the time a transient failure (429, 5xx, a dropped
+    connection) lands here the SDK has already retried it, so it is reported,
+    not retried again.
+    """
+    if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return ModelConfigError(
+            "Anthropic rejected the configured API key. Check ANTHROPIC_API_KEY in "
+            f"backend/.env, confirm the key has access to {config.CLAUDE_MODEL}, and "
+            "restart the API."
+        )
+    if isinstance(exc, anthropic.NotFoundError):
+        return ModelResponseError(
+            f"{what} could not be generated: the model {config.CLAUDE_MODEL!r} was not "
+            "found. Check CLAUDE_MODEL in backend/.env.",
+            snippet=_snippet(str(exc)),
+        )
+    if isinstance(exc, anthropic.APIStatusError):
+        return ModelResponseError(
+            f"{what} could not be generated (status {exc.status_code}). Try again in a "
+            "moment; if it keeps happening, check the model id in backend/.env.",
+            snippet=_snippet(str(exc)),
+        )
+    if isinstance(exc, anthropic.APIConnectionError):
+        return ModelResponseError(
+            f"{what} could not be generated: the Anthropic API could not be reached "
+            f"({exc.__class__.__name__}). Try again in a moment.",
+            snippet=_snippet(str(exc)),
+        )
+    return ModelResponseError(
+        f"{what} could not be generated: {exc.__class__.__name__}.",
+        snippet=_snippet(str(exc)),
+    )
+
+
+def _check_stop(message: Any, what: str) -> None:
+    """A reply that stopped for any reason but finishing is not parsed."""
+    stop = getattr(message, "stop_reason", None)
+    if stop == "refusal":
+        details = getattr(message, "stop_details", None)
+        category = getattr(details, "category", None)
+        raise ModelResponseError(
+            f"The model declined to write {what}"
+            + (f" ({category})" if category else "")
+            + ". Rephrase the brief or remove the attached images and try again."
+        )
+    if stop == "max_tokens":
+        raise ModelResponseError(
+            f"The model ran out of room before finishing {what}. Try again; if it "
+            "repeats, shorten the brief or split the work into two quotations."
+        )
+
+
+def _text_of(message: Any) -> str:
+    return "".join(
+        getattr(block, "text", "") for block in getattr(message, "content", []) or []
+        if getattr(block, "type", "") == "text"
+    )
+
+
+def _log_usage(label: str, message: Any) -> None:
+    usage = getattr(message, "usage", None)
+    if usage is None:
+        return
+    logger.info(
+        "%s usage: model=%s input=%s cache_read=%s output=%s",
+        label,
+        getattr(message, "model", config.CLAUDE_MODEL),
+        getattr(usage, "input_tokens", "?"),
+        getattr(usage, "cache_read_input_tokens", 0) or 0,
+        getattr(usage, "output_tokens", "?"),
+    )
+
+
+# --- Images ------------------------------------------------------------------
+
+#: What the Messages API reads. Anything else is re-encoded or left out.
+_CLAUDE_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
+#: The long edge Claude reads at full resolution. A larger image is downscaled
+#: by the API anyway, so it is downscaled here first and costs less to send.
+_MAX_LONG_EDGE = 2576
+
+#: The largest image sent as uploaded. The API takes 10 MB of base64 per image
+#: and 32 MB for the whole request; eight images at this size stay under both.
+_PASSTHROUGH_BYTES = 2 * 1024 * 1024
+
+
+def _prepare_image(data: bytes, mime_type: str) -> tuple[bytes, str] | None:
+    """The image as Claude can read it, or None when it cannot be made readable.
+
+    Sent untouched when it is already a type Claude reads and small enough.
+    Otherwise downscaled and re-encoded as JPEG. None for anything Pillow
+    cannot open - HEIC, most often, which phones send and Claude does not read.
+    """
+    mime = (mime_type or "").strip().lower()
+    if mime == "image/jpg":
+        mime = "image/jpeg"
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            if (
+                mime in _CLAUDE_IMAGE_TYPES
+                and len(data) <= _PASSTHROUGH_BYTES
+                and max(img.size) <= _MAX_LONG_EDGE
+            ):
+                return data, mime
+            img.thumbnail((_MAX_LONG_EDGE, _MAX_LONG_EDGE))
+            if img.mode in ("RGBA", "LA", "P"):
+                rgba = img.convert("RGBA")
+                flat = Image.new("RGB", rgba.size, (255, 255, 255))
+                flat.paste(rgba, mask=rgba.split()[-1])
+            else:
+                flat = img.convert("RGB")
+            for quality in (85, 70, 55):
+                buffer = io.BytesIO()
+                flat.save(buffer, "JPEG", quality=quality, optimize=True)
+                if buffer.tell() <= _PASSTHROUGH_BYTES:
+                    return buffer.getvalue(), "image/jpeg"
+    except Exception as exc:  # noqa: BLE001 - an unreadable image is left out, not fatal
+        logger.warning("Image (%s) could not be prepared: %s", mime or "unknown type", _describe(exc))
+    return None
+
+
+def _skipped_note(mime_type: str) -> str:
+    label = (mime_type or "").split("/")[-1].upper() or "unrecognised"
+    return (
+        f"One attached image ({label}) was not read: the model accepts JPEG, PNG, GIF "
+        "and WebP. Re-attach it in one of those formats to have it priced."
+    )
+
+
+def _prepare_images(
+    images: Sequence[tuple[bytes, str]],
+) -> tuple[list[tuple[bytes, str]], list[str]]:
+    """The images that can be sent, and one note per image that could not."""
+    sent: list[tuple[bytes, str]] = []
+    notes: list[str] = []
+    for data, mime_type in images:
+        prepared = _prepare_image(data, mime_type)
+        if prepared is None:
+            notes.append(_skipped_note(mime_type))
+        else:
+            sent.append(prepared)
+    return sent, notes
 
 
 # --- Generation --------------------------------------------------------------
+
+#: The schema the estimate prompts promise ("a single JSON object conforming to
+#: the supplied schema"). Built once: it is the same bytes on every call, which
+#: keeps the system prompt a stable prefix for prompt caching.
+_ESTIMATE_SCHEMA = json.dumps(Estimate.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+
+
+def _estimate_system(instruction: str) -> list[dict[str, Any]]:
+    text = f"{instruction}\n\nJSON SCHEMA FOR THE ESTIMATE OBJECT\n{_ESTIMATE_SCHEMA}"
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
 
 def _build_contents(
@@ -198,7 +303,7 @@ def _build_contents(
     kind_label: str = "",
     documents_text: str = "",
 ) -> list[Any]:
-    """A flat list: the brief text first, then one image part per attachment."""
+    """A flat list: the brief text first, then one image block per attachment."""
     contents: list[Any] = [build_brief(
         req,
         len(images),
@@ -213,90 +318,93 @@ def _build_contents(
         documents_text=documents_text,
     )]
     for image_bytes, mime_type in images:
-        contents.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+        contents.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime_type,
+                "data": base64.standard_b64encode(image_bytes).decode("ascii"),
+            },
+        })
     return contents
 
 
-async def _generate_once(contents: list[Any], system_instruction: str = "") -> Any:
+def _as_user_content(contents: Sequence[Any]) -> list[dict[str, Any]]:
+    return [{"type": "text", "text": part} if isinstance(part, str) else part for part in contents]
+
+
+def _stream_estimate(contents: Sequence[Any], instruction: str) -> Any:
+    """Blocking: one streamed call, returning the final message.
+
+    The task budget is what keeps this to minutes. Thinking cannot be switched
+    off on the current Opus, and without a budget it varied run to run from
+    nothing to fifty thousand tokens before the first character of JSON - the
+    object itself is about eleven thousand. The budget is advisory: the model
+    sees it count down and paces itself to finish, where `max_tokens` would
+    simply cut it off mid-object.
+    """
     client = _get_client()
-    call = functools.partial(
-        client.models.generate_content,
-        model=config.GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=Estimate,
-            temperature=config.GEMINI_TEMPERATURE,
-            system_instruction=system_instruction or SYSTEM_INSTRUCTION,
-        ),
+    started = time.monotonic()
+    first_text: float | None = None
+    text_chars = 0
+    with client.beta.messages.stream(
+        model=config.CLAUDE_MODEL,
+        max_tokens=_ESTIMATE_MAX_TOKENS,
+        system=_estimate_system(instruction),
+        messages=[{"role": "user", "content": _as_user_content(contents)}],
+        output_config={
+            "effort": config.CLAUDE_EFFORT,
+            "task_budget": {"type": "tokens", "total": _ESTIMATE_TASK_BUDGET},
+        },
+        betas=[_FALLBACK_BETA, _TASK_BUDGET_BETA],
+        fallbacks="default",
+    ) as stream:
+        for event in stream:
+            if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                if first_text is None:
+                    first_text = time.monotonic() - started
+                text_chars += len(event.delta.text)
+        message = stream.get_final_message()
+    logger.info(
+        "Estimate stream: stop=%s elapsed=%.1fs first_text=%s text_chars=%d",
+        message.stop_reason,
+        time.monotonic() - started,
+        f"{first_text:.1f}s" if first_text is not None else "never",
+        text_chars,
     )
-    # `anyio.to_thread.run_sync` forwards positional arguments only, hence the partial.
-    return await anyio.to_thread.run_sync(call)
+    return message
 
 
-async def _generate_with_retry(contents: list[Any], system_instruction: str = "") -> Any:
-    """One call, plus a single retry when - and only when - the failure is transient."""
-    for attempt in (1, 2):
-        try:
-            return await _generate_once(contents, system_instruction)
-        except GeminiError:
-            raise
-        except Exception as exc:
-            if _is_auth_failure(exc):
-                raise GeminiConfigError(
-                    "Gemini rejected the configured API key. Check GEMINI_API_KEY in "
-                    "backend/.env, confirm the key has access to "
-                    f"{config.GEMINI_MODEL}, and restart the API."
-                ) from exc
-            if attempt == 2 or not _is_transient(exc):
-                status = _status_code(exc)
-                detail = f" (status {status})" if status is not None else ""
-                raise GeminiResponseError(
-                    f"The estimate could not be generated{detail}: "
-                    f"{exc.__class__.__name__}. Try again in a moment; if it keeps "
-                    "happening, check the model id in backend/.env.",
-                    snippet=_snippet(str(exc)),
-                ) from exc
-            logger.warning(
-                "Transient Gemini failure (%s), retrying once in %.1fs",
-                exc.__class__.__name__,
-                config.GEMINI_RETRY_DELAY_SECONDS,
-            )
-            await anyio.sleep(config.GEMINI_RETRY_DELAY_SECONDS)
-
-    # Unreachable: the loop either returns or raises.
-    raise GeminiResponseError("The estimate could not be generated.")
+async def _generate(contents: Sequence[Any], instruction: str = "") -> Any:
+    call = functools.partial(_stream_estimate, contents, instruction or SYSTEM_INSTRUCTION)
+    try:
+        # `anyio.to_thread.run_sync` forwards positional arguments only, hence the partial.
+        message = await anyio.to_thread.run_sync(call)
+    except ModelError:
+        raise
+    except Exception as exc:
+        raise _translate(exc, "The estimate") from exc
+    _log_usage("Estimate", message)
+    return message
 
 
-def _coerce_estimate(response: Any) -> Estimate:
-    """`response.parsed` first, then the raw JSON text, then a clear error."""
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, Estimate):
-        return parsed
-    if isinstance(parsed, dict):
-        try:
-            return Estimate.model_validate(parsed)
-        except Exception:  # fall through to the text path
-            logger.warning("response.parsed was a dict that failed validation; trying response.text")
-
-    raw = getattr(response, "text", None) or ""
-    if raw.strip():
-        try:
-            return Estimate.model_validate_json(raw)
-        except Exception as exc:
-            raise GeminiResponseError(
-                "Gemini returned a response that is not a valid estimate. Try again; "
-                "if it repeats, the configured model may not support structured output.",
-                snippet=_snippet(raw),
-            ) from exc
-
-    reason = _blocked_reason(response)
-    raise GeminiResponseError(
-        "Gemini returned an empty response"
-        + (f" - {reason}. " if reason else ". ")
-        + "Rephrase the brief or remove the attached images and try again.",
-        snippet=_snippet(str(getattr(response, "candidates", "") or "")),
-    )
+def _coerce_estimate(message: Any) -> Estimate:
+    """The reply's JSON object as an `Estimate`, or a clear error."""
+    _check_stop(message, "the estimate")
+    raw = _text_of(message).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        raise ModelResponseError(
+            "The model returned no estimate. Try again; if it repeats, rephrase the brief.",
+            snippet=_snippet(raw),
+        )
+    try:
+        return Estimate.model_validate_json(raw[start : end + 1])
+    except Exception as exc:
+        raise ModelResponseError(
+            "The model returned a response that is not a valid estimate. Try again.",
+            snippet=_snippet(raw),
+        ) from exc
 
 
 #: "Proposal for the Acme Portal", "Proposal: Acme Portal", "Project Proposal".
@@ -418,11 +526,16 @@ async def generate_estimate(
     positionally, and it defaults to software because everything quoted before
     disciplines existed was.
 
+    An image Claude cannot read (HEIC, a corrupt file) is left out rather than
+    failing the run, and says so in `image_observations` - the brief is told
+    how many images actually follow, so the model never describes one it was
+    not given.
+
     Raises:
-        GeminiConfigError: no key, or the key was rejected.
-        GeminiResponseError: the model answered with something unusable.
+        ModelConfigError: no key, or the key was rejected.
+        ModelResponseError: the model answered with something unusable.
     """
-    images = list(images or [])
+    images, skipped = _prepare_images(list(images or []))
     contents = _build_contents(
         req,
         images,
@@ -438,18 +551,21 @@ async def generate_estimate(
     )
 
     logger.info(
-        "Generating estimate: model=%s kind=%s currency=%s region=%s images=%d brief_chars=%d",
-        config.GEMINI_MODEL,
+        "Generating estimate: model=%s kind=%s currency=%s region=%s images=%d skipped=%d brief_chars=%d",
+        config.CLAUDE_MODEL,
         kind or "software",
         req.currency,
         req.market_region,
         len(images),
+        len(skipped),
         len(req.brief or ""),
     )
 
-    response = await _generate_with_retry(contents)
+    response = await _generate(contents)
     estimate = _coerce_estimate(response)
     estimate = _apply_request_identity(estimate, req)
+    if skipped:
+        estimate.image_observations = [*estimate.image_observations, *skipped]
 
     logger.info(
         "Estimate received: %d requirements, %d line items, %d phases, confidence=%s",
@@ -505,8 +621,8 @@ async def revise_estimate(
     job is that the scope justifies the number, not that the number adds up.
 
     Raises:
-        GeminiConfigError: no key, or the key was rejected.
-        GeminiResponseError: the model answered with something unusable.
+        ModelConfigError: no key, or the key was rejected.
+        ModelResponseError: the model answered with something unusable.
     """
     currency = (prior.currency or "PHP").strip().upper()
     region = (prior.market_region or "Philippines").strip()
@@ -536,14 +652,14 @@ async def revise_estimate(
 
     logger.info(
         "Revising estimate: model=%s currency=%s prior_total=%.2f target=%s instruction_chars=%d",
-        config.GEMINI_MODEL,
+        config.CLAUDE_MODEL,
         currency,
         prior.cost.total,
         f"{target_total:.2f}" if target_total is not None else "none",
         len(instruction or ""),
     )
 
-    response = await _generate_with_retry(contents, REVISION_SYSTEM_INSTRUCTION)
+    response = await _generate(contents, REVISION_SYSTEM_INSTRUCTION)
     revised = _coerce_estimate(response)
 
     # The request, not the model, is authoritative about identity - same rule as
@@ -586,63 +702,49 @@ async def generate_proposal(
     the figures are printed from the quotation.
 
     Raises:
-        GeminiConfigError: no key, or the key was rejected.
-        GeminiResponseError: the model answered with something unusable.
+        ModelConfigError: no key, or the key was rejected.
+        ModelResponseError: the model answered with something unusable.
     """
-    contents = [build_proposal_brief(estimate, studio_name, policy_titles or [])]
+    brief = build_proposal_brief(estimate, studio_name, policy_titles or [])
 
     logger.info(
         "Writing a proposal: model=%s client=%r project=%r",
-        config.GEMINI_MODEL,
+        config.CLAUDE_MODEL,
         estimate.client_name,
         estimate.project_name,
     )
 
-    client = _get_client()
-    call = functools.partial(
-        client.models.generate_content,
-        model=config.GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ProposalNarrative,
-            temperature=config.GEMINI_TEMPERATURE,
-            system_instruction=PROPOSAL_SYSTEM_INSTRUCTION,
-        ),
-    )
+    def _stream_proposal() -> Any:
+        client = _get_client()
+        with client.beta.messages.stream(
+            model=config.CLAUDE_MODEL,
+            max_tokens=_PROPOSAL_MAX_TOKENS,
+            system=PROPOSAL_SYSTEM_INSTRUCTION,
+            messages=[{"role": "user", "content": brief}],
+            output_config={"effort": config.CLAUDE_EFFORT},
+            output_format=ProposalNarrative,
+            betas=[_FALLBACK_BETA],
+            fallbacks="default",
+        ) as stream:
+            return stream.get_final_message()
 
-    for attempt in (1, 2):
-        try:
-            response = await anyio.to_thread.run_sync(call)
-            break
-        except Exception as exc:
-            if _is_auth_failure(exc):
-                raise GeminiConfigError(
-                    "Gemini rejected the API key. Check GEMINI_API_KEY in backend/.env."
-                ) from exc
-            if attempt == 2 or not _is_transient(exc):
-                raise GeminiResponseError(
-                    f"The proposal could not be written ({exc.__class__.__name__}).",
-                    _snippet(str(exc)),
-                ) from exc
-            logger.warning("Transient failure writing a proposal, retrying once: %s", exc)
+    try:
+        message = await anyio.to_thread.run_sync(_stream_proposal)
+    except ModelError:
+        raise
+    except Exception as exc:
+        raise _translate(exc, "The proposal") from exc
+    _log_usage("Proposal", message)
+    _check_stop(message, "the proposal")
 
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, ProposalNarrative):
-        narrative = parsed
-    else:
-        text = getattr(response, "text", "") or ""
-        if not text.strip():
-            raise GeminiResponseError(
-                "Gemini returned nothing for the proposal. "
-                + (_blocked_reason(response) or "No reason was given."),
-                "",
-            )
+    narrative = getattr(message, "parsed_output", None)
+    if not isinstance(narrative, ProposalNarrative):
+        text = _text_of(message)
         try:
             narrative = ProposalNarrative.model_validate_json(text)
         except ValueError as exc:
-            raise GeminiResponseError(
-                "Gemini's proposal did not match the expected shape.", _snippet(text)
+            raise ModelResponseError(
+                "The model's proposal did not match the expected shape.", _snippet(text)
             ) from exc
 
     logger.info(
@@ -711,29 +813,28 @@ async def check_brief_is_real(text: str) -> BriefCheck:
     try:
         client = _get_client()
         call = functools.partial(
-            client.models.generate_content,
-            model=config.GEMINI_MODEL,
-            contents=[BRIEF_CHECK_FRAME.format(body=body)],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=BriefCheck,
-                # Zero, not GEMINI_TEMPERATURE. This is a judgement that should
-                # not change between two runs of the same text - a studio told
-                # their brief is gibberish, who presses Generate again and gets
-                # a quotation, has learned that the check is noise.
-                temperature=0.0,
-                system_instruction=BRIEF_CHECK_INSTRUCTION,
-            ),
+            client.beta.messages.parse,
+            model=config.CLAUDE_MODEL,
+            max_tokens=_BRIEF_CHECK_MAX_TOKENS,
+            system=BRIEF_CHECK_INSTRUCTION,
+            messages=[{"role": "user", "content": BRIEF_CHECK_FRAME.format(body=body)}],
+            # Low effort: a yes/no on a few hundred characters, run before every
+            # generation. No sampling knob to pin - the current models take
+            # none - so the instruction carries the consistency instead.
+            output_config={"effort": "low"},
+            output_format=BriefCheck,
+            betas=[_FALLBACK_BETA],
+            fallbacks="default",
         )
         response = await anyio.to_thread.run_sync(call)
     except Exception as exc:  # noqa: BLE001 - see the docstring: this fails open
         logger.warning("brief check could not run, proceeding: %s", _describe(exc))
         return BriefCheck()
 
-    parsed = getattr(response, "parsed", None)
+    parsed = getattr(response, "parsed_output", None)
     if isinstance(parsed, BriefCheck):
         return parsed
-    raw = getattr(response, "text", "") or ""
+    raw = _text_of(response)
     try:
         return BriefCheck.model_validate(json.loads(raw))
     except Exception:  # noqa: BLE001 - a body that will not parse is not a refusal

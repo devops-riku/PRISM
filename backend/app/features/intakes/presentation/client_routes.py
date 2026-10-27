@@ -49,7 +49,7 @@ from app.features.notifications.infrastructure import inbox
 from app.features.quotations.domain import kinds
 from app.features.quotations.domain.models import Estimate
 from app.features.quotations.infrastructure import repository as storage
-from app.features.quotations.infrastructure.gemini import check_brief_is_real
+from app.features.quotations.infrastructure.claude import check_brief_is_real
 from app.features.rendering.presentation import (
     format_money,
     render_pdf,

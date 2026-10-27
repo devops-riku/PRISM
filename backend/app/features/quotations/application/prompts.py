@@ -5,15 +5,14 @@ single generation call, and the quality of that call is decided here.
 
 Two things to keep in mind when editing:
 
-  * `SYSTEM_INSTRUCTION` is passed as `system_instruction` on the
-    `GenerateContentConfig`; `build_brief(...)` is the first (text) element of
-    `contents`, with image parts appended after it. The split matters - the
-    system instruction is the standing brief for the role, the assembled brief
-    is the job.
-  * The JSON *shape* is enforced by `response_schema=Estimate`. Do not restate
-    field types here. Spend the words on judgement the schema cannot express:
-    what a good number looks like, which prose may contain figures, what must
-    trace to what.
+  * `SYSTEM_INSTRUCTION` is the `system` prompt of the Messages API call;
+    `build_brief(...)` is the first text block of the user turn, with image
+    blocks appended after it. The split matters - the system instruction is
+    the standing brief for the role, the assembled brief is the job.
+  * The JSON *shape* comes from the `Estimate` schema, which the model adapter
+    appends to the system prompt. Do not restate field types here. Spend the
+    words on judgement the schema cannot express: what a good number looks
+    like, which prose may contain figures, what must trace to what.
 """
 
 from __future__ import annotations
@@ -375,12 +374,12 @@ def strip_sentinels(text: str) -> str:
     bare `.replace(sentinel, "")` does not.
 
     Public (no leading underscore) rather than this module's usual internal
-    idiom: `gemini_service._apply_request_identity` also writes a client-
+    idiom: `claude._apply_request_identity` also writes a client-
     suppliable field (`req.client_name`) straight onto `Estimate.client_name`,
     which reaches `build_revision`'s `prior_json` unsanitised - the same
     field, the same threat, a different file. One shared function crossing
     that boundary beats a second copy of the same list living in
-    `gemini_service.py`.
+    `infrastructure/claude.py`.
     """
     cleaned = _clean(text)
     for sentinel in (

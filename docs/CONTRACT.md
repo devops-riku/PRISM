@@ -12,7 +12,7 @@ Project root: `PRISM-/`. Product name: **PRISM** — one brief in, two documents
 
 One submission. The user types a client brief, optionally attaches screenshots /
 sketches / photos of whiteboards, picks a currency and a market region, and
-submits. One Gemini call returns a complete structured `Estimate`. The server
+submits. One Claude call returns a complete structured `Estimate`. The server
 fixes the arithmetic and renders two documents:
 
 | Document | Audience | Voice |
@@ -28,11 +28,11 @@ No chat loop. No follow-up turns. One shot.
 
 `backend/app/features/quotations/domain/models.py` is the canonical model contract. Import from it; never
 redefine these models, never fork a second shape. `Estimate` is the only thing
-Gemini returns. Both documents and the whole UI are renderings of that one object.
+the model returns. Both documents and the whole UI are renderings of that one object.
 
 Key invariants:
 
-- **No FX conversion anywhere.** Gemini prices line items directly in the
+- **No FX conversion anywhere.** The model prices line items directly in the
   requested currency for the requested market. Never introduce a rate table or
   ask the model to convert between currencies.
 - **Server owns arithmetic.** The model's `subtotal`, `contingency_amount`,
@@ -45,48 +45,66 @@ Key invariants:
 
 ---
 
-## 3. Gemini SDK — verified call shape
+## 3. Claude SDK — call shape
 
-Package is **`google-genai`** (NOT the retired `google-generativeai`). There is no
-`genai.configure()` and no `GenerativeModel` class. Use exactly this:
+Package is **`anthropic`** (the official SDK). The adapter is
+`backend/app/features/quotations/infrastructure/claude.py`; the client is built
+lazily there so a missing key is a clean 503, never an import error.
 
 ```python
-import os
-from google import genai
-from google.genai import types
+import anthropic
 
-from app.features.quotations.domain.models import Estimate
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, max_retries=3)
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+# The Estimate schema is too large for structured outputs (the API refuses its
+# compiled grammar), so it rides in the system prompt and the reply is
+# validated with pydantic. Every Estimate field has a default.
+system = [{
+    "type": "text",
+    "text": SYSTEM_INSTRUCTION + "
 
-# contents is a flat list: text parts and image parts side by side.
-contents = [system_and_brief_text]
-for image_bytes, mime_type in images:
-    contents.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+JSON SCHEMA FOR THE ESTIMATE OBJECT
+" + schema_json,
+    "cache_control": {"type": "ephemeral"},
+}]
 
-response = client.models.generate_content(
-    model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
-    contents=contents,
-    config=types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=Estimate,
-        temperature=0.4,
-        system_instruction=SYSTEM_INSTRUCTION,
-    ),
-)
+# The brief first, then one base64 image block per attachment.
+content = [{"type": "text", "text": brief}, *image_blocks]
 
-estimate: Estimate = response.parsed   # already an Estimate instance
+with client.beta.messages.stream(
+    model=CLAUDE_MODEL,                      # default claude-opus-5-5
+    max_tokens=64_000,
+    system=system,
+    messages=[{"role": "user", "content": content}],
+    output_config={
+        "effort": CLAUDE_EFFORT,
+        # Advisory: the model paces its thinking to finish inside it. Without
+        # it, thinking varied from nothing to ~50k tokens run to run.
+        "task_budget": {"type": "tokens", "total": 32_000},
+    },
+    betas=["server-side-fallback-2026-07-01", "task-budgets-2026-03-13"],
+    fallbacks="default",                     # refusal fallback, same call
+) as stream:
+    message = stream.get_final_message()
+
+# stop_reason "refusal" or "max_tokens" -> 502; otherwise the text block's
+# JSON object goes through Estimate.model_validate_json.
 ```
 
-- Structured output composes with multimodal input — schema in `config`, images in
-  `contents`, they are orthogonal.
-- `response.parsed` yields the Pydantic instance. If it is `None`, fall back to
-  `Estimate.model_validate_json(response.text)` and raise a clear error if that
-  also fails.
-- Verified model IDs: `gemini-3.5-flash` (default), `gemini-3.1-pro-preview`,
-  `gemini-2.5-pro`, `gemini-2.5-flash`, and the aliases `gemini-pro-latest` /
-  `gemini-flash-latest`. Read the id from `GEMINI_MODEL` so it is swappable.
-- The key lives only in `backend/.env`, server-side. The browser never sees it.
+- `BriefCheck` and `ProposalNarrative` are small enough for structured
+  outputs: they pass `output_format=<Model>` and read `parsed_output`.
+- No `temperature`: current Claude models reject sampling parameters. Effort is
+  the knob (`CLAUDE_EFFORT`, default `low`: `medium` on a full estimate thinks for
+  minutes and can exhaust `max_tokens`).
+- Images: Claude reads JPEG, PNG, GIF and WebP, 10 MB base64 each, 32 MB per
+  request. The adapter downscales anything larger than 2576 px or 2 MB and
+  re-encodes it as JPEG; an image it cannot open (HEIC) is left out and noted
+  in `image_observations`.
+- Model ids: `claude-opus-5-5` (default), `claude-sonnet-5-5`,
+  `claude-haiku-5-5`. Read from `CLAUDE_MODEL`, not `ANTHROPIC_MODEL` (Claude
+  Code reads that one from the shell).
+- The key lives only in `backend/.env` as `ANTHROPIC_API_KEY`, server-side.
+  The browser never sees it.
 
 ---
 

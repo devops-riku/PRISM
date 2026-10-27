@@ -128,7 +128,7 @@ fi
 
 if [ ! -f "$BACKEND/.env" ]; then
     echo "Note: backend/.env is missing. PRISM will start, but generating a"
-    echo "      proposal will return 503 until GEMINI_API_KEY is set there."
+    echo "      proposal will return 503 until ANTHROPIC_API_KEY is set there."
     echo ""
 fi
 

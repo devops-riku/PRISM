@@ -30,7 +30,7 @@ REMOVED_NAMES = {
     "tokens.py", "workspaces.py",
 }
 HTTP_OPERATION_HASH = "a846b108194861e44748d635f715c8c5ea35e7e95e45b626f71b5fc8abe5978f"
-OPENAPI_HASH = "eb4042c578d05564ee43c49a7455e0bd4d4610403a9a07d9ebfc0a92f819d75c"
+OPENAPI_HASH = "afc08e7fccd23cdbb826668ea03aa571884d09b6d11ceb67b67aac04212a7302"
 
 
 def imports(path: Path) -> list[str]:

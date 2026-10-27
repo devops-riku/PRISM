@@ -97,7 +97,7 @@ if (Test-PortInUse -Port $WebPort) {
 
 if (-not (Test-Path -LiteralPath $DotEnv)) {
     Write-Host "Note: backend\.env is missing. PRISM will start, but generating a"
-    Write-Host "      proposal will return 503 until GEMINI_API_KEY is set there."
+    Write-Host "      proposal will return 503 until ANTHROPIC_API_KEY is set there."
     Write-Host ""
 }
 

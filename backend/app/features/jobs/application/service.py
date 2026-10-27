@@ -3,7 +3,7 @@
 Preparing a quotation takes forty seconds; three tiers take ninety. Holding the
 HTTP request open for that long makes the browser the thing that has to stay
 put - navigate away, reload, close the laptop, and the work is lost along with
-the Gemini spend. So the request starts a job and returns immediately, and the
+the model spend. So the request starts a job and returns immediately, and the
 job outlives the page that asked for it.
 
 Progress is reported, not simulated. Each job declares the steps it will take

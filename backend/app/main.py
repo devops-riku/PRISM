@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
     if not config.key_configured():
         logger.warning(
-            "Starting without GEMINI_API_KEY - /api/proposals will answer 503 until "
+            "Starting without ANTHROPIC_API_KEY - /api/proposals will answer 503 until "
             "it is set in %s",
             config.ENV_FILE,
         )

@@ -4,7 +4,7 @@ One brief in, two documents out.
 
 You describe a job in plain language, optionally attach screenshots, sketches or
 photos of a whiteboard, choose a currency and a market region, and submit once.
-PRISM sends that to Gemini and gets back a single structured estimate, then
+PRISM sends that to Claude and gets back a single structured estimate, then
 renders it as two documents:
 
 | Document | Audience | What it contains |
@@ -25,7 +25,7 @@ never show a total that disagrees with the sum of its rows.
 
 ## 60-second quickstart
 
-You need Python 3.10 or newer, Node 20 or newer, and a Gemini API key.
+You need Python 3.10 or newer, Node 20 or newer, and an Anthropic API key.
 
 1. Get a key (about 30 seconds — see below) and put it in `backend/.env`.
 2. Start both servers with one command:
@@ -56,13 +56,12 @@ If you would rather run the two servers yourself, see
 
 ---
 
-## Getting a Gemini API key
+## Getting an Anthropic API key
 
-1. Go to https://aistudio.google.com/apikey
-2. Sign in with a Google account.
-3. Click **Create API key**. Pick an existing Google Cloud project or let it
-   create one.
-4. Copy the key. It starts with `AIza`.
+1. Go to https://platform.claude.com/settings/keys
+2. Sign in, and add billing if the organization has none.
+3. Click **Create Key**.
+4. Copy the key. It starts with `sk-ant-`.
 
 Put it in `backend/.env`. Start from the example file:
 
@@ -81,11 +80,11 @@ cp backend/.env.example backend/.env
 Then edit `backend/.env`:
 
 ```
-GEMINI_API_KEY=your-key-here
+ANTHROPIC_API_KEY=your-key-here
 ```
 
 `backend/.env` is git-ignored. The key stays on the server — the browser never
-receives it and never calls Google directly. Restart the API after changing the
+receives it and never calls Anthropic directly. Restart the API after changing the
 file; `--reload` does not pick up environment changes on its own.
 
 ---
@@ -252,22 +251,26 @@ uploaded/generated assets remain under the workspace's git-ignored
 
 ## Changing the model
 
-Set `GEMINI_MODEL` in `backend/.env` and restart the API:
+Set `CLAUDE_MODEL` in `backend/.env` and restart the API:
 
 ```
-GEMINI_MODEL=gemini-2.5-pro
+CLAUDE_MODEL=claude-sonnet-5-5
 ```
 
-Verified model ids:
+Model ids:
 
 | Id | Notes |
 |---|---|
-| `gemini-3.5-flash` | default |
-| `gemini-3.1-pro-preview` | |
-| `gemini-2.5-pro` | |
-| `gemini-2.5-flash` | |
-| `gemini-pro-latest` | alias |
-| `gemini-flash-latest` | alias |
+| `claude-opus-5-5` | default |
+| `claude-sonnet-5-5` | cheaper and faster |
+| `claude-haiku-5-5` | cheapest |
+
+The variable is `CLAUDE_MODEL`, not `ANTHROPIC_MODEL`: Claude Code reads that
+one from the shell, and a shell value would win over `backend/.env`.
+
+`CLAUDE_EFFORT` (`low`, `medium`, `high`, `xhigh`, `max`; default `low`) sets
+how hard the model thinks before it answers. Higher is much slower and costs
+more; at `medium` a full estimate can think for minutes and run out of room.
 
 `GET /api/health` echoes the model actually in use, which is the quickest way to
 confirm the change took effect.
@@ -281,8 +284,9 @@ documents them with their defaults.
 
 | Key | Default | What it does |
 |---|---|---|
-| `GEMINI_API_KEY` | none | Required to generate anything. |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | Which model to call. |
+| `ANTHROPIC_API_KEY` | none | Required to generate anything. |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | Which model to call. |
+| `CLAUDE_EFFORT` | `low` | How hard the model thinks before answering. |
 | `DATABASE_URL` | local SQLite | SQLAlchemy URL; set a `postgresql+psycopg://...` URL in production. |
 | `GENERATED_DIR` | `generated` | Where bundles are written. Relative paths resolve against `backend/`. |
 | `ALLOWED_ORIGINS` | `http://localhost:5174,http://127.0.0.1:5174` | Comma-separated browser origins allowed to call the API. |
@@ -341,7 +345,7 @@ PRISM-/
   backend/
     app/
       features/           vertical business capabilities
-        quotations/       estimate, pricing, prompts, Gemini, storage, routes
+        quotations/       estimate, pricing, prompts, Claude, storage, routes
           domain/
           application/
           infrastructure/
@@ -386,7 +390,7 @@ PRISM-/
   run.sh
 ```
 
-Stack: FastAPI, uvicorn, `google-genai`, Pydantic, SQLAlchemy, SQLite/PostgreSQL,
+Stack: FastAPI, uvicorn, `anthropic`, Pydantic, SQLAlchemy, SQLite/PostgreSQL,
 and Alembic on the backend; Vite, React 18 and Tailwind CSS v4 on the frontend.
 Authentication is optional, through Zitadel behind PRISM's own sign-in screen; PDF rendering uses ReportLab.
 
@@ -397,7 +401,7 @@ canonical import conventions.
 
 ## The offline test
 
-`backend/scripts/smoke.py` exercises everything downstream of the Gemini call
+`backend/scripts/smoke.py` exercises everything downstream of the model call
 without a key, a network connection or a running server. It builds a complete
 `Estimate` by hand, runs it through the quotation domain's `costing.recompute`,
 and asserts the arithmetic
@@ -422,19 +426,19 @@ or anything under `app/features/rendering/presentation/`.
 
 ### 503 when you submit a brief
 
-The message reads: "Gemini key not configured. Add GEMINI_API_KEY to
+The message reads: "Anthropic API key not configured. Add ANTHROPIC_API_KEY to
 backend/.env and restart the API."
 
 The API started without a key. Check that `backend/.env` exists, that it contains
-a `GEMINI_API_KEY=` line with your key after the `=`, and that you restarted
+an `ANTHROPIC_API_KEY=` line with your key after the `=`, and that you restarted
 uvicorn afterwards. Confirm with http://localhost:8000/api/health —
 `key_configured` must be `true`.
 
 An environment variable already exported in your shell wins over the file, so an
-empty `GEMINI_API_KEY` in the shell will mask a correct `.env`.
+empty or different `ANTHROPIC_API_KEY` in the shell will mask a correct `.env`.
 
-If the key is present but Google rejects it, the error will say so. Keys are
-per-project; a key deleted or regenerated in AI Studio stops working immediately.
+If the key is present but Anthropic rejects it, the error will say so. A key
+deleted in the Claude Console stops working immediately.
 
 ### "Form data requires python-multipart to be installed"
 

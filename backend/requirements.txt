@@ -5,9 +5,13 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
-# The current SDK. NOT google-generativeai, which is retired and has a
-# different, incompatible call shape.
-google-genai>=1.0
+# The model call: Claude, through the official SDK. 2.3 is the floor for
+# `fallbacks="default"` on the beta Messages API and the httpx2 transport.
+anthropic>=2.3
+
+# Re-encoding attached images Claude cannot take as uploaded (oversize, or not
+# JPEG/PNG/GIF/WebP). Already installed with reportlab; named so it stays.
+pillow>=10.0
 
 pydantic>=2.7
 

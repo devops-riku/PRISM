@@ -9,7 +9,7 @@ app/
     quotations/
       domain/          estimate model, costing, rates, payments, kinds
       application/     prompt construction
-      infrastructure/  quotation repository and Gemini adapter
+      infrastructure/  quotation repository and Claude adapter
       presentation/    quotation HTTP routes
     documents/
       domain/          proposal design, policies, and templates

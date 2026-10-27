@@ -38,9 +38,9 @@ from app.features.quotations.domain.models import (
     SectionRecord,
 )
 from app.features.quotations.infrastructure import repository as storage
-from app.features.quotations.infrastructure.gemini import (
-    GeminiConfigError,
-    GeminiResponseError,
+from app.features.quotations.infrastructure.claude import (
+    ModelConfigError,
+    ModelResponseError,
     generate_proposal,
 )
 from app.features.rendering.presentation import (
@@ -137,7 +137,7 @@ async def build_document(quotation_id: str = Form(...)) -> jobs.JobView:
     Standard. Rebuilding produces a new document with its own id rather than
     editing this one - a proposal that has been sent must not change afterwards.
 
-    Answers with a job, like every other Gemini pass in this API.
+    Answers with a job, like every other model pass in this API.
     """
     bundle = deps.require_bundle(quotation_id)
     studio = settings.load()
@@ -232,10 +232,10 @@ async def build_document(quotation_id: str = Form(...)) -> jobs.JobView:
                     "href": f"#/p/{document.id}",
                 },
             )
-        except GeminiConfigError as exc:
+        except ModelConfigError as exc:
             deps.logger.error("Proposal blocked by configuration: %s", exc)
             jobs.fail(job.id, str(exc))
-        except GeminiResponseError as exc:
+        except ModelResponseError as exc:
             deps.logger.error("Unusable proposal response: %s | snippet=%s", exc, exc.snippet)
             jobs.fail(job.id, str(exc))
             inbox.notify(

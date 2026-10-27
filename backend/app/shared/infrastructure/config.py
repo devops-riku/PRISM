@@ -5,10 +5,10 @@ directory: uvicorn can be launched from the repo root, from `backend/`, or from
 a shell whose cwd was reset between commands, and all three must find the same
 `.env` and the same `generated/` folder.
 
-A missing `GEMINI_API_KEY` is *not* an import-time error. Importing this module
-always succeeds; the absence of a key surfaces later as a clean 503 raised by
-`app.infrastructure.gemini_service`. That lets `/api/health` answer honestly instead of
-the whole process failing to boot.
+A missing `ANTHROPIC_API_KEY` is *not* an import-time error. Importing this
+module always succeeds; the absence of a key surfaces later as a clean 503
+raised by `app.features.quotations.infrastructure.claude`. That lets
+`/api/health` answer honestly instead of the whole process failing to boot.
 """
 
 from __future__ import annotations
@@ -67,33 +67,34 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-# --- Gemini ------------------------------------------------------------------
+# --- Claude ------------------------------------------------------------------
 
 #: Server-side only. The browser never sees this value; it is not exposed by any
 #: endpoint (``/api/health`` reports a boolean, never the key itself).
-GEMINI_API_KEY: str = _env_str("GEMINI_API_KEY", "")
+ANTHROPIC_API_KEY: str = _env_str("ANTHROPIC_API_KEY", "")
 
-#: Swappable so the model can be changed without a code edit. Verified ids:
-#: gemini-3.5-flash, gemini-3.1-pro-preview, gemini-2.5-pro, gemini-2.5-flash,
-#: gemini-pro-latest, gemini-flash-latest.
-GEMINI_MODEL: str = _env_str("GEMINI_MODEL", "gemini-3.5-flash")
+#: Swappable so the model can be changed without a code edit: claude-opus-5-5
+#: (default), claude-sonnet-5-5, claude-haiku-5-5. Named CLAUDE_MODEL rather
+#: than ANTHROPIC_MODEL because Claude Code reads that one from the shell, and
+#: a shell value wins over backend/.env.
+CLAUDE_MODEL: str = _env_str("CLAUDE_MODEL", "claude-opus-5-5")
 
-#: Sampling temperature for the single generation call. Low enough that pricing
-#: is stable across runs, high enough that prose does not read as boilerplate.
-GEMINI_TEMPERATURE: float = 0.4
-
-#: Seconds to wait before the single retry of a transient Gemini failure.
-GEMINI_RETRY_DELAY_SECONDS: float = 2.0
+#: How hard the model thinks before it answers: low, medium, high, xhigh, max.
+#: Low by default, and measured rather than guessed: on claude-opus-5-5 a full
+#: estimate at low wrote a complete, detailed object in ~100 s and ~11k output
+#: tokens, while medium thought for two minutes before writing a word and ran
+#: past 64k tokens without finishing. The prompt already carries the judgement.
+CLAUDE_EFFORT: str = _env_str("CLAUDE_EFFORT", "low")
 
 
 def key_configured() -> bool:
     """True when a usable API key is present. Read live so `/api/health` is honest."""
-    return bool(GEMINI_API_KEY.strip())
+    return bool(ANTHROPIC_API_KEY.strip())
 
 
 #: The message every 503 shows. Names the file and the next action, does not apologise.
 MISSING_KEY_MESSAGE: str = (
-    "Gemini key not configured. Add GEMINI_API_KEY to backend/.env and restart the API."
+    "Anthropic API key not configured. Add ANTHROPIC_API_KEY to backend/.env and restart the API."
 )
 
 
@@ -179,9 +180,9 @@ if not GENERATED_DIR.is_absolute():
 #: Named `DO_SPACES_*` because that is what is already in this install's `.env`
 #: and because it says whose object store this is, which `SPACES_KEY` did not.
 #:
-#: Server-side only, exactly as `GEMINI_API_KEY` above is. Nothing reads these
+#: Server-side only, exactly as `ANTHROPIC_API_KEY` above is. Nothing reads these
 #: onto the wire: `/api/health` may say *whether* Spaces is configured, the same
-#: way it already reports `key_configured` for Gemini, and never more than that.
+#: way it already reports `key_configured` for the model, and never more than that.
 DO_SPACES_ACCESS_KEY: str = _env_str("DO_SPACES_ACCESS_KEY", "")
 DO_SPACES_SECRET_KEY: str = _env_str("DO_SPACES_SECRET_KEY", "")
 
@@ -311,8 +312,10 @@ MAX_CLIENT_UPLOAD_TOTAL_BYTES: int = _env_int(
 MAX_CLIENT_FILES: int = _env_int("MAX_CLIENT_FILES", 6)
 MAX_CLIENT_FILE_BYTES: int = _env_int("MAX_CLIENT_FILE_BYTES", 6 * 1024 * 1024)
 
-#: Mime types the Gemini vision path handles reliably. Anything else that still
-#: claims `image/*` is passed through - this list drives the error message only.
+#: Mime types an upload may carry. Anything else that still claims `image/*` is
+#: passed through - this list drives the error message only. Claude reads JPEG,
+#: PNG, GIF and WebP; the model adapter re-encodes or leaves out the rest and
+#: says so in the estimate (see `_prepare_image` in the claude adapter).
 SUPPORTED_IMAGE_TYPES: tuple[str, ...] = (
     "image/png",
     "image/jpeg",

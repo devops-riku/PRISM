@@ -177,7 +177,7 @@ export type ErrorReport = {
  * `ApiError` from lib/api already carries an actionable message and a `kind`;
  * this adds the headline that says which of the handful of things went wrong,
  * and overrides the message in the one case docs/DESIGN.md scripts word for
- * word — the missing Gemini key.
+ * word — the missing Anthropic API key.
  */
 function describeError(error: unknown): ErrorReport | null {
   const status = statusOf(error)
@@ -189,11 +189,11 @@ function describeError(error: unknown): ErrorReport | null {
 
   if (kind === 'aborted') return null
 
-  if (/gemini_api_key/i.test(raw) || (status === 503 && !raw)) {
+  if (/anthropic_api_key/i.test(raw) || (status === 503 && !raw)) {
     return {
       code: status || 503,
-      headline: 'Gemini key not configured.',
-      next: 'Add GEMINI_API_KEY to backend/.env and restart the API.',
+      headline: 'Anthropic API key not configured.',
+      next: 'Add ANTHROPIC_API_KEY to backend/.env and restart the API.',
     }
   }
 
@@ -240,7 +240,7 @@ function describeError(error: unknown): ErrorReport | null {
   }
 
   if (status === 429) {
-    return { code: 429, headline: 'The Gemini quota is used up.', next: raw }
+    return { code: 429, headline: 'The Anthropic rate limit was hit.', next: raw }
   }
 
   if (status >= 500) {
@@ -519,7 +519,7 @@ export default function App() {
   const revisingFrom = useRef('')
 
   // A prepared quotation is addressable, so a reload or a shared link brings it
-  // straight back instead of costing another Gemini pass. Pasting such a link
+  // straight back instead of costing another model pass. Pasting such a link
   // into the address bar of a page that is already open only changes the hash,
   // which is not a page load — hence the listener as well as the mount pass.
   useEffect(() => {
@@ -808,7 +808,7 @@ export default function App() {
     (formData: FormData) => {
       if (pending) return
       // Set before the request leaves, not when the job comes back: the 202
-      // takes a moment, and a second click inside it is a second Gemini pass.
+      // takes a moment, and a second click inside it is a second model pass.
       setPending(true)
       setError(null)
 

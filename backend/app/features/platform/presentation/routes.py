@@ -182,7 +182,7 @@ async def health() -> HealthResponse:
     """Never returns the key itself - only whether one is present."""
     return HealthResponse(
         status="ok",
-        model=config.GEMINI_MODEL,
+        model=config.CLAUDE_MODEL,
         key_configured=config.key_configured(),
         mail_configured=mailer.configured(),
     )

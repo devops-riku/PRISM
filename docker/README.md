@@ -23,7 +23,7 @@ From the repository root:
 
 ```sh
 cp docker/.env.example docker/.env
-# Set POSTGRES_PASSWORD and GEMINI_API_KEY in docker/.env
+# Set POSTGRES_PASSWORD and ANTHROPIC_API_KEY in docker/.env
 docker compose --env-file docker/.env -f docker/docker-compose.yml up --build -d
 ```
 

@@ -4,7 +4,7 @@
  * Every request goes to a same-origin `/api/...` path. In development Vite
  * proxies that to http://localhost:8000 (see vite.config.js); in production the
  * bundle is served from the same origin as the API. Either way the browser
- * never sees the Gemini key and never negotiates CORS.
+ * never sees the Anthropic key and never negotiates CORS.
  *
  * Errors are the point of this module. Every failure surfaces as an `ApiError`
  * carrying a `kind` you can branch on and a message that says what happened and
@@ -148,10 +148,10 @@ const STATUS_HINTS: Record<number, string> = {
   413: 'Those files are too large. Send at most 8 images, each under 8 MB.',
   415: 'One of those files is not an image. Attach screenshots, sketches or photos only.',
   422: 'The API rejected the form. Check that the brief is filled in and the currency is a three-letter code.',
-  429: 'The Gemini quota for this key is used up. Wait for it to reset, or use a different key in backend/.env.',
+  429: 'The Anthropic rate limit for this key was hit. Wait a minute and try again, or raise the limit in the Claude Console.',
   500: 'The API hit an unhandled error while preparing the quotation. Check the uvicorn console for the traceback.',
   502: 'The dev proxy could not reach the API. Start it from backend/ with: py -m uvicorn app.main:app --port 8000',
-  503: 'The API is running but not configured. Add GEMINI_API_KEY to backend/.env and restart it.',
+  503: 'The API is running but not configured. Add ANTHROPIC_API_KEY to backend/.env and restart it.',
   504: 'The API took too long to answer. A long brief with several images can outlast the gateway — try again with a shorter brief.',
 }
 
@@ -447,7 +447,7 @@ function toFormData(input: ProposalFormInput): FormData {
  * The answer is a 202 with a `JobView`, not a bundle. Pricing takes the better
  * part of a minute and three tiers take a minute and a half; the work now
  * happens behind the request, so closing the tab no longer throws away the
- * Gemini spend. Poll `fetchJob` until `state` is `done`, then `fetchBundle`
+ * model spend. Poll `fetchJob` until `state` is `done`, then `fetchBundle`
  * each id in `result_ids`.
  *
  * Everything that can be rejected outright — a bad currency, a schedule that
@@ -502,7 +502,7 @@ export type ProposalChanges = {
  * would be an exchange rate by another name.
  *
  * Like `createProposal`, this answers with a job rather than the finished
- * sheet — a revision is a second full Gemini pass over a whole estimate, so it
+ * sheet — a revision is a second full model pass over a whole estimate, so it
  * is slower than the first.
  *
  * @param id the quotation being revised
@@ -726,7 +726,7 @@ function assertJob(data: unknown): Job {
 /**
  * Build a proposal from one quotation, exactly as that quotation stands.
  *
- * Answers with a job, like every other Gemini pass: the model writes the
+ * Answers with a job, like every other model pass: the model writes the
  * argument, the server prints the figures from the quotation and the terms
  * from settings, and the finished document lands in `result_ids`.
  *

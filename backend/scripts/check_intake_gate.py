@@ -6,7 +6,7 @@ else. A previous session shipped a TypeError that isolated tests missed for
 exactly this reason.
 
 `run()` inside `create_proposal` has four ways to reach `jobs.fail(...)` -
-`GeminiConfigError`, `GeminiResponseError`, `HTTPException` (raised from
+`ModelConfigError`, `ModelResponseError`, `HTTPException` (raised from
 `_apply_target` when a target total cannot be solved onto the estimate) and a
 generic `except Exception` with a fixed message - and every one of them has to
 stamp `QUOTE_FAILED` with the same string `jobs.fail` got. This exercises all
@@ -83,7 +83,7 @@ from app.features.intakes.presentation import client_routes  # noqa: E402
 from app.features.jobs.application import service as jobs  # noqa: E402
 from app.features.notifications.infrastructure import inbox  # noqa: E402
 from app.features.quotations.domain.models import BriefCheck, Estimate  # noqa: E402
-from app.features.quotations.infrastructure.gemini import GeminiConfigError, GeminiResponseError  # noqa: E402
+from app.features.quotations.infrastructure.claude import ModelConfigError, ModelResponseError  # noqa: E402
 from app.features.quotations.presentation import routes as quotation_routes  # noqa: E402
 from app.features.team.infrastructure import members  # noqa: E402
 from app.features.workspaces.infrastructure import repository as workspaces  # noqa: E402
@@ -187,11 +187,11 @@ def stub_failure(*args, **kwargs):
 
 
 def stub_config_error(*args, **kwargs):
-    raise GeminiConfigError("No Gemini API key configured for this workspace.")
+    raise ModelConfigError("No Gemini API key configured for this workspace.")
 
 
 def stub_response_error(*args, **kwargs):
-    raise GeminiResponseError("Gemini answered with no usable JSON.", snippet="not json")
+    raise ModelResponseError("Gemini answered with no usable JSON.", snippet="not json")
 
 
 # --- The success path: PREPARING then QUOTED, with what was actually priced --
@@ -328,7 +328,7 @@ ok(
 # rather than the generic failure, and that the flag switches the whole thing
 # out. Whether the model's judgement is any good is a different question and
 # not one a check script can answer.
-import app.features.quotations.infrastructure.gemini as gemini_module  # noqa: E402
+import app.features.quotations.infrastructure.claude as gemini_module  # noqa: E402
 import app.shared.infrastructure.config as config_module  # noqa: E402
 
 #: The genuine article, captured before any stub replaces it - the fail-open
@@ -466,7 +466,7 @@ gemini_module._get_client = _real_get_client  # noqa: SLF001
 config_module.CHECK_BRIEF_IS_REAL = True
 _stub_brief_check(stub_accepts)
 
-# 2. GeminiConfigError - the key is missing or rejected.
+# 2. ModelConfigError - the key is missing or rejected.
 config_broken = intakes.create(
     client_email="three@client.com",
     client_phone="",
@@ -487,12 +487,12 @@ ok(
     settle(config_broken.id, intakes.QUOTE_FAILED) == intakes.QUOTE_FAILED,
 )
 ok(
-    "with GeminiConfigError's own message",
+    "with ModelConfigError's own message",
     intakes.get(config_broken.id).error
     == "No Gemini API key configured for this workspace.",
 )
 
-# 3. GeminiResponseError - Gemini answered, but not with a usable Estimate.
+# 3. ModelResponseError - Gemini answered, but not with a usable Estimate.
 response_broken = intakes.create(
     client_email="four@client.com",
     client_phone="",
@@ -513,7 +513,7 @@ ok(
     settle(response_broken.id, intakes.QUOTE_FAILED) == intakes.QUOTE_FAILED,
 )
 ok(
-    "with GeminiResponseError's own message",
+    "with ModelResponseError's own message",
     intakes.get(response_broken.id).error == "Gemini answered with no usable JSON.",
 )
 

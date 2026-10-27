@@ -1,14 +1,15 @@
 """Single source of truth for the proposal data contract.
 
 Every other module in this project is a renderer of `Estimate`:
-the Gemini call fills it, the costing pass corrects its arithmetic, the
+the model call fills it, the costing pass corrects its arithmetic, the
 markdown/HTML renderers format it, and the React client displays it.
 
 Design constraints (do not relax without changing every consumer):
-  * No `Optional[...]` unions and no bare `dict` / `Any` fields. The Gemini
-    structured-output layer converts this model to an OpenAPI-subset schema and
-    both constructs degrade the conversion.
+  * No `Optional[...]` unions and no bare `dict` / `Any` fields. The schema is
+    handed to the model verbatim, and both constructs make it vaguer.
   * Every field has a default so a partial model response still validates.
+    This is load-bearing: `Estimate` is too large for the API's structured
+    outputs, so its JSON is validated here rather than guaranteed upstream.
   * Monetary fields are plain floats in the *selected currency*. There is no FX
     conversion anywhere in this system - the model is asked to price directly in
     the requested currency for the requested market.
@@ -22,7 +23,7 @@ from typing import List
 from pydantic import BaseModel, Field, model_validator
 
 # Storage-side only: `ProposalDocument` is persisted in SQL and read by the
-# client, never handed to Gemini, so it may carry a nested model the structured
+# client, never handed to the model, so it may carry a nested model the structured
 # -output layer never sees.
 from app.features.documents.domain.design import ProposalDesign
 
@@ -227,7 +228,7 @@ class DeveloperSpec(BaseModel):
 
 
 class Estimate(BaseModel):
-    """The complete Gemini response. Both output documents render from this."""
+    """The complete model response. Both output documents render from this."""
 
     project_name: str = ""
     client_name: str = ""
@@ -613,7 +614,7 @@ class ProposalBundle(BaseModel):
     """What POST /api/proposals returns.
 
     Revision metadata lives here rather than on `Estimate` on purpose: `Estimate`
-    is the Gemini response schema, and every field added to it is a field the
+    is the model's response schema, and every field added to it is a field the
     model has to fill. Provenance is the server's business, not the model's.
     """
 
